@@ -1,10 +1,10 @@
 services:
   kith:
     build: .
-    image: ${IMAGE}:${TAG}
-    container_name: ${SERVICE}
+    image: ${IMAGE:-gitlab.example.com/homelab/knowledgecore/kith}:${TAG:-latest}
+    container_name: ${SERVICE:-kith}
     ports:
-      - "${EXTERNAL_PORT}:3000"
+      - "${EXTERNAL_PORT:-8084}:3000"
     env_file:
       - .env
     volumes:
@@ -18,7 +18,7 @@ services:
       start_period: 15s
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.kith.rule=Host(`${URL}`)"
+      - "traefik.http.routers.kith.rule=Host(`${URL:-kith.example.com}`)"
       - "traefik.http.routers.kith.entrypoints=https"
       - "traefik.http.routers.kith.tls=true"
       - "traefik.http.routers.kith.tls.certresolver=letsencrypt"
