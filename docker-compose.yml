@@ -1,7 +1,6 @@
 services:
   kith:
     build: .
-    image: ${IMAGE:-gitlab.example.com/homelab/knowledgecore/kith}:${TAG:-latest}
     container_name: ${SERVICE:-kith}
     ports:
       - "${EXTERNAL_PORT:-8084}:3000"
