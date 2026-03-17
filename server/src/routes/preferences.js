@@ -62,9 +62,7 @@ router.put('/:key', async (req, res, next) => {
     const connection = await pool.getConnection();
 
     await connection.execute(
-      `INSERT INTO preferences (`key`, value, type, updated_at)
-       VALUES (?, ?, ?, NOW())
-       ON DUPLICATE KEY UPDATE value = ?, type = ?, updated_at = NOW()`,
+      'INSERT INTO preferences (`key`, value, type, updated_at) VALUES (?, ?, ?, NOW()) ON DUPLICATE KEY UPDATE value = ?, type = ?, updated_at = NOW()',
       [key, JSON.stringify(value), type || 'string', JSON.stringify(value), type || 'string']
     );
 

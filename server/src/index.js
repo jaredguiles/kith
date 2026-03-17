@@ -21,6 +21,9 @@ import groupsRouter from './routes/groups.js';
 import platformsRouter from './routes/platforms.js';
 import preferencesRouter from './routes/preferences.js';
 import webhooksRouter from './routes/webhooks.js';
+import authRouter from './routes/auth.js';
+import usersRouter from './routes/users.js';
+import { requireAuth, requireAdmin } from './middleware/auth.js';
 
 dotenv.config();
 
@@ -50,18 +53,24 @@ app.use('/media', express.static(mediaPath, {
   }
 }));
 
-// API Routes
-app.use('/api/contacts', contactsRouter);
-app.use('/api/timeline', timelineRouter);
-app.use('/api/notes', notesRouter);
-app.use('/api/messages', messagesRouter);
-app.use('/api/media', mediaRouter);
-app.use('/api/reminders', remindersRouter);
-app.use('/api/tags', tagsRouter);
-app.use('/api/groups', groupsRouter);
-app.use('/api/platforms', platformsRouter);
-app.use('/api/preferences', preferencesRouter);
+// Public API Routes (no auth required)
+app.use('/api/auth', authRouter);
 app.use('/api/webhooks', webhooksRouter);
+
+// Protected API Routes (any authenticated user can read)
+app.use('/api/contacts', requireAuth, contactsRouter);
+app.use('/api/timeline', requireAuth, timelineRouter);
+app.use('/api/notes', requireAuth, notesRouter);
+app.use('/api/messages', requireAuth, messagesRouter);
+app.use('/api/media', requireAuth, mediaRouter);
+app.use('/api/reminders', requireAuth, remindersRouter);
+app.use('/api/tags', requireAuth, tagsRouter);
+app.use('/api/groups', requireAuth, groupsRouter);
+app.use('/api/platforms', requireAuth, platformsRouter);
+app.use('/api/preferences', requireAuth, preferencesRouter);
+
+// Admin-only routes
+app.use('/api/users', usersRouter);
 
 // Health check
 app.get('/api/health', (req, res) => {

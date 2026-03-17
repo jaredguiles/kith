@@ -1,4 +1,5 @@
 import pool from './connection.js';
+import bcrypt from 'bcryptjs';
 
 const SCHEMA_STATEMENTS = [
   // Contacts table
@@ -220,6 +221,23 @@ const SCHEMA_STATEMENTS = [
     FULLTEXT INDEX ft_search (search_text)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
 
+  // Users
+  `CREATE TABLE IF NOT EXISTS users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) NOT NULL UNIQUE,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    display_name VARCHAR(255),
+    role ENUM('admin', 'member') NOT NULL DEFAULT 'member',
+    is_active BOOLEAN DEFAULT 1,
+    last_login_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_username (username),
+    INDEX idx_email (email),
+    INDEX idx_role (role)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+
   // Global preferences
   `CREATE TABLE IF NOT EXISTS preferences (
     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -264,6 +282,32 @@ export async function initializeDatabase() {
     );
 
     if (tables[0].count > 0) {
+      // Tables exist, but ensure users table exists (migration for existing installs)
+      const [usersTable] = await connection.execute(
+        `SELECT COUNT(*) as count FROM information_schema.tables
+         WHERE table_schema = ? AND table_name = 'users'`,
+        [process.env.DB_NAME || 'kith']
+      );
+      if (usersTable[0].count === 0) {
+        console.log('⟳ Adding users table to existing database...');
+        await connection.execute(`CREATE TABLE IF NOT EXISTS users (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          username VARCHAR(100) NOT NULL UNIQUE,
+          email VARCHAR(255) NOT NULL UNIQUE,
+          password_hash VARCHAR(255) NOT NULL,
+          display_name VARCHAR(255),
+          role ENUM('admin', 'member') NOT NULL DEFAULT 'member',
+          is_active BOOLEAN DEFAULT 1,
+          last_login_at TIMESTAMP NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_username (username),
+          INDEX idx_email (email),
+          INDEX idx_role (role)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+        await seedAdmin(connection);
+        console.log('✓ Users table created');
+      }
       console.log('✓ Database tables already exist');
       connection.release();
       return;
@@ -281,7 +325,23 @@ export async function initializeDatabase() {
     }
     console.log('✓ Inserted seed data');
 
+    await seedAdmin(connection);
+
   } finally {
     connection.release();
+  }
+}
+
+async function seedAdmin(connection) {
+  const [existing] = await connection.execute(
+    'SELECT COUNT(*) as count FROM users WHERE role = ?', ['admin']
+  );
+  if (existing[0].count === 0) {
+    const hash = await bcrypt.hash('changeme', 12);
+    await connection.execute(
+      'INSERT INTO users (username, email, password_hash, display_name, role) VALUES (?, ?, ?, ?, ?)',
+      ['admin', 'admin@example.com', hash, 'Admin', 'admin']
+    );
+    console.log('✓ Default admin created (username: admin, password: changeme)');
   }
 }
