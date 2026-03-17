@@ -1,0 +1,27 @@
+services:
+  kith:
+    image: ${IMAGE}:${TAG}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ${SERVICE}
+    ports:
+      - "${EXTERNAL_PORT}:${INTERNAL_PORT}"
+    env_file:
+      - .env
+    volumes:
+      - /srv/kith:/media:ro
+    restart: ${RESTART_POLICY:-always}
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/api/health', (r) => { if (r.statusCode !== 200) process.exit(1) })\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kith.rule=Host(`${URL}`)"
+      - "traefik.http.routers.kith.entrypoints=https"
+      - "traefik.http.routers.kith.tls=true"
+      - "traefik.http.routers.kith.tls.certresolver=letsencrypt"
+      - "traefik.http.services.kith.loadbalancer.server.port=3000"
