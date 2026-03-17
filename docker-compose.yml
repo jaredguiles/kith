@@ -1,9 +1,7 @@
 services:
   kith:
+    build: .
     image: ${IMAGE}:${TAG}
-    build:
-      context: .
-      dockerfile: Dockerfile
     container_name: ${SERVICE}
     ports:
       - "${EXTERNAL_PORT}:3000"
