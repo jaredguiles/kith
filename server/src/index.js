@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import pool, { testConnection } from './database/connection.js';
+import { initializeDatabase } from './database/init.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 // Routes
@@ -125,6 +126,9 @@ async function startServer() {
     console.error('Failed to connect to database. Exiting.');
     process.exit(1);
   }
+
+  // Auto-create tables if they don't exist
+  await initializeDatabase();
 
   app.listen(PORT, () => {
     console.log(`✓ Kith CRM server running on http://localhost:${PORT}`);

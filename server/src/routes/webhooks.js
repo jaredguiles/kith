@@ -228,7 +228,7 @@ router.post('/sync', async (req, res, next) => {
       if (preferences && typeof preferences === 'object') {
         for (const [key, value] of Object.entries(preferences)) {
           await connection.execute(
-            `INSERT INTO platform_preferences (contact_id, platform, key, value, updated_at)
+            `INSERT INTO platform_preferences (contact_id, platform, \`key\`, value, updated_at)
              VALUES (?, ?, ?, ?, NOW())
              ON DUPLICATE KEY UPDATE value = ?, updated_at = NOW()`,
             [contactId, platform, key, JSON.stringify(value), JSON.stringify(value)]

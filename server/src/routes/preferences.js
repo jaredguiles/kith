@@ -9,7 +9,7 @@ router.get('/', async (req, res, next) => {
     const connection = await pool.getConnection();
 
     const [preferences] = await connection.execute(
-      'SELECT * FROM preferences ORDER BY key ASC'
+      'SELECT * FROM preferences ORDER BY `key` ASC'
     );
 
     connection.release();
@@ -30,7 +30,7 @@ router.get('/:key', async (req, res, next) => {
     const connection = await pool.getConnection();
 
     const [result] = await connection.execute(
-      'SELECT * FROM preferences WHERE key = ?',
+      'SELECT * FROM preferences WHERE `key` = ?',
       [key]
     );
 
@@ -62,14 +62,14 @@ router.put('/:key', async (req, res, next) => {
     const connection = await pool.getConnection();
 
     await connection.execute(
-      `INSERT INTO preferences (key, value, type, updated_at)
+      `INSERT INTO preferences (`key`, value, type, updated_at)
        VALUES (?, ?, ?, NOW())
        ON DUPLICATE KEY UPDATE value = ?, type = ?, updated_at = NOW()`,
       [key, JSON.stringify(value), type || 'string', JSON.stringify(value), type || 'string']
     );
 
     const [[preference]] = await connection.execute(
-      'SELECT * FROM preferences WHERE key = ?',
+      'SELECT * FROM preferences WHERE `key` = ?',
       [key]
     );
 
