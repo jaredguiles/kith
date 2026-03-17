@@ -79,6 +79,43 @@ router.get('/', async (req, res, next) => {
 
     const [[{ total }]] = await connection.execute(countQuery, countParams);
 
+    // Enrich contacts with tags and groups for table display
+    if (contacts.length > 0) {
+      const contactIds = contacts.map((c) => c.id);
+      const placeholders = contactIds.map(() => '?').join(',');
+
+      const [tagRows] = await connection.execute(
+        `SELECT ct.contact_id, t.id, t.name, t.color FROM contact_tags ct
+         INNER JOIN tags t ON t.id = ct.tag_id
+         WHERE ct.contact_id IN (${placeholders})`,
+        contactIds
+      );
+
+      const [groupRows] = await connection.execute(
+        `SELECT gm.contact_id, g.id, g.name FROM group_members gm
+         INNER JOIN \`groups\` g ON g.id = gm.group_id
+         WHERE gm.contact_id IN (${placeholders})`,
+        contactIds
+      );
+
+      const tagsByContact = {};
+      for (const row of tagRows) {
+        if (!tagsByContact[row.contact_id]) tagsByContact[row.contact_id] = [];
+        tagsByContact[row.contact_id].push({ id: row.id, name: row.name, color: row.color });
+      }
+
+      const groupsByContact = {};
+      for (const row of groupRows) {
+        if (!groupsByContact[row.contact_id]) groupsByContact[row.contact_id] = [];
+        groupsByContact[row.contact_id].push({ id: row.id, name: row.name });
+      }
+
+      for (const contact of contacts) {
+        contact.tags = tagsByContact[contact.id] || [];
+        contact.groups = groupsByContact[contact.id] || [];
+      }
+    }
+
     connection.release();
 
     res.json({
