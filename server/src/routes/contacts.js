@@ -261,25 +261,49 @@ router.get('/:id', async (req, res, next) => {
 router.post('/', async (req, res, next) => {
   try {
     const {
+      first_name,
+      last_name,
       display_name,
+      email,
+      phone,
+      birthday,
       username,
       bio,
       age,
       location,
       photo_url,
       is_anonymous,
+      is_spicy,
+      notes,
     } = req.body;
 
-    if (!display_name) {
-      return res.status(400).json({ success: false, error: 'display_name is required' });
+    // Build display_name from first/last if not provided
+    const finalDisplayName = display_name || [first_name, last_name].filter(Boolean).join(' ').trim();
+    if (!finalDisplayName) {
+      return res.status(400).json({ success: false, error: 'A name is required (display_name, or first_name/last_name)' });
     }
 
     const connection = await pool.getConnection();
 
     const [result] = await connection.execute(
-      `INSERT INTO contacts (display_name, username, bio, age, location, photo_url, is_anonymous, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-      [display_name, username || null, bio || null, age || null, location || null, photo_url || null, is_anonymous ? 1 : 0]
+      `INSERT INTO contacts (display_name, first_name, last_name, email, phone, birthday, username, bio, age, location, photo_url, is_anonymous, is_spicy, notes_text, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+      [
+        finalDisplayName,
+        first_name || null,
+        last_name || null,
+        email || null,
+        phone || null,
+        birthday || null,
+        username || null,
+        bio || null,
+        age || null,
+        location || null,
+        photo_url || null,
+        is_anonymous ? 1 : 0,
+        is_spicy ? 1 : 0,
+        notes || null,
+      ]
     );
 
     const contactId = result.insertId;
@@ -308,29 +332,64 @@ router.put('/:id', async (req, res, next) => {
   try {
     const { id } = req.params;
     const {
+      first_name,
+      last_name,
       display_name,
+      email,
+      phone,
+      birthday,
       username,
       bio,
       age,
       location,
       photo_url,
       is_anonymous,
+      is_spicy,
+      notes,
     } = req.body;
+
+    // Build display_name from first/last if explicitly provided
+    const finalDisplayName = display_name || (first_name !== undefined || last_name !== undefined
+      ? [first_name, last_name].filter(Boolean).join(' ').trim() || null
+      : null);
 
     const connection = await pool.getConnection();
 
     await connection.execute(
       `UPDATE contacts SET
        display_name = COALESCE(?, display_name),
+       first_name = COALESCE(?, first_name),
+       last_name = COALESCE(?, last_name),
+       email = COALESCE(?, email),
+       phone = COALESCE(?, phone),
+       birthday = COALESCE(?, birthday),
        username = COALESCE(?, username),
        bio = COALESCE(?, bio),
        age = COALESCE(?, age),
        location = COALESCE(?, location),
        photo_url = COALESCE(?, photo_url),
        is_anonymous = COALESCE(?, is_anonymous),
+       is_spicy = COALESCE(?, is_spicy),
+       notes_text = COALESCE(?, notes_text),
        updated_at = NOW()
        WHERE id = ?`,
-      [display_name, username, bio, age, location, photo_url, is_anonymous !== undefined ? (is_anonymous ? 1 : 0) : null, id]
+      [
+        finalDisplayName,
+        first_name !== undefined ? first_name : null,
+        last_name !== undefined ? last_name : null,
+        email !== undefined ? email : null,
+        phone !== undefined ? phone : null,
+        birthday !== undefined ? birthday : null,
+        username,
+        bio,
+        age,
+        location,
+        photo_url,
+        is_anonymous !== undefined ? (is_anonymous ? 1 : 0) : null,
+        is_spicy !== undefined ? (is_spicy ? 1 : 0) : null,
+        notes !== undefined ? notes : null,
+        id,
+      ]
     );
 
     // Update search index
