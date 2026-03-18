@@ -12,21 +12,20 @@ window.pages = {
 
   dashboard: async function() {
     try {
-      const [contacts, reminders, events, timeline, tags] = await Promise.all([
-        window.api.getContacts({ limit: 1, offset: 0 }),
-        window.api.getDueReminders(),
-        window.api.getEvents({ limit: 5, offset: 0 }),
-        window.api.getTimeline('all'),
-        window.api.getTags(),
+      // Fetch data — skip timeline (requires a contact_id, no "all" endpoint)
+      const [allContacts, reminders, events] = await Promise.all([
+        window.api.getContacts({ limit: 1000, offset: 0 }),
+        window.api.getDueReminders().catch(() => []),
+        window.api.getEvents({ limit: 10, offset: 0, upcoming: true }),
       ]);
 
-      const contactCount = contacts.total || 0;
+      const contactCount = allContacts?.total || 0;
+      const contactList = allContacts?.data || [];
       const now = new Date();
       const thirtyDaysLater = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
       // Get upcoming birthdays
-      const allContacts = await window.api.getContacts({ limit: 1000, offset: 0 });
-      const birthdays = (allContacts.data || [])
+      const birthdays = contactList
         .filter(c => c.birthday)
         .map(c => ({
           ...c,
@@ -39,15 +38,15 @@ window.pages = {
         .sort((a, b) => new Date(a.nextBirthday) - new Date(b.nextBirthday))
         .slice(0, 10);
 
-      const overdue = (reminders || []).filter(r => new Date(r.dueDate) < now);
+      const reminderList = Array.isArray(reminders) ? reminders : (reminders?.data || []);
+      const overdue = reminderList.filter(r => r.dueAt && new Date(r.dueAt) < now);
       const upcoming = (events?.data || []).slice(0, 5);
-      const recentTimeline = (timeline || []).slice(0, 10);
 
       const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
       const thisMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-      const eventsThisMonth = (upcoming || []).filter(e => {
-        const ed = new Date(e.startDate);
+      const eventsThisMonth = upcoming.filter(e => {
+        const ed = new Date(e.startsAt);
         return ed >= thisMonth && ed <= thisMonthEnd;
       }).length;
 
@@ -64,7 +63,7 @@ window.pages = {
               <div class="stat-label">Total Contacts</div>
             </div>
             <div class="stat-card">
-              <div class="stat-number">${allContacts.data?.filter(c => new Date(c.createdAt) >= thisMonth).length || 0}</div>
+              <div class="stat-number">${contactList.filter(c => c.createdAt && new Date(c.createdAt) >= thisMonth).length}</div>
               <div class="stat-label">Added This Month</div>
             </div>
             <div class="stat-card">
@@ -86,10 +85,10 @@ window.pages = {
             <div class="card-body">
               ${birthdays.length > 0
                 ? birthdays.map(b => `
-                  <div class="birthday-item" data-contact-id="${window.utils.escapeHtml(b.id)}">
-                    ${window.components.avatar(b.photoUrl, b.firstName || '', 'sm')}
+                  <div class="birthday-item" data-contact-id="${b.id}">
+                    ${window.components.avatar(b.photoUrl, b.displayName || '', 'sm')}
                     <div class="birthday-info">
-                      <div class="birthday-name">${window.utils.escapeHtml((b.firstName || '') + ' ' + (b.lastName || ''))}</div>
+                      <div class="birthday-name">${window.utils.escapeHtml(b.displayName || 'Unknown')}</div>
                       <div class="birthday-date">${window.utils.formatDate(b.nextBirthday)}</div>
                     </div>
                   </div>
@@ -108,10 +107,10 @@ window.pages = {
             <div class="card-body">
               ${overdue.length > 0
                 ? overdue.slice(0, 5).map(r => `
-                  <div class="reminder-item" data-reminder-id="${window.utils.escapeHtml(r.id)}">
+                  <div class="reminder-item" data-reminder-id="${r.id}">
                     <div class="reminder-badge overdue"></div>
-                    <div class="reminder-text">${window.utils.escapeHtml(r.text)}</div>
-                    <div class="reminder-date">${window.utils.formatRelative(r.dueDate)}</div>
+                    <div class="reminder-text">${window.utils.escapeHtml(r.title || '')}</div>
+                    <div class="reminder-date">${window.utils.formatRelative(r.dueAt)}</div>
                   </div>
                 `).join('')
                 : '<p class="empty-state">No overdue reminders</p>'
@@ -128,11 +127,11 @@ window.pages = {
             <div class="card-body">
               ${upcoming.length > 0
                 ? upcoming.map(e => `
-                  <div class="event-item" data-event-id="${window.utils.escapeHtml(e.id)}">
+                  <div class="event-item" data-event-id="${e.id}">
                     <div class="event-badge"></div>
                     <div>
                       <div class="event-name">${window.utils.escapeHtml(e.title || '')}</div>
-                      <div class="event-date">${window.utils.formatDateTime(e.startDate)}</div>
+                      <div class="event-date">${window.utils.formatDateTime(e.startsAt)}</div>
                     </div>
                   </div>
                 `).join('')
@@ -147,16 +146,8 @@ window.pages = {
               <h3 class="card-title">Recent Activity</h3>
             </div>
             <div class="card-body">
-              ${recentTimeline.length > 0
-                ? recentTimeline.map(t => `
-                  <div class="timeline-item">
-                    <div class="timeline-dot"></div>
-                    <div class="timeline-content">
-                      <div class="timeline-title">${window.utils.escapeHtml(t.title || '')}</div>
-                      <div class="timeline-date">${window.utils.formatRelative(t.date)}</div>
-                    </div>
-                  </div>
-                `).join('')
+              ${false /* Timeline requires contact_id — show empty for now */
+                ? ''
                 : '<p class="empty-state">No recent activity</p>'
               }
             </div>
@@ -258,11 +249,11 @@ window.pages = {
           ${contacts.length > 0
             ? contacts.map(c => `
               <div class="contact-item ${view === 'grid' ? 'contact-card' : 'contact-row'}" data-contact-id="${window.utils.escapeHtml(c.id)}">
-                ${window.components.avatar(c.photoUrl, c.firstName || '', 'md')}
+                ${window.components.avatar(c.photoUrl, c.displayName || '', 'md')}
                 <div class="contact-info">
-                  <div class="contact-name">${window.utils.escapeHtml((c.firstName || '') + ' ' + (c.lastName || ''))}</div>
-                  ${c.relationship_type ? `<div class="contact-meta">${window.utils.escapeHtml(c.relationship_type)}</div>` : ''}
-                  ${c.emails && c.emails[0] ? `<div class="contact-email">${window.utils.escapeHtml(c.emails[0].email)}</div>` : ''}
+                  <div class="contact-name">${window.utils.escapeHtml(c.displayName || 'Unknown')}</div>
+                  ${c.relationshipType ? `<div class="contact-meta">${window.utils.escapeHtml(c.relationshipType)}</div>` : ''}
+                  ${c.email ? `<div class="contact-email">${window.utils.escapeHtml(c.email)}</div>` : ''}
                 </div>
                 ${c.favorite ? `<div class="star-icon">${window.utils.lucideIcon('star', 16)}</div>` : ''}
               </div>
@@ -370,7 +361,7 @@ window.pages = {
             <button class="btn-icon btn-back" onclick="window.app.navigate('contacts')">
               ${window.utils.lucideIcon('arrow-left', 20)}
             </button>
-            <div class="contact-detail-title">${window.utils.escapeHtml((contact.firstName || '') + ' ' + (contact.lastName || ''))}</div>
+            <div class="contact-detail-title">${window.utils.escapeHtml(contact.displayName || '')}</div>
             <div class="contact-detail-actions">
               <button class="btn-icon" id="favBtn" title="Toggle favorite">
                 ${window.utils.lucideIcon('star', 16)}
@@ -387,11 +378,11 @@ window.pages = {
           <div class="contact-detail-body">
             <!-- Avatar & Basic Info -->
             <div class="detail-section">
-              ${window.components.avatar(contact.photoUrl, contact.firstName || '', 'lg', contact.orientation)}
+              ${window.components.avatar(contact.photoUrl, contact.displayName || '', 'lg', contact.orientation)}
               <div class="detail-basic">
-                <h2>${window.utils.escapeHtml((contact.firstName || '') + ' ' + (contact.lastName || ''))}</h2>
+                <h2>${window.utils.escapeHtml(contact.displayName || '')}</h2>
                 ${contact.location ? `<p class="detail-location">${window.utils.lucideIcon('map-pin', 14)} ${window.utils.escapeHtml(contact.location)}</p>` : ''}
-                ${contact.relationship_type ? `<p class="detail-rel">${window.utils.escapeHtml(contact.relationship_type)}</p>` : ''}
+                ${contact.relationshipType ? `<p class="detail-rel">${window.utils.escapeHtml(contact.relationshipType)}</p>` : ''}
               </div>
             </div>
 
@@ -574,7 +565,7 @@ window.pages = {
       const apiParams = { limit, offset };
 
       if (filter === 'upcoming') {
-        apiParams.startDate = now.toISOString();
+        apiParams.upcoming = 'true';
       } else if (filter === 'past') {
         apiParams.endDate = now.toISOString();
       }
@@ -605,7 +596,7 @@ window.pages = {
           ${events.length > 0
             ? events.map(e => `
               <div class="event-card" data-event-id="${window.utils.escapeHtml(e.id)}">
-                <div class="event-date">${window.utils.formatDate(e.startDate)}</div>
+                <div class="event-date">${window.utils.formatDate(e.startsAt)}</div>
                 <div class="event-title">${window.utils.escapeHtml(e.title)}</div>
                 <div class="event-meta">
                   <span class="event-type">${window.utils.escapeHtml(e.type || 'event')}</span>
@@ -686,19 +677,19 @@ window.pages = {
       }
 
       const upcomingEvents = (events.data || [])
-        .filter(e => new Date(e.startDate) > now && new Date(e.startDate) < new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000))
+        .filter(e => new Date(e.startsAt) > now && new Date(e.startsAt) < new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000))
         .map(e => ({
           type: 'event',
           event: e,
-          date: new Date(e.startDate),
+          date: new Date(e.startsAt),
         }));
 
       const overdueReminders = (reminders || [])
-        .filter(r => new Date(r.dueDate) < now)
+        .filter(r => new Date(r.dueAt) < now)
         .map(r => ({
           type: 'reminder',
           reminder: r,
-          date: new Date(r.dueDate),
+          date: new Date(r.dueAt),
         }));
 
       const items = [...overdueReminders, ...upcomingBirthdays, ...upcomingEvents].sort((a, b) => a.date - b.date);
@@ -717,7 +708,7 @@ window.pages = {
                     <div class="notif-icon">${window.utils.lucideIcon('alert-circle', 20)}</div>
                     <div class="notif-content">
                       <div class="notif-title">Overdue: ${window.utils.escapeHtml(item.reminder.text)}</div>
-                      <div class="notif-date">${window.utils.formatRelative(item.reminder.dueDate)}</div>
+                      <div class="notif-date">${window.utils.formatRelative(item.reminder.dueAt)}</div>
                     </div>
                     <div class="notif-actions">
                       <button class="btn btn-sm" data-action="complete" data-id="${window.utils.escapeHtml(item.reminder.id)}">Mark Done</button>
@@ -729,7 +720,7 @@ window.pages = {
                   <div class="notif-item birthday">
                     <div class="notif-icon">${window.utils.lucideIcon('cake', 20)}</div>
                     <div class="notif-content">
-                      <div class="notif-title">${window.utils.escapeHtml(item.contact.firstName)} birthday</div>
+                      <div class="notif-title">${window.utils.escapeHtml(item.contact.displayName || '')} birthday</div>
                       <div class="notif-date">${window.utils.formatDate(item.contact.birthday)}</div>
                     </div>
                     <div class="notif-actions">
@@ -743,7 +734,7 @@ window.pages = {
                     <div class="notif-icon">${window.utils.lucideIcon('calendar', 20)}</div>
                     <div class="notif-content">
                       <div class="notif-title">${window.utils.escapeHtml(item.event.title)}</div>
-                      <div class="notif-date">${window.utils.formatDateTime(item.event.startDate)}</div>
+                      <div class="notif-date">${window.utils.formatDateTime(item.event.startsAt)}</div>
                     </div>
                     <div class="notif-actions">
                       <button class="btn btn-sm" data-action="view-event" data-id="${window.utils.escapeHtml(item.event.id)}">View</button>

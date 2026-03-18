@@ -679,7 +679,7 @@ window.api = {
    * @returns {Promise<array>}
    */
   async getTimeline(contactId) {
-    return this.request('GET', `/api/contacts/${contactId}/timeline`);
+    return this.request('GET', `/api/timeline?contact_id=${contactId}`);
   },
 
   /**

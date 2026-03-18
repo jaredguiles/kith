@@ -286,16 +286,16 @@ window.app = {
 
     const html = this.favorites
       .map(contact => `
-        <a class="sidebar-item" data-contact-id="${window.utils.escapeHtml(String(contact.id))}">
-          ${window.components.avatar(contact.photo_url, contact.display_name || '', 'sm')}
-          <span class="sidebar-item-text">${window.utils.escapeHtml(window.utils.truncate(contact.display_name || 'Unknown', 20))}</span>
+        <a class="fav-item" data-contact-id="${contact.id}">
+          ${window.components.avatar(contact.photoUrl, contact.displayName || '', 'sm')}
+          <span>${window.utils.escapeHtml(window.utils.truncate(contact.displayName || 'Unknown', 20))}</span>
         </a>
       `)
       .join('');
 
-    container.innerHTML = html || '<p class="sidebar-empty">No favorites yet</p>';
+    container.innerHTML = html || '<div style="padding:4px 18px;font-size:12px;color:var(--text-muted);">No favorites yet</div>';
 
-    container.querySelectorAll('.sidebar-item').forEach(item => {
+    container.querySelectorAll('.fav-item').forEach(item => {
       item.addEventListener('click', () => {
         const id = item.dataset.contactId;
         this.navigate('contact-detail', { id });
@@ -313,16 +313,16 @@ window.app = {
     const html = this.groups
       .slice(0, 5)
       .map(group => `
-        <a class="sidebar-item" data-group-id="${window.utils.escapeHtml(group.id)}">
-          <span class="sidebar-item-icon">${window.utils.lucideIcon('folder', 14)}</span>
-          <span class="sidebar-item-text">${window.utils.escapeHtml(window.utils.truncate(group.name, 20))}</span>
+        <a class="group-item" data-group-id="${group.id}">
+          <span class="group-name">${window.utils.escapeHtml(window.utils.truncate(group.name, 20))}</span>
+          <span class="group-count">${group.memberCount || 0}</span>
         </a>
       `)
       .join('');
 
-    container.innerHTML = html || '<p class="sidebar-empty">No groups</p>';
+    container.innerHTML = html || '<div style="padding:5px 18px;font-size:12px;color:var(--text-muted);">No groups</div>';
 
-    container.querySelectorAll('.sidebar-item').forEach(item => {
+    container.querySelectorAll('.group-item').forEach(item => {
       item.addEventListener('click', () => {
         const id = item.dataset.groupId;
         this.navigate('contacts', { group: id });
@@ -340,7 +340,7 @@ window.app = {
     const sidebarUserRole = document.getElementById('sidebarUserRole');
 
     if (sidebarUserName) {
-      sidebarUserName.textContent = this.currentUser.username;
+      sidebarUserName.textContent = this.currentUser.displayName || this.currentUser.username;
     }
     if (sidebarUserRole) {
       sidebarUserRole.textContent = window.utils.formatRole(this.currentUser.role);
@@ -349,7 +349,8 @@ window.app = {
     // Show settings nav if admin
     const settingsNav = document.getElementById('settingsNav');
     if (settingsNav) {
-      settingsNav.style.display = this.currentUser.role === 'main_admin' ? 'flex' : 'none';
+      const isAdmin = this.currentUser.role === 'main_admin' || this.currentUser.role === 'admin';
+      settingsNav.style.display = isAdmin ? 'flex' : 'none';
     }
   },
 
