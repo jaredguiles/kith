@@ -1,217 +1,137 @@
 const fs = require('fs').promises;
 const path = require('path');
-const vcard4 = require('vcard4-parser');
+const vcardParser = require('vcard-parser');
 
 const MEDIA_PATH = process.env.MEDIA_PATH || '/media';
 
 /**
  * Parse vCard files and return normalized records
- * @param {string} jobId - Import job ID
- * @param {string} filename - Original filename
- * @returns {Promise<Array>} Array of normalized records
  */
 async function parse(jobId, filename) {
   try {
-    // Read the file
     const filepath = path.join(MEDIA_PATH, 'imports', jobId.toString(), filename);
     const content = await fs.readFile(filepath, 'utf-8');
 
-    // Parse vCard content
-    const vcards = vcard4.parse(content);
+    // Split multi-contact vcf files on BEGIN:VCARD boundaries
+    const vcardBlocks = content.split(/(?=BEGIN:VCARD)/i).filter(b => b.trim());
 
-    // Handle single vcard or array
-    const vcardArray = Array.isArray(vcards) ? vcards : [vcards];
+    const records = [];
+    for (const block of vcardBlocks) {
+      try {
+        const parsed = vcardParser.parse(block);
+        if (parsed) {
+          records.push(normalizeVCard(parsed));
+        }
+      } catch (e) {
+        // Skip malformed individual cards
+      }
+    }
 
-    // Normalize each vcard
-    const records = vcardArray
-      .filter(vcard => vcard) // Filter out null/undefined
-      .map(vcard => normalizeVCard(vcard));
-
-    console.log(`Parsed ${records.length} contacts from vcard file: ${filename}`);
+    console.log(`[vcard] Parsed ${records.length} contacts from: ${filename}`);
     return records;
   } catch (error) {
-    console.error(`Error parsing vcard file ${filename}:`, error);
+    console.error(`[vcard] Error parsing ${filename}:`, error.message);
     return [];
   }
 }
 
 /**
- * Normalize a single vCard object
- * @param {object} vcard - Parsed vCard object
- * @returns {object} Normalized record
+ * Normalize a parsed vCard object to the Kith import format
  */
 function normalizeVCard(vcard) {
-  const record = {};
+  const record = {
+    display_name: null,
+    first_name: null,
+    last_name: null,
+    nickname: null,
+    emails: [],
+    phones: [],
+    birthday: null,
+    location: null,
+    bio: null,
+    occupation: null,
+    website: null,
+    social_links: [],
+    messages: [],
+    media: []
+  };
 
-  // Name handling
-  if (vcard.fn) {
-    record.display_name = vcard.fn();
-  } else if (vcard.n) {
-    const n = vcard.n();
-    const parts = [];
-    if (n.givenName) {
-      record.first_name = n.givenName;
-      parts.push(n.givenName);
-    }
-    if (n.familyName) {
-      record.last_name = n.familyName;
-      parts.push(n.familyName);
-    }
-    if (parts.length > 0) {
-      record.display_name = parts.join(' ');
-    }
+  // FN (formatted name)
+  if (vcard.fn && vcard.fn[0]) {
+    record.display_name = vcard.fn[0].value || null;
   }
 
-  // Nickname
-  if (vcard.nickname) {
-    const nickname = vcard.nickname();
-    if (nickname) {
-      record.nickname = nickname;
-    }
+  // N (structured name)
+  if (vcard.n && vcard.n[0] && vcard.n[0].value) {
+    const parts = vcard.n[0].value.split(';');
+    if (parts[0]) record.last_name = parts[0].trim() || null;
+    if (parts[1]) record.first_name = parts[1].trim() || null;
   }
 
-  // Birthday
-  if (vcard.bday) {
-    const bday = vcard.bday();
-    if (bday) {
-      record.birthday = bday;
-    }
+  // Build display_name if not set
+  if (!record.display_name && (record.first_name || record.last_name)) {
+    record.display_name = [record.first_name, record.last_name].filter(Boolean).join(' ');
   }
 
-  // Email addresses
-  record.emails = [];
+  // NICKNAME
+  if (vcard.nickname && vcard.nickname[0]) {
+    record.nickname = vcard.nickname[0].value || null;
+  }
+
+  // BDAY
+  if (vcard.bday && vcard.bday[0]) {
+    record.birthday = vcard.bday[0].value || null;
+  }
+
+  // EMAIL
   if (vcard.email) {
-    const emails = Array.isArray(vcard.email) ? vcard.email : [vcard.email];
-    for (const emailFunc of emails) {
-      try {
-        const email = emailFunc();
-        if (email && email.value) {
-          record.emails.push({
-            value: email.value,
-            type: email.type ? email.type.join(',') : 'personal'
-          });
-        }
-      } catch (e) {
-        // Skip malformed emails
+    for (const entry of vcard.email) {
+      if (entry.value) {
+        const label = (entry.meta && entry.meta.type) ? entry.meta.type[0].toLowerCase() : 'personal';
+        record.emails.push({ label, email: entry.value });
       }
     }
   }
 
-  // Phone numbers
-  record.phones = [];
+  // TEL
   if (vcard.tel) {
-    const phones = Array.isArray(vcard.tel) ? vcard.tel : [vcard.tel];
-    for (const phoneFunc of phones) {
-      try {
-        const phone = phoneFunc();
-        if (phone && phone.value) {
-          record.phones.push({
-            value: phone.value,
-            type: phone.type ? phone.type.join(',') : 'voice'
-          });
-        }
-      } catch (e) {
-        // Skip malformed phones
+    for (const entry of vcard.tel) {
+      if (entry.value) {
+        const label = (entry.meta && entry.meta.type) ? entry.meta.type[0].toLowerCase() : 'mobile';
+        record.phones.push({ label, phone: entry.value });
       }
     }
   }
 
-  // Address (location)
-  if (vcard.adr) {
-    try {
-      const adr = Array.isArray(vcard.adr) ? vcard.adr[0] : vcard.adr;
-      const address = adr();
-      const parts = [];
-
-      if (address.streetAddress) parts.push(address.streetAddress);
-      if (address.locality) parts.push(address.locality);
-      if (address.region) parts.push(address.region);
-      if (address.postalCode) parts.push(address.postalCode);
-      if (address.country) parts.push(address.country);
-
-      if (parts.length > 0) {
-        record.location = parts.join(', ');
-      }
-    } catch (e) {
-      // Skip malformed addresses
+  // ADR (address → location string)
+  if (vcard.adr && vcard.adr[0] && vcard.adr[0].value) {
+    const parts = vcard.adr[0].value.split(';').map(s => s.trim()).filter(Boolean);
+    if (parts.length > 0) {
+      record.location = parts.join(', ');
     }
   }
 
-  // Organization (occupation)
-  if (vcard.org) {
-    try {
-      const org = vcard.org();
-      if (org && org[0]) {
-        record.occupation = org[0];
-      }
-    } catch (e) {
-      // Skip malformed org
-    }
+  // ORG
+  if (vcard.org && vcard.org[0]) {
+    record.occupation = vcard.org[0].value || null;
   }
 
-  // Title
-  if (vcard.title) {
-    try {
-      const title = vcard.title();
-      if (title && !record.occupation) {
-        record.occupation = title;
-      }
-    } catch (e) {
-      // Skip malformed title
-    }
+  // TITLE
+  if (vcard.title && vcard.title[0] && !record.occupation) {
+    record.occupation = vcard.title[0].value || null;
   }
 
-  // Note (bio)
-  if (vcard.note) {
-    try {
-      const note = vcard.note();
-      if (note) {
-        record.bio = note;
-      }
-    } catch (e) {
-      // Skip malformed note
-    }
+  // NOTE → bio
+  if (vcard.note && vcard.note[0]) {
+    record.bio = vcard.note[0].value || null;
   }
 
-  // URL (website)
-  if (vcard.url) {
-    try {
-      const url = Array.isArray(vcard.url) ? vcard.url[0] : vcard.url;
-      const urlValue = url();
-      if (urlValue && urlValue.value) {
-        record.website = urlValue.value;
-      }
-    } catch (e) {
-      // Skip malformed URL
-    }
+  // URL → website
+  if (vcard.url && vcard.url[0]) {
+    record.website = vcard.url[0].value || null;
   }
-
-  // Photo (media)
-  record.media = [];
-  if (vcard.photo) {
-    try {
-      const photos = Array.isArray(vcard.photo) ? vcard.photo : [vcard.photo];
-      for (const photoFunc of photos) {
-        const photo = photoFunc();
-        if (photo && photo.value) {
-          record.media.push({
-            type: 'photo',
-            url: photo.value,
-            timestamp: null
-          });
-        }
-      }
-    } catch (e) {
-      // Skip malformed photos
-    }
-  }
-
-  // Social links (if stored as URLs with types)
-  record.social_links = [];
 
   return record;
 }
 
-module.exports = {
-  parse
-};
+module.exports = { parse };
