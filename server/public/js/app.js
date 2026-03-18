@@ -59,20 +59,25 @@ window.app = {
    */
   async loadAppData() {
     try {
-      const [settings, favorites, groups] = await Promise.all([
-        window.api.getSettings(),
+      // Use public settings endpoint (available to all users)
+      // Admin-only full settings are loaded on the settings page itself
+      const isAdmin = this.currentUser?.role === 'admin' || this.currentUser?.role === 'main_admin';
+
+      const [settings, favoritesResp, groups, prefs] = await Promise.all([
+        isAdmin ? window.api.getSettings() : window.api.getPublicSettings(),
         window.api.getContacts({ favorites: true, limit: 50 }),
         window.api.getGroups(),
+        window.api.getPreferences(),
       ]);
 
       this.settings = settings || {};
-      this.favorites = (favorites.data || []).slice(0, 10);
-      this.groups = groups || [];
-      this.spicyEnabled = settings?.spicyEnabled || false;
+      this.favorites = (favoritesResp && favoritesResp.data ? favoritesResp.data : []).slice(0, 10);
+      this.groups = Array.isArray(groups) ? groups : (groups?.data || []);
+      // Settings keys are now camelCase via the API transformer
+      this.spicyEnabled = this.settings.spicyEnabled === true;
 
-      // Load preferences
-      const prefs = await window.api.getPreferences();
-      this.spicyMode = prefs?.spicyMode || false;
+      // Preferences keys are now camelCase via the API transformer
+      this.spicyMode = prefs?.spicyVisible === true;
 
       // Update UI
       this.updateUserInfo();
@@ -260,9 +265,9 @@ window.app = {
 
     const html = this.favorites
       .map(contact => `
-        <a class="sidebar-item" data-contact-id="${window.utils.escapeHtml(contact.id)}">
-          ${window.components.avatar(contact.photoUrl, contact.firstName || '', 'sm')}
-          <span class="sidebar-item-text">${window.utils.escapeHtml(window.utils.truncate((contact.firstName || '') + ' ' + (contact.lastName || ''), 20))}</span>
+        <a class="sidebar-item" data-contact-id="${window.utils.escapeHtml(String(contact.id))}">
+          ${window.components.avatar(contact.photo_url, contact.display_name || '', 'sm')}
+          <span class="sidebar-item-text">${window.utils.escapeHtml(window.utils.truncate(contact.display_name || 'Unknown', 20))}</span>
         </a>
       `)
       .join('');
@@ -808,7 +813,7 @@ window.app = {
    * Update app UI based on settings
    */
   updateAppSettings() {
-    // Update app name
+    // Update app name (settings keys are camelCase via API transformer)
     const appName = this.settings?.appName || 'Kith';
     document.getElementById('sidebarAppName').textContent = appName;
     document.getElementById('mobAppName').textContent = appName;
@@ -816,7 +821,7 @@ window.app = {
 
     // Update accent color
     if (this.settings?.accentColor) {
-      document.documentElement.style.setProperty('--accent-color', this.settings.accentColor);
+      document.documentElement.style.setProperty('--accent', this.settings.accentColor);
     }
 
     // Update spicy mode class

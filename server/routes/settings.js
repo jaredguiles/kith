@@ -4,6 +4,38 @@ const pool = require('../database/connection');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 
 /**
+ * GET /public
+ * Get public app settings (available to all authenticated users)
+ * Returns only the settings needed for the UI to function
+ */
+router.get('/public', requireAuth, async (req, res) => {
+  try {
+    const publicKeys = [
+      'app_name', 'app_logo', 'accent_color', 'spicy_accent_color',
+      'spicy_enabled', 'spicy_pin', 'spicy_auto_disable'
+    ];
+    const [rows] = await pool.query(
+      `SELECT \`key\`, value, type FROM app_settings WHERE \`key\` IN (${publicKeys.map(() => '?').join(',')})`,
+      publicKeys
+    );
+
+    const settings = {};
+    for (const row of rows) {
+      try {
+        settings[row.key] = JSON.parse(row.value);
+      } catch {
+        settings[row.key] = row.value;
+      }
+    }
+
+    res.status(200).json(settings);
+  } catch (err) {
+    console.error('Get public settings error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/**
  * GET /
  * Get all app settings (admin only)
  */

@@ -2,12 +2,42 @@ window.api = {
   token: null,
 
   /**
+   * Convert snake_case keys to camelCase recursively
+   */
+  _toCamel(obj) {
+    if (Array.isArray(obj)) return obj.map(v => this._toCamel(v));
+    if (obj !== null && typeof obj === 'object' && !(obj instanceof Date)) {
+      return Object.keys(obj).reduce((result, key) => {
+        const camelKey = key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+        result[camelKey] = this._toCamel(obj[key]);
+        return result;
+      }, {});
+    }
+    return obj;
+  },
+
+  /**
+   * Convert camelCase keys to snake_case for sending to API
+   */
+  _toSnake(obj) {
+    if (Array.isArray(obj)) return obj.map(v => this._toSnake(v));
+    if (obj !== null && typeof obj === 'object' && !(obj instanceof Date)) {
+      return Object.keys(obj).reduce((result, key) => {
+        const snakeKey = key.replace(/[A-Z]/g, c => '_' + c.toLowerCase());
+        result[snakeKey] = this._toSnake(obj[key]);
+        return result;
+      }, {});
+    }
+    return obj;
+  },
+
+  /**
    * Base fetch wrapper that adds auth headers and handles errors
-   * @param {string} method - HTTP method (GET, POST, PATCH, DELETE)
+   * @param {string} method - HTTP method (GET, POST, PUT, DELETE)
    * @param {string} path - API path (e.g., '/api/contacts')
    * @param {*} body - Request body (will be JSON stringified)
    * @param {object} options - Additional fetch options
-   * @returns {Promise<*>} Response data
+   * @returns {Promise<*>} Response data (keys converted to camelCase)
    */
   async request(method, path, body = null, options = {}) {
     const url = `${window.location.origin}${path}`;
@@ -28,7 +58,14 @@ window.api = {
     };
 
     if (body && method !== 'GET') {
-      fetchOptions.body = JSON.stringify(body);
+      if (body instanceof FormData) {
+        // FormData: don't JSON-stringify, don't set Content-Type (browser will set it with boundary)
+        fetchOptions.body = body;
+        delete fetchOptions.headers['Content-Type'];
+      } else {
+        // Convert camelCase keys to snake_case for the API
+        fetchOptions.body = JSON.stringify(this._toSnake(body));
+      }
     }
 
     try {
@@ -38,13 +75,15 @@ window.api = {
       if (response.status === 401) {
         this.token = null;
         localStorage.removeItem('kith_token');
-        window.location.href = '/login';
+        if (window.app && window.app.showLogin) {
+          window.app.showLogin();
+        }
         return null;
       }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        const error = new Error(errorData.message || `HTTP ${response.status}`);
+        const error = new Error(errorData.error || errorData.message || `HTTP ${response.status}`);
         error.status = response.status;
         error.data = errorData;
         throw error;
@@ -55,7 +94,8 @@ window.api = {
         return null;
       }
 
-      return await response.json();
+      const data = await response.json();
+      return this._toCamel(data);
     } catch (error) {
       console.error(`API Error [${method} ${path}]:`, error);
       throw error;
@@ -840,14 +880,21 @@ window.api = {
   },
 
   /**
+   * Get public settings (available to all authenticated users)
+   * @returns {Promise<object>}
+   */
+  async getPublicSettings() {
+    return this.request('GET', '/api/settings/public');
+  },
+
+  /**
    * Update a setting
    * @param {string} key - Setting key
    * @param {*} value - Setting value
    * @returns {Promise<object>}
    */
   async updateSetting(key, value) {
-    return this.request('PATCH', '/api/settings', {
-      key,
+    return this.request('PUT', `/api/settings/${encodeURIComponent(key)}`, {
       value,
     });
   },
@@ -869,8 +916,7 @@ window.api = {
    * @returns {Promise<object>}
    */
   async updatePreference(key, value) {
-    return this.request('PATCH', '/api/preferences', {
-      key,
+    return this.request('PUT', `/api/preferences/${encodeURIComponent(key)}`, {
       value,
     });
   },
