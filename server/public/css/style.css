@@ -589,6 +589,7 @@ input, select, textarea { font-family: var(--font); }
   margin-bottom: 6px;
 }
 .stat-value { font-size: 1.6rem; font-weight: 700; line-height: 1.1; }
+.stat-change { font-size: 0.75rem; color: var(--text-muted); margin-top: 4px; }
 .stat-sub { font-size: 0.75rem; color: var(--green); margin-top: 3px; }
 .stat-sub-muted { color: var(--text-muted); }
 

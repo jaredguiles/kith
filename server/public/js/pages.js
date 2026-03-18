@@ -50,106 +50,119 @@ window.pages = {
         return ed >= thisMonth && ed <= thisMonthEnd;
       }).length;
 
+      const addedThisMonth = contactList.filter(c => c.createdAt && new Date(c.createdAt) >= thisMonth).length;
+
       const html = `
         <div class="page-header">
-          <div class="page-title">Home</div>
+          <div class="page-header-left">
+            <h1 class="page-title">Dashboard</h1>
+          </div>
         </div>
 
-        <div class="dashboard-grid">
-          <!-- Stats Cards -->
-          <div class="stats-container">
+        <div class="content-area">
+          <!-- Stats Row -->
+          <div class="stats-grid">
             <div class="stat-card">
-              <div class="stat-number">${contactCount}</div>
               <div class="stat-label">Total Contacts</div>
+              <div class="stat-value">${contactCount}</div>
+              ${addedThisMonth > 0 ? `<div class="stat-change text-green">+${addedThisMonth} this month</div>` : '<div class="stat-change text-muted">—</div>'}
             </div>
             <div class="stat-card">
-              <div class="stat-number">${contactList.filter(c => c.createdAt && new Date(c.createdAt) >= thisMonth).length}</div>
-              <div class="stat-label">Added This Month</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-number">${eventsThisMonth}</div>
               <div class="stat-label">Events This Month</div>
+              <div class="stat-value">${eventsThisMonth}</div>
+              <div class="stat-change text-muted">Scheduled</div>
             </div>
             <div class="stat-card">
-              <div class="stat-number">${overdue.length}</div>
-              <div class="stat-label">Overdue Reminders</div>
+              <div class="stat-label">Upcoming</div>
+              <div class="stat-value">${upcoming.length}</div>
+              <div class="stat-change text-muted">Next 7 days</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Overdue</div>
+              <div class="stat-value">${overdue.length}</div>
+              ${overdue.length > 0 ? '<div class="stat-change text-amber">Needs attention</div>' : '<div class="stat-change text-green">All clear</div>'}
             </div>
           </div>
 
-          <!-- Upcoming Birthdays -->
-          <div class="card">
-            <div class="card-header">
-              <h3 class="card-title">Upcoming Birthdays</h3>
-              <a href="#/contacts" class="text-link">See all</a>
-            </div>
-            <div class="card-body">
-              ${birthdays.length > 0
-                ? birthdays.map(b => `
-                  <div class="birthday-item" data-contact-id="${b.id}">
-                    ${window.components.avatar(b.photoUrl, b.displayName || '', 'sm')}
-                    <div class="birthday-info">
-                      <div class="birthday-name">${window.utils.escapeHtml(b.displayName || 'Unknown')}</div>
-                      <div class="birthday-date">${window.utils.formatDate(b.nextBirthday)}</div>
+          <!-- Cards grid -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:20px;">
+            <!-- Upcoming Birthdays -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Upcoming Birthdays</div>
+              </div>
+              <div class="card-body">
+                ${birthdays.length > 0
+                  ? birthdays.map(b => `
+                    <div class="feed-item" data-contact-id="${b.id}" style="cursor:pointer;">
+                      <div class="feed-icon" style="color:var(--pink);background:var(--pink-subtle);border-color:var(--pink-border);">
+                        ${window.utils.lucideIcon('cake', 13)}
+                      </div>
+                      <div class="feed-body">
+                        <div class="feed-title">${window.utils.escapeHtml(b.displayName || 'Unknown')}</div>
+                        <div class="feed-time">${window.utils.formatDate(b.nextBirthday)}</div>
+                      </div>
                     </div>
-                  </div>
-                `).join('')
-                : '<p class="empty-state">No birthdays in the next 30 days</p>'
-              }
+                  `).join('')
+                  : '<div class="empty-state"><p>No birthdays in the next 30 days</p></div>'
+                }
+              </div>
             </div>
-          </div>
 
-          <!-- Overdue Reminders -->
-          <div class="card">
-            <div class="card-header">
-              <h3 class="card-title">Overdue Reminders</h3>
-              <a href="#/notifications" class="text-link">See all</a>
-            </div>
-            <div class="card-body">
-              ${overdue.length > 0
-                ? overdue.slice(0, 5).map(r => `
-                  <div class="reminder-item" data-reminder-id="${r.id}">
-                    <div class="reminder-badge overdue"></div>
-                    <div class="reminder-text">${window.utils.escapeHtml(r.title || '')}</div>
-                    <div class="reminder-date">${window.utils.formatRelative(r.dueAt)}</div>
-                  </div>
-                `).join('')
-                : '<p class="empty-state">No overdue reminders</p>'
-              }
-            </div>
-          </div>
-
-          <!-- Upcoming Events -->
-          <div class="card">
-            <div class="card-header">
-              <h3 class="card-title">Upcoming Events</h3>
-              <a href="#/events" class="text-link">See all</a>
-            </div>
-            <div class="card-body">
-              ${upcoming.length > 0
-                ? upcoming.map(e => `
-                  <div class="event-item" data-event-id="${e.id}">
-                    <div class="event-badge"></div>
-                    <div>
-                      <div class="event-name">${window.utils.escapeHtml(e.title || '')}</div>
-                      <div class="event-date">${window.utils.formatDateTime(e.startsAt)}</div>
+            <!-- Upcoming Events -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Upcoming Events</div>
+              </div>
+              <div class="card-body">
+                ${upcoming.length > 0
+                  ? upcoming.map(e => `
+                    <div class="feed-item" data-event-id="${e.id}" style="cursor:pointer;">
+                      <div class="feed-icon" style="color:var(--blue);background:var(--blue-subtle);border-color:var(--blue-border);">
+                        ${window.utils.lucideIcon('calendar', 13)}
+                      </div>
+                      <div class="feed-body">
+                        <div class="feed-title">${window.utils.escapeHtml(e.title || '')}</div>
+                        <div class="feed-time">${e.startsAt ? window.utils.formatDateTime(e.startsAt) : ''}</div>
+                      </div>
                     </div>
-                  </div>
-                `).join('')
-                : '<p class="empty-state">No upcoming events</p>'
-              }
+                  `).join('')
+                  : '<div class="empty-state"><p>No upcoming events</p></div>'
+                }
+              </div>
             </div>
-          </div>
 
-          <!-- Recent Activity -->
-          <div class="card">
-            <div class="card-header">
-              <h3 class="card-title">Recent Activity</h3>
+            <!-- Overdue Reminders -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Overdue Reminders</div>
+              </div>
+              <div class="card-body">
+                ${overdue.length > 0
+                  ? overdue.slice(0, 5).map(r => `
+                    <div class="feed-item">
+                      <div class="feed-icon" style="color:var(--red);background:var(--red-subtle);border-color:var(--red-border);">
+                        ${window.utils.lucideIcon('clock', 13)}
+                      </div>
+                      <div class="feed-body">
+                        <div class="feed-title">${window.utils.escapeHtml(r.title || '')}</div>
+                        <div class="feed-time">${r.dueAt ? window.utils.formatRelative(r.dueAt) : ''}</div>
+                      </div>
+                    </div>
+                  `).join('')
+                  : '<div class="empty-state"><p>No overdue reminders</p></div>'
+                }
+              </div>
             </div>
-            <div class="card-body">
-              ${false /* Timeline requires contact_id — show empty for now */
-                ? ''
-                : '<p class="empty-state">No recent activity</p>'
-              }
+
+            <!-- Recent Activity -->
+            <div class="card">
+              <div class="card-header">
+                <div class="card-title">Recent Activity</div>
+              </div>
+              <div class="card-body">
+                <div class="empty-state"><p>No recent activity</p></div>
+              </div>
             </div>
           </div>
         </div>
@@ -684,8 +697,9 @@ window.pages = {
           date: new Date(e.startsAt),
         }));
 
-      const overdueReminders = (reminders || [])
-        .filter(r => new Date(r.dueAt) < now)
+      const reminderList = Array.isArray(reminders) ? reminders : (reminders?.data || []);
+      const overdueReminders = reminderList
+        .filter(r => r.dueAt && new Date(r.dueAt) < now)
         .map(r => ({
           type: 'reminder',
           reminder: r,
