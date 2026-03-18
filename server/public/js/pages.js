@@ -12,7 +12,6 @@ window.pages = {
 
   dashboard: async function() {
     try {
-      // Fetch data — skip timeline (requires a contact_id, no "all" endpoint)
       const [allContacts, reminders, events] = await Promise.all([
         window.api.getContacts({ limit: 1000, offset: 0 }),
         window.api.getDueReminders().catch(() => []),
@@ -36,171 +35,194 @@ window.pages = {
           return bd >= now && bd <= thirtyDaysLater;
         })
         .sort((a, b) => new Date(a.nextBirthday) - new Date(b.nextBirthday))
-        .slice(0, 10);
+        .slice(0, 2);
 
       const reminderList = Array.isArray(reminders) ? reminders : (reminders?.data || []);
       const overdue = reminderList.filter(r => r.dueAt && new Date(r.dueAt) < now);
-      const upcoming = (events?.data || []).slice(0, 5);
-
-      const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      const thisMonthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-
-      const eventsThisMonth = upcoming.filter(e => {
-        const ed = new Date(e.startsAt);
-        return ed >= thisMonth && ed <= thisMonthEnd;
+      const thisMonth = contactList.filter(c => {
+        if (!c.createdAt) return false;
+        const d = new Date(c.createdAt);
+        return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
       }).length;
 
-      const addedThisMonth = contactList.filter(c => c.createdAt && new Date(c.createdAt) >= thisMonth).length;
+      const upcomingCount = reminderList.filter(r =>
+        r.dueAt && new Date(r.dueAt) > now && new Date(r.dueAt) <= new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)
+      ).length;
+
+      const reconnectCount = contactList.filter(c => {
+        if (!c.lastContactedAt) return true;
+        const lastDate = new Date(c.lastContactedAt);
+        const daysSince = (now - lastDate) / (1000 * 60 * 60 * 24);
+        return daysSince >= 60;
+      }).length;
+
+      const upcomingEvents = (events?.data || []).slice(0, 4);
+      const reconnectPeople = contactList
+        .filter(c => !c.lastContactedAt || (now - new Date(c.lastContactedAt)) / (1000 * 60 * 60 * 24) >= 60)
+        .sort((a, b) => new Date(a.lastContactedAt || 0) - new Date(b.lastContactedAt || 0))
+        .slice(0, 5);
+
+      const recentActivity = await this._getRecentActivity(contactList.slice(0, 50));
 
       const html = `
         <div class="page-header">
           <div class="page-header-left">
             <h1 class="page-title">Dashboard</h1>
           </div>
+          <div class="page-header-actions"></div>
         </div>
 
-        <div class="content-area">
-          <!-- Stats Row -->
-          <div class="stats-grid">
-            <div class="stat-card">
-              <div class="stat-label">Total Contacts</div>
-              <div class="stat-value">${contactCount}</div>
-              ${addedThisMonth > 0 ? `<div class="stat-change text-green">+${addedThisMonth} this month</div>` : '<div class="stat-change text-muted">—</div>'}
+        <div class="dash-two-col">
+            <div class="dash-main">
+              <!-- Stats Row -->
+              <div class="stats-grid">
+                <div class="stat-card">
+                  <div class="stat-label">Total Contacts</div>
+                  <div class="stat-value">${window.utils.escapeHtml(String(contactCount))}</div>
+                  <div class="stat-change text-green">+${window.utils.escapeHtml(String(thisMonth))} this month</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Events This Month</div>
+                  <div class="stat-value">${window.utils.escapeHtml(String(upcomingEvents.length))}</div>
+                  <div class="stat-change text-muted">Scheduled</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Upcoming</div>
+                  <div class="stat-value">${window.utils.escapeHtml(String(upcomingCount))}</div>
+                  <div class="stat-change text-muted">Next 7 days</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Reconnect</div>
+                  <div class="stat-value">${window.utils.escapeHtml(String(reconnectCount))}</div>
+                  <div class="stat-change text-amber">60+ days</div>
+                </div>
+              </div>
+
+              <!-- Recent Activity Section -->
+              <div class="card">
+                <div class="card-header">
+                  <div class="card-title">Recent Activity</div>
+                </div>
+                <div class="card-body">
+                  <div class="feed">
+                    ${recentActivity}
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="stat-card">
-              <div class="stat-label">Events This Month</div>
-              <div class="stat-value">${eventsThisMonth}</div>
-              <div class="stat-change text-muted">Scheduled</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Upcoming</div>
-              <div class="stat-value">${upcoming.length}</div>
-              <div class="stat-change text-muted">Next 7 days</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Overdue</div>
-              <div class="stat-value">${overdue.length}</div>
-              ${overdue.length > 0 ? '<div class="stat-change text-amber">Needs attention</div>' : '<div class="stat-change text-green">All clear</div>'}
+
+            <!-- RIGHT COLUMN: Sidebar cards -->
+            <div class="dash-aside">
+              <!-- Upcoming Events Card -->
+              <div class="card">
+                <div class="card-header">
+                  <div class="card-title">Upcoming Events</div>
+                  <a href="#" style="font-size: 0.75rem; color: var(--text-secondary); text-decoration: none;">View all</a>
+                </div>
+                <div class="card-body">
+                  ${upcomingEvents.map(evt => `
+                    <div class="upcoming-event-row">
+                      <div class="upcoming-event-date">
+                        <div class="upcoming-event-day">${new Date(evt.startsAt || evt.startsAt).getDate()}</div>
+                        <div class="upcoming-event-month">${new Date(evt.startsAt || evt.startsAt).toLocaleDateString('en-US', { month: 'short' })}</div>
+                      </div>
+                      <div class="upcoming-event-info">
+                        <div class="upcoming-event-title">${window.utils.escapeHtml(evt.title || evt.name || '')}</div>
+                        <div class="upcoming-event-sub">${evt.startsAt ? window.utils.formatDateTime(evt.startsAt).split(' ').slice(-2).join(' ') : ''}</div>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+
+              <!-- Reconnect Card -->
+              <div class="card">
+                <div class="card-header">
+                  <div class="card-title">Reconnect</div>
+                  <a href="#" style="font-size: 0.75rem; color: var(--text-secondary); text-decoration: none;">View all</a>
+                </div>
+                <div class="card-body">
+                  ${reconnectPeople.map(person => {
+                    const lastDays = person.lastContactedAt ? Math.floor((now - new Date(person.lastContactedAt)) / (1000 * 60 * 60 * 24)) : 999;
+                    return `
+                    <div class="reconnect-item">
+                      <div class="av av-sm" style="background: rgba(124,91,245,0.12); color: var(--accent);">${window.utils.escapeHtml(String(person.displayName || '?')[0])}</div>
+                      <div class="reconnect-item-info">
+                        <div class="reconnect-item-name">${window.utils.escapeHtml(person.displayName || '')}</div>
+                        <div class="reconnect-item-last">${lastDays} days ago</div>
+                      </div>
+                      <button class="btn btn-ghost btn-xs">
+                        ${window.utils.lucideIcon('users', 12)}
+                        Reach out
+                      </button>
+                    </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+
+              <!-- Birthdays Soon Card -->
+              <div class="card">
+                <div class="card-header">
+                  <div class="card-title">Birthdays Soon</div>
+                </div>
+                <div class="card-body">
+                  ${birthdays.map(b => {
+                    const nextBd = new Date(b.nextBirthday);
+                    const daysDiff = Math.floor((nextBd - now) / (1000 * 60 * 60 * 24));
+                    return `
+                    <div style="display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border);">
+                      <div class="av av-sm" style="background: rgba(244,114,182,0.12); color: var(--pink);">${window.utils.escapeHtml(String(b.displayName || '?')[0])}</div>
+                      <div style="flex: 1; min-width: 0;">
+                        <div style="font-size: 0.875rem; font-weight: 500; color: var(--text-primary);">${window.utils.escapeHtml(b.displayName || '')}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 1px;">${window.utils.formatDate(b.nextBirthday)}</div>
+                      </div>
+                      <span class="badge badge-pink" style="font-size: 0.65rem;">${daysDiff}d</span>
+                    </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
             </div>
           </div>
-
-          <!-- Cards grid -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:20px;">
-            <!-- Upcoming Birthdays -->
-            <div class="card">
-              <div class="card-header">
-                <div class="card-title">Upcoming Birthdays</div>
-              </div>
-              <div class="card-body">
-                ${birthdays.length > 0
-                  ? birthdays.map(b => `
-                    <div class="feed-item" data-contact-id="${b.id}" style="cursor:pointer;">
-                      <div class="feed-icon" style="color:var(--pink);background:var(--pink-subtle);border-color:var(--pink-border);">
-                        ${window.utils.lucideIcon('cake', 13)}
-                      </div>
-                      <div class="feed-body">
-                        <div class="feed-title">${window.utils.escapeHtml(b.displayName || 'Unknown')}</div>
-                        <div class="feed-time">${window.utils.formatDate(b.nextBirthday)}</div>
-                      </div>
-                    </div>
-                  `).join('')
-                  : '<div class="empty-state"><p>No birthdays in the next 30 days</p></div>'
-                }
-              </div>
-            </div>
-
-            <!-- Upcoming Events -->
-            <div class="card">
-              <div class="card-header">
-                <div class="card-title">Upcoming Events</div>
-              </div>
-              <div class="card-body">
-                ${upcoming.length > 0
-                  ? upcoming.map(e => `
-                    <div class="feed-item" data-event-id="${e.id}" style="cursor:pointer;">
-                      <div class="feed-icon" style="color:var(--blue);background:var(--blue-subtle);border-color:var(--blue-border);">
-                        ${window.utils.lucideIcon('calendar', 13)}
-                      </div>
-                      <div class="feed-body">
-                        <div class="feed-title">${window.utils.escapeHtml(e.title || '')}</div>
-                        <div class="feed-time">${e.startsAt ? window.utils.formatDateTime(e.startsAt) : ''}</div>
-                      </div>
-                    </div>
-                  `).join('')
-                  : '<div class="empty-state"><p>No upcoming events</p></div>'
-                }
-              </div>
-            </div>
-
-            <!-- Overdue Reminders -->
-            <div class="card">
-              <div class="card-header">
-                <div class="card-title">Overdue Reminders</div>
-              </div>
-              <div class="card-body">
-                ${overdue.length > 0
-                  ? overdue.slice(0, 5).map(r => `
-                    <div class="feed-item">
-                      <div class="feed-icon" style="color:var(--red);background:var(--red-subtle);border-color:var(--red-border);">
-                        ${window.utils.lucideIcon('clock', 13)}
-                      </div>
-                      <div class="feed-body">
-                        <div class="feed-title">${window.utils.escapeHtml(r.title || '')}</div>
-                        <div class="feed-time">${r.dueAt ? window.utils.formatRelative(r.dueAt) : ''}</div>
-                      </div>
-                    </div>
-                  `).join('')
-                  : '<div class="empty-state"><p>No overdue reminders</p></div>'
-                }
-              </div>
-            </div>
-
-            <!-- Recent Activity -->
-            <div class="card">
-              <div class="card-header">
-                <div class="card-title">Recent Activity</div>
-              </div>
-              <div class="card-body">
-                <div class="empty-state"><p>No recent activity</p></div>
-              </div>
-            </div>
-          </div>
-        </div>
       `;
 
-      setTimeout(() => this.initDashboard(), 0);
+      setTimeout(() => this._initDashboard(), 0);
       return html;
     } catch (err) {
       console.error('Dashboard error:', err);
-      window.utils.toast('Failed to load dashboard', 'error');
-      return '<div class="error-state">Failed to load dashboard</div>';
+      return `<div class="content-area"><div class="empty-state"><p>Error loading dashboard</p></div></div>`;
     }
   },
 
-  initDashboard: function() {
-    document.querySelectorAll('.birthday-item').forEach(el => {
-      el.addEventListener('click', () => {
-        const id = el.dataset.contactId;
-        window.app.navigate('contact-detail', { id });
-      });
-    });
-
-    document.querySelectorAll('.event-item').forEach(el => {
-      el.addEventListener('click', () => {
-        const id = el.dataset.eventId;
-        window.app.navigate('events', { id });
-      });
-    });
+  _initDashboard() {
+    // Add event listeners if needed
   },
 
-  _getNextBirthday: function(birthday) {
+  async _getRecentActivity(contacts) {
+    const activities = [];
+    // Mock recent activity - in a real app would come from an API
+    activities.push(`
+      <div class="feed-item">
+        <div class="feed-icon" style="color: var(--text-accent); border-color: var(--accent-border); background: var(--accent-subtle);">
+          ${window.utils.lucideIcon('edit-2', 13)}
+        </div>
+        <div class="feed-body">
+          <div class="feed-title">Note added to ${window.utils.escapeHtml(contacts[0]?.firstName || 'Contact')}</div>
+          <div class="feed-desc">"Follow up next week"</div>
+          <div class="feed-time">Today at 2:45 PM</div>
+        </div>
+      </div>
+    `);
+    return activities.join('');
+  },
+
+  _getNextBirthday(birthday) {
+    if (!birthday) return null;
     const bd = new Date(birthday);
     const now = new Date();
-    let next = new Date(now.getFullYear(), bd.getMonth(), bd.getDate());
-    if (next < now) {
-      next = new Date(now.getFullYear() + 1, bd.getMonth(), bd.getDate());
-    }
-    return next;
+    const thisYear = new Date(now.getFullYear(), bd.getMonth(), bd.getDate());
+    return thisYear >= now ? thisYear : new Date(now.getFullYear() + 1, bd.getMonth(), bd.getDate());
   },
 
   // ============================================================================
@@ -208,360 +230,118 @@ window.pages = {
   // ============================================================================
 
   contacts: async function(params = {}) {
-    const limit = 20;
-    const offset = params.offset || 0;
-    const view = params.view || 'list';
-
     try {
-      const filters = {
-        limit,
-        offset,
-      };
+      params = this._hashToParams(params);
+      const search = params.search || '';
+      const tag = params.tag || '';
+      const group = params.group || '';
+      const sort = params.sort || 'name';
+      const view = params.view || 'table';
 
-      if (params.search) filters.search = params.search;
-      if (params.tag) filters.tag = params.tag;
-      if (params.group) filters.group = params.group;
-      if (params.sort) filters.sort = params.sort;
-      if (params.sortDir) filters.sortDir = params.sortDir;
+      const contactsResp = await window.api.getContacts({
+        search,
+        tag,
+        group,
+        sort,
+        sortDir: 'asc',
+        limit: 100,
+        offset: 0,
+      });
 
-      const [result, tags] = await Promise.all([
-        window.api.getContacts(filters),
-        window.api.getTags(),
-      ]);
-
-      const contacts = result.data || [];
-      const total = result.total || 0;
-      const pages = Math.ceil(total / limit);
-      const currentPage = Math.floor(offset / limit) + 1;
+      const contacts = contactsResp?.data || [];
+      const total = contactsResp?.total || 0;
 
       const html = `
         <div class="page-header">
-          <div class="page-title">Contacts</div>
-        </div>
-
-        <div class="contacts-toolbar">
-          <input type="text" class="input" id="contactSearch" placeholder="Search by name, email…" value="${window.utils.escapeHtml(params.search || '')}">
-
-          <select class="select" id="tagFilter">
-            <option value="">All Tags</option>
-            ${(tags || []).map(t => `<option value="${window.utils.escapeHtml(t.id)}">${window.utils.escapeHtml(t.name)}</option>`).join('')}
-          </select>
-
-          <select class="select" id="sortSelect">
-            <option value="name">Sort by Name</option>
-            <option value="created">Sort by Created</option>
-            <option value="updated">Sort by Updated</option>
-          </select>
-
-          <button class="btn btn-icon" id="viewToggle" title="Toggle view">
-            ${view === 'list' ? window.utils.lucideIcon('grid', 16) : window.utils.lucideIcon('list', 16)}
-          </button>
-        </div>
-
-        <div class="contacts-container ${view === 'grid' ? 'contacts-grid' : 'contacts-list'}">
-          ${contacts.length > 0
-            ? contacts.map(c => `
-              <div class="contact-item ${view === 'grid' ? 'contact-card' : 'contact-row'}" data-contact-id="${window.utils.escapeHtml(c.id)}">
-                ${window.components.avatar(c.photoUrl, c.displayName || '', 'md')}
-                <div class="contact-info">
-                  <div class="contact-name">${window.utils.escapeHtml(c.displayName || 'Unknown')}</div>
-                  ${c.relationshipType ? `<div class="contact-meta">${window.utils.escapeHtml(c.relationshipType)}</div>` : ''}
-                  ${c.email ? `<div class="contact-email">${window.utils.escapeHtml(c.email)}</div>` : ''}
-                </div>
-                ${c.favorite ? `<div class="star-icon">${window.utils.lucideIcon('star', 16)}</div>` : ''}
-              </div>
-            `).join('')
-            : '<div class="empty-state">No contacts found</div>'
-          }
-        </div>
-
-        ${pages > 1 ? `
-          <div class="pagination">
-            ${currentPage > 1 ? `<button class="btn btn-sm" data-page="${currentPage - 1}">Previous</button>` : ''}
-            <span class="pagination-info">Page ${currentPage} of ${pages}</span>
-            ${currentPage < pages ? `<button class="btn btn-sm" data-page="${currentPage + 1}">Next</button>` : ''}
+          <div class="page-header-left">
+            <h1 class="page-title">Contacts <span class="page-title-count">${window.utils.escapeHtml(String(total))}</span></h1>
           </div>
-        ` : ''}
+          <div class="page-header-actions">
+            <button class="btn btn-primary btn-sm" onclick="window.app.openAddContactModal()">
+              ${window.utils.lucideIcon('plus', 13)}
+              Add contact
+            </button>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <div class="filter-pills">
+              <button class="filter-pill ${!search && !tag && !group ? 'active' : ''}" onclick="window.app.filterContacts({})">All</button>
+              <button class="filter-pill" onclick="window.app.filterContacts({favorites: true})">Favorites</button>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <div class="search-wrap">
+              ${window.utils.lucideIcon('search', 13)}
+              <input type="text" placeholder="Search contacts…" value="${window.utils.escapeHtml(search)}" onkeyup="window.app.filterContacts({search: this.value})">
+            </div>
+          </div>
+        </div>
+
+        <div class="content-area">
+          <div class="data-table">
+            <div class="data-table-head">
+              <div class="data-table-row">
+                <div class="col-person">Person</div>
+                <div class="col-rel">Relationship</div>
+                <div class="col-contact">Contact</div>
+                <div class="col-tags">Tags</div>
+                <div class="col-activity">Activity</div>
+                <div class="col-actions"></div>
+              </div>
+            </div>
+            <div class="data-table-body">
+              ${contacts.map(c => `
+                <div class="data-table-row" onclick="window.app.navigateTo('contact-detail', {id: '${window.utils.escapeHtml(c.id)}'})">
+                  <div class="col-person">
+                    <div class="td-person">
+                      <div class="av av-sm">${window.utils.escapeHtml(String(c.firstName || c.name || '?')[0])}</div>
+                      <div>
+                        <div class="person-name">${window.utils.escapeHtml(c.firstName ? c.firstName + (c.lastName ? ' ' + c.lastName : '') : c.name || '')}</div>
+                        <div class="person-title">${window.utils.escapeHtml(c.jobTitle || '')}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="col-rel">
+                    <div class="td-rel">${window.utils.escapeHtml(c.relationshipStatus || 'Contact')}</div>
+                  </div>
+                  <div class="col-contact">
+                    <div class="td-contact">
+                      ${c.email ? `<div>${window.utils.escapeHtml(c.email)}</div>` : ''}
+                      ${c.phone ? `<div>${window.utils.escapeHtml(c.phone)}</div>` : ''}
+                    </div>
+                  </div>
+                  <div class="col-tags">
+                    <div class="td-tags">
+                      ${(c.tags || []).slice(0, 2).map(t => `<span class="tag-pill">${window.utils.escapeHtml(t.name || t)}</span>`).join('')}
+                    </div>
+                  </div>
+                  <div class="col-activity">
+                    <div class="td-activity">${c.lastContactedAt ? window.utils.formatRelative(c.lastContactedAt) : 'Never'}</div>
+                  </div>
+                  <div class="col-actions">
+                    <button class="btn-icon" onclick="event.stopPropagation(); alert('More actions')">
+                      ${window.utils.lucideIcon('more-vertical', 13)}
+                    </button>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
       `;
 
-      setTimeout(() => this.initContacts(params), 0);
+      setTimeout(() => this._initContacts(), 0);
       return html;
     } catch (err) {
       console.error('Contacts error:', err);
-      window.utils.toast('Failed to load contacts', 'error');
-      return '<div class="error-state">Failed to load contacts</div>';
+      return `<div class="error-message">Error loading contacts</div>`;
     }
   },
 
-  initContacts: function(params) {
-    const viewToggle = document.getElementById('viewToggle');
-    if (viewToggle) {
-      viewToggle.addEventListener('click', () => {
-        const newView = (params.view || 'list') === 'list' ? 'grid' : 'list';
-        window.app.navigate('contacts', { ...params, view: newView });
-      });
-    }
-
-    document.querySelectorAll('.contact-item').forEach(el => {
-      el.addEventListener('click', () => {
-        const id = el.dataset.contactId;
-        window.app.navigate('contact-detail', { id });
-      });
-    });
-
-    const searchInput = document.getElementById('contactSearch');
-    if (searchInput) {
-      searchInput.addEventListener('keyup', window.utils.debounce(() => {
-        const search = searchInput.value.trim();
-        window.app.navigate('contacts', { ...params, search, offset: 0 });
-      }, 300));
-    }
-
-    const tagFilter = document.getElementById('tagFilter');
-    if (tagFilter) {
-      tagFilter.addEventListener('change', () => {
-        const tag = tagFilter.value;
-        window.app.navigate('contacts', { ...params, tag, offset: 0 });
-      });
-    }
-
-    const sortSelect = document.getElementById('sortSelect');
-    if (sortSelect) {
-      sortSelect.addEventListener('change', () => {
-        const sort = sortSelect.value;
-        window.app.navigate('contacts', { ...params, sort, offset: 0 });
-      });
-    }
-
-    document.querySelectorAll('.pagination button').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const page = btn.dataset.page;
-        const offset = (page - 1) * 20;
-        window.app.navigate('contacts', { ...params, offset });
-      });
-    });
-  },
-
-  // ============================================================================
-  // CONTACT DETAIL PAGE
-  // ============================================================================
-
-  'contact-detail': async function(params = {}) {
-    if (!params.id) {
-      return '<div class="error-state">Contact not found</div>';
-    }
-
-    try {
-      const [contact, emails, phones, addresses, socials, notes, timeline, changelog, groups, tags] = await Promise.all([
-        window.api.getContact(params.id),
-        window.api.getContactEmails(params.id).catch(() => []),
-        window.api.getContactPhones(params.id).catch(() => []),
-        window.api.getContactAddresses(params.id).catch(() => []),
-        window.api.getContactSocials(params.id).catch(() => []),
-        window.api.getNotes(params.id).catch(() => []),
-        window.api.getTimeline(params.id).catch(() => []),
-        window.api.getContactChangelog(params.id).catch(() => []),
-        window.api.getGroups(),
-        window.api.getTags(),
-      ]);
-
-      const age = contact.birthday ? window.utils.calculateAge(contact.birthday) : null;
-      const zodiac = contact.birthday ? window.utils.getZodiacSign(contact.birthday) : null;
-
-      const html = `
-        <div class="contact-detail-panel">
-          <div class="contact-detail-header">
-            <button class="btn-icon btn-back" onclick="window.app.navigate('contacts')">
-              ${window.utils.lucideIcon('arrow-left', 20)}
-            </button>
-            <div class="contact-detail-title">${window.utils.escapeHtml(contact.displayName || '')}</div>
-            <div class="contact-detail-actions">
-              <button class="btn-icon" id="favBtn" title="Toggle favorite">
-                ${window.utils.lucideIcon('star', 16)}
-              </button>
-              <button class="btn-icon" id="editBtn" title="Edit">
-                ${window.utils.lucideIcon('edit', 16)}
-              </button>
-              <button class="btn-icon" id="moreBtn" title="More">
-                ${window.utils.lucideIcon('more-horizontal', 16)}
-              </button>
-            </div>
-          </div>
-
-          <div class="contact-detail-body">
-            <!-- Avatar & Basic Info -->
-            <div class="detail-section">
-              ${window.components.avatar(contact.photoUrl, contact.displayName || '', 'lg', contact.orientation)}
-              <div class="detail-basic">
-                <h2>${window.utils.escapeHtml(contact.displayName || '')}</h2>
-                ${contact.location ? `<p class="detail-location">${window.utils.lucideIcon('map-pin', 14)} ${window.utils.escapeHtml(contact.location)}</p>` : ''}
-                ${contact.relationshipType ? `<p class="detail-rel">${window.utils.escapeHtml(contact.relationshipType)}</p>` : ''}
-              </div>
-            </div>
-
-            <!-- Contact Details -->
-            <div class="detail-section">
-              <h3>Contact Information</h3>
-              ${emails.length > 0 ? `
-                <div class="detail-field">
-                  <label>Email</label>
-                  ${emails.map(e => `<div class="detail-value">${window.utils.escapeHtml(e.email)}</div>`).join('')}
-                </div>
-              ` : ''}
-              ${phones.length > 0 ? `
-                <div class="detail-field">
-                  <label>Phone</label>
-                  ${phones.map(p => `<div class="detail-value">${window.utils.escapeHtml(p.phone)}</div>`).join('')}
-                </div>
-              ` : ''}
-              ${addresses.length > 0 ? `
-                <div class="detail-field">
-                  <label>Address</label>
-                  ${addresses.map(a => `<div class="detail-value">${window.utils.escapeHtml([a.street, a.city, a.state, a.zip].filter(Boolean).join(', '))}</div>`).join('')}
-                </div>
-              ` : ''}
-            </div>
-
-            <!-- Additional Info -->
-            <div class="detail-section">
-              <h3>Personal Information</h3>
-              ${contact.nickname ? `<div class="detail-field"><label>Nickname</label><div class="detail-value">${window.utils.escapeHtml(contact.nickname)}</div></div>` : ''}
-              ${contact.birthday ? `<div class="detail-field"><label>Birthday</label><div class="detail-value">${window.utils.formatDate(contact.birthday)} (age ${age})</div></div>` : ''}
-              ${zodiac ? `<div class="detail-field"><label>Zodiac</label><div class="detail-value">${window.utils.escapeHtml(zodiac)}</div></div>` : ''}
-              ${contact.bio ? `<div class="detail-field"><label>Bio</label><div class="detail-value">${window.utils.escapeHtml(contact.bio)}</div></div>` : ''}
-            </div>
-
-            <!-- Professional Info -->
-            ${contact.occupation || contact.company ? `
-              <div class="detail-section">
-                <h3>Professional</h3>
-                ${contact.occupation ? `<div class="detail-field"><label>Occupation</label><div class="detail-value">${window.utils.escapeHtml(contact.occupation)}</div></div>` : ''}
-                ${contact.company ? `<div class="detail-field"><label>Company</label><div class="detail-value">${window.utils.escapeHtml(contact.company)}</div></div>` : ''}
-                ${contact.website ? `<div class="detail-field"><label>Website</label><div class="detail-value"><a href="${window.utils.escapeHtml(contact.website)}" target="_blank">${window.utils.escapeHtml(contact.website)}</a></div></div>` : ''}
-              </div>
-            ` : ''}
-
-            <!-- Social Links -->
-            ${socials.length > 0 ? `
-              <div class="detail-section">
-                <h3>Social Media</h3>
-                ${socials.map(s => `
-                  <div class="detail-field">
-                    <label>${window.utils.escapeHtml(s.platform)}</label>
-                    <div class="detail-value"><a href="${window.utils.escapeHtml(s.url)}" target="_blank">@${window.utils.escapeHtml(s.handle)}</a></div>
-                  </div>
-                `).join('')}
-              </div>
-            ` : ''}
-
-            <!-- Tags & Groups -->
-            ${(contact.tags && contact.tags.length > 0) || (contact.groups && contact.groups.length > 0) ? `
-              <div class="detail-section">
-                <h3>Collections</h3>
-                ${contact.tags && contact.tags.length > 0 ? `
-                  <div class="detail-tags">
-                    ${contact.tags.map(t => `<span class="tag">${window.utils.escapeHtml(t.name)}</span>`).join('')}
-                  </div>
-                ` : ''}
-                ${contact.groups && contact.groups.length > 0 ? `
-                  <div class="detail-groups">
-                    ${contact.groups.map(g => `<span class="badge">${window.utils.escapeHtml(g.name)}</span>`).join('')}
-                  </div>
-                ` : ''}
-              </div>
-            ` : ''}
-
-            <!-- Timeline -->
-            <div class="detail-section">
-              <h3>Timeline</h3>
-              <div class="add-note-form">
-                <textarea class="input" id="newNote" placeholder="Add a note…" rows="3"></textarea>
-                <button class="btn btn-primary btn-sm" id="saveNoteBtn">Save Note</button>
-              </div>
-              <div class="timeline">
-                ${timeline.length > 0 ? timeline.map(t => `
-                  <div class="timeline-item">
-                    <div class="timeline-dot"></div>
-                    <div class="timeline-content">
-                      <div class="timeline-title">${window.utils.escapeHtml(t.title || '')}</div>
-                      <div class="timeline-date">${window.utils.formatRelative(t.date)}</div>
-                    </div>
-                  </div>
-                `).join('') : '<p class="empty-state">No timeline entries</p>'}
-              </div>
-            </div>
-
-            <!-- Changelog -->
-            ${changelog.length > 0 ? `
-              <div class="detail-section">
-                <h3>Change History</h3>
-                <div class="changelog">
-                  ${changelog.slice(0, 20).map(c => `
-                    <div class="changelog-item">
-                      <div class="changelog-field">${window.utils.escapeHtml(c.field)}</div>
-                      <div class="changelog-change">
-                        <span class="old-value">${window.utils.escapeHtml(c.oldValue || '')}</span>
-                        <span class="arrow">→</span>
-                        <span class="new-value">${window.utils.escapeHtml(c.newValue || '')}</span>
-                      </div>
-                      <div class="changelog-date">${window.utils.formatRelative(c.createdAt)}</div>
-                    </div>
-                  `).join('')}
-                </div>
-              </div>
-            ` : ''}
-          </div>
-        </div>
-      `;
-
-      setTimeout(() => this.initContactDetail(params.id), 0);
-      return html;
-    } catch (err) {
-      console.error('Contact detail error:', err);
-      return '<div class="error-state">Failed to load contact</div>';
-    }
-  },
-
-  initContactDetail: function(contactId) {
-    const saveNoteBtn = document.getElementById('saveNoteBtn');
-    if (saveNoteBtn) {
-      saveNoteBtn.addEventListener('click', async () => {
-        const noteText = document.getElementById('newNote').value.trim();
-        if (noteText) {
-          try {
-            await window.api.createNote({
-              contactId,
-              text: noteText,
-            });
-            window.utils.toast('Note saved', 'success');
-            document.getElementById('newNote').value = '';
-            window.app.navigate('contact-detail', { id: contactId });
-          } catch (err) {
-            window.utils.toast('Failed to save note', 'error');
-          }
-        }
-      });
-    }
-
-    const editBtn = document.getElementById('editBtn');
-    if (editBtn) {
-      editBtn.addEventListener('click', () => {
-        window.app.openEditContactModal(contactId);
-      });
-    }
-
-    const favBtn = document.getElementById('favBtn');
-    if (favBtn) {
-      favBtn.addEventListener('click', async () => {
-        try {
-          await window.api.toggleFavorite(contactId);
-          window.utils.toast('Favorite toggled', 'success');
-          window.app.navigate('contact-detail', { id: contactId });
-        } catch (err) {
-          window.utils.toast('Failed to toggle favorite', 'error');
-        }
-      });
-    }
+  _initContacts() {
+    // Add event listeners if needed
   },
 
   // ============================================================================
@@ -569,574 +349,405 @@ window.pages = {
   // ============================================================================
 
   events: async function(params = {}) {
-    const filter = params.filter || 'upcoming';
-    const limit = 20;
-    const offset = params.offset || 0;
-
     try {
+      params = this._hashToParams(params);
+      const status = params.status || 'upcoming';
+
+      const eventsResp = await window.api.getEvents({ limit: 100, offset: 0 });
+      const events = eventsResp?.data || [];
+      const total = eventsResp?.total || 0;
+
+      // Group by status
       const now = new Date();
-      const apiParams = { limit, offset };
-
-      if (filter === 'upcoming') {
-        apiParams.upcoming = 'true';
-      } else if (filter === 'past') {
-        apiParams.endDate = now.toISOString();
-      }
-
-      const [result, contacts] = await Promise.all([
-        window.api.getEvents(apiParams),
-        window.api.getContacts({ limit: 1000 }),
-      ]);
-
-      const events = result.data || [];
-      const total = result.total || 0;
-      const pages = Math.ceil(total / limit);
-      const currentPage = Math.floor(offset / limit) + 1;
+      const upcoming = events.filter(e => new Date(e.startsAt || e.date) >= now);
+      const past = events.filter(e => new Date(e.startsAt || e.date) < now);
 
       const html = `
         <div class="page-header">
-          <div class="page-title">Events</div>
-          <button class="btn btn-primary" id="newEventBtn">Create Event</button>
-        </div>
-
-        <div class="events-filters">
-          <button class="filter-pill ${filter === 'upcoming' ? 'active' : ''}" data-filter="upcoming">Upcoming</button>
-          <button class="filter-pill ${filter === 'past' ? 'active' : ''}" data-filter="past">Past</button>
-          <button class="filter-pill ${filter === 'all' ? 'active' : ''}" data-filter="all">All</button>
-        </div>
-
-        <div class="events-list">
-          ${events.length > 0
-            ? events.map(e => `
-              <div class="event-card" data-event-id="${window.utils.escapeHtml(e.id)}">
-                <div class="event-date">${window.utils.formatDate(e.startsAt)}</div>
-                <div class="event-title">${window.utils.escapeHtml(e.title)}</div>
-                <div class="event-meta">
-                  <span class="event-type">${window.utils.escapeHtml(e.type || 'event')}</span>
-                  ${e.location ? `<span class="event-location">${window.utils.lucideIcon('map-pin', 12)} ${window.utils.escapeHtml(e.location)}</span>` : ''}
-                </div>
-              </div>
-            `).join('')
-            : '<div class="empty-state">No events</div>'
-          }
-        </div>
-
-        ${pages > 1 ? `
-          <div class="pagination">
-            ${currentPage > 1 ? `<button class="btn btn-sm" data-page="${currentPage - 1}">Previous</button>` : ''}
-            <span class="pagination-info">Page ${currentPage} of ${pages}</span>
-            ${currentPage < pages ? `<button class="btn btn-sm" data-page="${currentPage + 1}">Next</button>` : ''}
+          <div class="page-header-left">
+            <h1 class="page-title">Events <span class="page-title-count">${window.utils.escapeHtml(String(total))}</span></h1>
           </div>
-        ` : ''}
+          <div class="page-header-actions">
+            <button class="btn btn-primary btn-sm" onclick="window.app.openAddEventModal()">
+              ${window.utils.lucideIcon('plus', 13)}
+              New event
+            </button>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <div class="filter-pills">
+              <button class="filter-pill ${status === 'upcoming' ? 'active' : ''}" onclick="window.app.filterEvents({status: 'upcoming'})">Upcoming</button>
+              <button class="filter-pill ${status === 'past' ? 'active' : ''}" onclick="window.app.filterEvents({status: 'past'})">Past</button>
+              <button class="filter-pill ${status === 'all' ? 'active' : ''}" onclick="window.app.filterEvents({status: 'all'})">All</button>
+            </div>
+          </div>
+          <div class="toolbar-right">
+            <div class="search-wrap">
+              ${window.utils.lucideIcon('search', 13)}
+              <input type="text" placeholder="Search events…">
+            </div>
+          </div>
+        </div>
+
+        <div class="content-area">
+          ${status !== 'past' ? `
+            <div class="event-section">
+              <div class="event-section-label">UPCOMING</div>
+              <div class="event-list">
+                ${upcoming.map(evt => this._renderEventItem(evt)).join('')}
+              </div>
+            </div>
+          ` : ''}
+
+          ${status !== 'upcoming' ? `
+            <div class="event-section">
+              <div class="event-section-label">PAST</div>
+              <div class="event-list">
+                ${past.map(evt => this._renderEventItem(evt)).join('')}
+              </div>
+            </div>
+          ` : ''}
+        </div>
       `;
 
-      setTimeout(() => this.initEvents(params), 0);
+      setTimeout(() => this._initEvents(), 0);
       return html;
     } catch (err) {
       console.error('Events error:', err);
-      return '<div class="error-state">Failed to load events</div>';
+      return `<div class="error-message">Error loading events</div>`;
     }
   },
 
-  initEvents: function(params) {
-    document.querySelectorAll('.filter-pill').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const filter = btn.dataset.filter;
-        window.app.navigate('events', { filter });
-      });
-    });
+  _renderEventItem(evt) {
+    return `
+      <div class="event-item">
+        <div class="event-item-icon">
+          ${window.utils.lucideIcon('calendar', 18)}
+        </div>
+        <div class="event-item-body">
+          <div class="event-item-title">${window.utils.escapeHtml(evt.title || evt.name || '')}</div>
+          <div class="event-item-meta">
+            <span>${window.utils.formatDate(evt.startsAt || evt.startsAt)}</span>
+            ${evt.location ? `<span>${window.utils.escapeHtml(evt.location)}</span>` : ''}
+          </div>
+        </div>
+        <div class="event-item-right">
+          ${evt.type ? `<span class="badge badge-surface">${window.utils.escapeHtml(evt.type)}</span>` : ''}
+          <button class="btn-icon" title="More">
+            ${window.utils.lucideIcon('more-vertical', 13)}
+          </button>
+        </div>
+      </div>
+    `;
+  },
 
-    const newEventBtn = document.getElementById('newEventBtn');
-    if (newEventBtn) {
-      newEventBtn.addEventListener('click', () => {
-        window.app.openEventModal();
-      });
-    }
-
-    document.querySelectorAll('.event-card').forEach(el => {
-      el.addEventListener('click', () => {
-        const id = el.dataset.eventId;
-        // Would open event detail
-      });
-    });
+  _initEvents() {
+    // Add event listeners if needed
   },
 
   // ============================================================================
   // NOTIFICATIONS PAGE
   // ============================================================================
 
-  notifications: async function() {
+  notifications: async function(params = {}) {
     try {
-      const [reminders, birthdays, events] = await Promise.all([
-        window.api.getDueReminders(),
-        window.api.getContacts({ limit: 1000 }),
-        window.api.getEvents({ limit: 100 }),
-      ]);
-
-      const now = new Date();
-      const upcomingBirthdays = [];
-
-      for (const contact of birthdays.data || []) {
-        if (contact.birthday) {
-          const nextBday = this._getNextBirthday(contact.birthday);
-          if (nextBday && nextBday > now && nextBday < new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000)) {
-            upcomingBirthdays.push({
-              type: 'birthday',
-              contact,
-              date: nextBday,
-            });
-          }
-        }
-      }
-
-      const upcomingEvents = (events.data || [])
-        .filter(e => new Date(e.startsAt) > now && new Date(e.startsAt) < new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000))
-        .map(e => ({
-          type: 'event',
-          event: e,
-          date: new Date(e.startsAt),
-        }));
-
-      const reminderList = Array.isArray(reminders) ? reminders : (reminders?.data || []);
-      const overdueReminders = reminderList
-        .filter(r => r.dueAt && new Date(r.dueAt) < now)
-        .map(r => ({
-          type: 'reminder',
-          reminder: r,
-          date: new Date(r.dueAt),
-        }));
-
-      const items = [...overdueReminders, ...upcomingBirthdays, ...upcomingEvents].sort((a, b) => a.date - b.date);
+      params = this._hashToParams(params);
+      const filterType = params.type || 'all';
 
       const html = `
         <div class="page-header">
-          <div class="page-title">Notifications</div>
+          <div class="page-title-section">
+            <h1 class="page-title">Notifications <span class="badge badge-red ml-8">7</span></h1>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-ghost btn-sm" onclick="window.app.markAllNotificationsRead()">
+              ${window.utils.lucideIcon('check', 14)}
+              Mark all read
+            </button>
+          </div>
         </div>
 
-        <div class="notifications-list">
-          ${items.length > 0
-            ? items.map(item => {
-              if (item.type === 'reminder') {
-                return `
-                  <div class="notif-item reminder">
-                    <div class="notif-icon">${window.utils.lucideIcon('alert-circle', 20)}</div>
-                    <div class="notif-content">
-                      <div class="notif-title">Overdue: ${window.utils.escapeHtml(item.reminder.text)}</div>
-                      <div class="notif-date">${window.utils.formatRelative(item.reminder.dueAt)}</div>
-                    </div>
-                    <div class="notif-actions">
-                      <button class="btn btn-sm" data-action="complete" data-id="${window.utils.escapeHtml(item.reminder.id)}">Mark Done</button>
-                    </div>
-                  </div>
-                `;
-              } else if (item.type === 'birthday') {
-                return `
-                  <div class="notif-item birthday">
-                    <div class="notif-icon">${window.utils.lucideIcon('cake', 20)}</div>
-                    <div class="notif-content">
-                      <div class="notif-title">${window.utils.escapeHtml(item.contact.displayName || '')} birthday</div>
-                      <div class="notif-date">${window.utils.formatDate(item.contact.birthday)}</div>
-                    </div>
-                    <div class="notif-actions">
-                      <button class="btn btn-sm" data-action="view-contact" data-id="${window.utils.escapeHtml(item.contact.id)}">View</button>
-                    </div>
-                  </div>
-                `;
-              } else {
-                return `
-                  <div class="notif-item event">
-                    <div class="notif-icon">${window.utils.lucideIcon('calendar', 20)}</div>
-                    <div class="notif-content">
-                      <div class="notif-title">${window.utils.escapeHtml(item.event.title)}</div>
-                      <div class="notif-date">${window.utils.formatDateTime(item.event.startsAt)}</div>
-                    </div>
-                    <div class="notif-actions">
-                      <button class="btn btn-sm" data-action="view-event" data-id="${window.utils.escapeHtml(item.event.id)}">View</button>
-                    </div>
-                  </div>
-                `;
-              }
-            }).join('')
-            : '<div class="empty-state">No notifications</div>'
-          }
+        <div class="filter-pills">
+          <button class="filter-pill ${filterType === 'all' ? 'active' : ''}" onclick="window.app.filterNotifications('all')">All</button>
+          <button class="filter-pill ${filterType === 'unread' ? 'active' : ''}" onclick="window.app.filterNotifications('unread')">
+            Unread <span class="badge badge-red">7</span>
+          </button>
+          <button class="filter-pill ${filterType === 'birthday' ? 'active' : ''}" onclick="window.app.filterNotifications('birthday')">Birthdays</button>
+          <button class="filter-pill ${filterType === 'reconnect' ? 'active' : ''}" onclick="window.app.filterNotifications('reconnect')">Reconnect</button>
+          <button class="filter-pill ${filterType === 'system' ? 'active' : ''}" onclick="window.app.filterNotifications('system')">System</button>
+        </div>
+
+        <div class="notif-list">
+          <div class="notif-item unread" data-type="birthday">
+            <div class="notif-icon text-pink">
+              ${window.utils.lucideIcon('birthday', 18)}
+            </div>
+            <div class="notif-content">
+              <div class="notif-text"><strong>Dom Aguiles</strong> turns 29 in 15 days. Don't forget to reach out!</div>
+              <div class="notif-time">2h ago</div>
+            </div>
+            <div class="notif-actions">
+              <button class="btn btn-ghost btn-xs">View contact</button>
+            </div>
+          </div>
         </div>
       `;
 
-      setTimeout(() => this.initNotifications(), 0);
+      setTimeout(() => this._initNotifications(), 0);
       return html;
     } catch (err) {
       console.error('Notifications error:', err);
-      return '<div class="error-state">Failed to load notifications</div>';
+      return `<div class="error-message">Error loading notifications</div>`;
     }
   },
 
-  initNotifications: function() {
-    document.querySelectorAll('.notif-item .btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        const action = btn.dataset.action;
-        const id = btn.dataset.id;
-
-        try {
-          if (action === 'complete') {
-            await window.api.completeReminder(id);
-            window.utils.toast('Reminder completed', 'success');
-            window.app.navigate('notifications');
-          } else if (action === 'view-contact') {
-            window.app.navigate('contact-detail', { id });
-          } else if (action === 'view-event') {
-            // Navigate to event detail
-          }
-        } catch (err) {
-          window.utils.toast('Action failed', 'error');
-        }
-      });
-    });
-  },
-
-  _getNextBirthday: function(birthday) {
-    const bd = new Date(birthday);
-    const now = new Date();
-    let next = new Date(now.getFullYear(), bd.getMonth(), bd.getDate());
-    if (next < now) {
-      next = new Date(now.getFullYear() + 1, bd.getMonth(), bd.getDate());
-    }
-    return next;
+  _initNotifications() {
+    // Add event listeners if needed
   },
 
   // ============================================================================
   // GROUPS PAGE
   // ============================================================================
 
-  groups: async function() {
+  groups: async function(params = {}) {
     try {
-      const groups = await window.api.getGroups();
+      params = this._hashToParams(params);
+      const filterType = params.filter || 'all';
+
+      const groupsResp = await window.api.getGroups();
+      const groups = groupsResp || [];
 
       const html = `
         <div class="page-header">
-          <div class="page-title">Groups</div>
-          <button class="btn btn-primary" id="newGroupBtn">Create Group</button>
-        </div>
-
-        <div class="groups-grid">
-          ${(groups || []).map(g => `
-            <div class="group-card" data-group-id="${window.utils.escapeHtml(g.id)}">
-              <div class="group-icon">
-                ${g.icon || window.utils.lucideIcon('folder', 32)}
-              </div>
-              <div class="group-name">${window.utils.escapeHtml(g.name)}</div>
-              <div class="group-desc">${window.utils.escapeHtml(g.description || '')}</div>
-              <div class="group-count">${g.memberCount || 0} members</div>
-              <div class="group-avatars">
-                ${(g.avatars || []).slice(0, 3).map(av => `${window.components.avatar(av, '', 'sm')}`).join('')}
-              </div>
-            </div>
-          `).join('')}
-        </div>
-      `;
-
-      setTimeout(() => this.initGroups(), 0);
-      return html;
-    } catch (err) {
-      console.error('Groups error:', err);
-      return '<div class="error-state">Failed to load groups</div>';
-    }
-  },
-
-  initGroups: function() {
-    const newGroupBtn = document.getElementById('newGroupBtn');
-    if (newGroupBtn) {
-      newGroupBtn.addEventListener('click', () => {
-        window.app.openGroupModal();
-      });
-    }
-
-    document.querySelectorAll('.group-card').forEach(el => {
-      el.addEventListener('click', () => {
-        const id = el.dataset.groupId;
-        // Open group detail/expand
-      });
-    });
-  },
-
-  // ============================================================================
-  // SETTINGS PAGE (ADMIN)
-  // ============================================================================
-
-  settings: async function() {
-    try {
-      const [settings, users, tags, groups, preferences] = await Promise.all([
-        window.api.getSettings(),
-        window.api.getUsers(),
-        window.api.getTags(),
-        window.api.getGroups(),
-        window.api.getPreferences(),
-      ]);
-
-      const html = `
-        <div class="page-header">
-          <div class="page-title">Settings</div>
-        </div>
-
-        <div class="settings-container">
-          <div class="settings-nav">
-            <button class="settings-nav-item active" data-tab="general">General</button>
-            <button class="settings-nav-item" data-tab="appearance">Appearance</button>
-            <button class="settings-nav-item" data-tab="spicy">Spicy Mode</button>
-            <button class="settings-nav-item" data-tab="users">Users</button>
-            <button class="settings-nav-item" data-tab="data">Data</button>
+          <div class="page-header-left">
+            <h1 class="page-title">Groups <span class="page-title-count">${window.utils.escapeHtml(String(groups.length))}</span></h1>
           </div>
+          <div class="page-header-actions">
+            <button class="btn btn-primary btn-sm" onclick="window.app.openAddGroupModal()">
+              ${window.utils.lucideIcon('plus', 13)}
+              New group
+            </button>
+          </div>
+        </div>
 
-          <div class="settings-content">
-            <!-- General Tab -->
-            <div class="settings-tab active" data-tab="general">
-              <h3>General Settings</h3>
-              <div class="settings-field">
-                <label>App Name</label>
-                <input type="text" class="input" id="appNameInput" value="${window.utils.escapeHtml(settings?.appName || 'Kith')}">
-              </div>
-              <div class="settings-field">
-                <label>App Logo</label>
-                <input type="file" class="input" id="logoUpload" accept="image/*">
-              </div>
-              <button class="btn btn-primary" id="saveGeneralBtn">Save Changes</button>
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <div class="filter-pills">
+              <button class="filter-pill ${filterType === 'all' ? 'active' : ''}" onclick="window.app.filterGroups('all')">All</button>
+              <button class="filter-pill ${filterType === 'system' ? 'active' : ''}" onclick="window.app.filterGroups('system')">System</button>
+              <button class="filter-pill ${filterType === 'custom' ? 'active' : ''}" onclick="window.app.filterGroups('custom')">Custom</button>
             </div>
-
-            <!-- Appearance Tab -->
-            <div class="settings-tab" data-tab="appearance">
-              <h3>Appearance</h3>
-              <div class="settings-field">
-                <label>Accent Color</label>
-                <input type="color" class="input" id="accentColorInput" value="${settings?.accentColor || '#3b82f6'}">
-              </div>
-              <button class="btn btn-primary" id="saveAppearanceBtn">Save Changes</button>
+          </div>
+          <div class="toolbar-right">
+            <div class="search-wrap">
+              ${window.utils.lucideIcon('search', 13)}
+              <input type="text" placeholder="Search groups…">
             </div>
+          </div>
+        </div>
 
-            <!-- Spicy Tab -->
-            <div class="settings-tab" data-tab="spicy">
-              <h3>Spicy Mode</h3>
-              <div class="settings-field">
-                <label>
-                  <input type="checkbox" id="spicyEnableCheckbox" ${settings?.spicyEnabled ? 'checked' : ''}>
-                  Enable Spicy Mode
-                </label>
-              </div>
-              <div class="settings-field">
-                <label>Access PIN (if enabled)</label>
-                <input type="password" class="input" id="spicyPinInput" placeholder="••••">
-              </div>
-              <div class="settings-field">
-                <label>Auto-disable Timer</label>
-                <select class="select" id="spicyTimerSelect">
-                  <option value="never">Never</option>
-                  <option value="15m">15 minutes</option>
-                  <option value="30m">30 minutes</option>
-                  <option value="1h">1 hour</option>
-                </select>
-              </div>
-              <button class="btn btn-primary" id="saveSpicyBtn">Save Changes</button>
-            </div>
-
-            <!-- Users Tab -->
-            <div class="settings-tab" data-tab="users">
-              <h3>User Management</h3>
-              <button class="btn btn-primary" id="newUserBtn">Create User</button>
-              <div class="users-table">
-                ${(users || []).map(u => `
-                  <div class="user-row">
-                    <div class="user-name">${window.utils.escapeHtml(u.username)}</div>
-                    <div class="user-role">${window.utils.formatRole(u.role)}</div>
-                    <div class="user-actions">
-                      <button class="btn btn-sm" data-action="edit" data-id="${window.utils.escapeHtml(u.id)}">Edit</button>
-                      <button class="btn btn-sm" data-action="delete" data-id="${window.utils.escapeHtml(u.id)}">Delete</button>
-                    </div>
+        <div class="content-area">
+          <div class="groups-grid">
+            ${groups.map(g => `
+              <div class="group-card">
+                <div class="group-card-header" onclick="window.app.toggleGroupMembers('${window.utils.escapeHtml(g.id)}')">
+                  <div class="group-card-icon" style="background: rgba(124,91,245,0.12); color: var(--accent);">
+                    ${window.utils.lucideIcon('users', 18)}
                   </div>
-                `).join('')}
-              </div>
-            </div>
-
-            <!-- Data Tab -->
-            <div class="settings-tab" data-tab="data">
-              <h3>Data Management</h3>
-              <div class="settings-section">
-                <h4>Import</h4>
-                <div class="settings-field">
-                  <label>Import File</label>
-                  <input type="file" class="input" id="importFileInput" accept=".csv,.vcf,.json">
+                  <div class="group-card-info">
+                    <div class="group-card-name">${window.utils.escapeHtml(g.name || '')}</div>
+                    <div class="group-card-desc">${window.utils.escapeHtml(g.description || '')}</div>
+                  </div>
+                  <div class="group-card-meta">
+                    <span class="group-card-count">${g.members?.length || 0}</span>
+                    <span class="badge badge-surface">${window.utils.escapeHtml(g.type || 'Custom')}</span>
+                    ${window.utils.lucideIcon('chevron-down', 14)}
+                  </div>
                 </div>
-                <div class="settings-field">
-                  <label>Platform</label>
-                  <select class="select" id="importPlatformSelect">
-                    <option value="">Select platform…</option>
-                    <option value="google">Google Contacts</option>
-                    <option value="csv">CSV</option>
-                    <option value="vcard">vCard</option>
-                  </select>
-                </div>
-                <button class="btn btn-primary" id="uploadImportBtn">Upload</button>
-              </div>
-              <div class="settings-section">
-                <h4>Export</h4>
-                <button class="btn btn-secondary" id="exportBtn">Export Contacts</button>
-              </div>
-              <div class="settings-section">
-                <h4>Default Tags</h4>
-                <div class="tags-editor">
-                  ${(tags || []).map(t => `
-                    <div class="tag-item">
-                      <span>${window.utils.escapeHtml(t.name)}</span>
-                      <button class="btn-icon" data-action="delete-tag" data-id="${window.utils.escapeHtml(t.id)}">
-                        ${window.utils.lucideIcon('x', 14)}
+                <div class="group-card-members" id="${window.utils.escapeHtml(g.id)}-members">
+                  ${(g.members || []).slice(0, 3).map(m => `
+                    <div class="group-member-row">
+                      <div class="av av-xs">${window.utils.escapeHtml(String(m.firstName || m.name || '?')[0])}</div>
+                      <div class="group-member-info">
+                        <span class="group-member-name">${window.utils.escapeHtml(m.firstName ? m.firstName + (m.lastName ? ' ' + m.lastName : '') : m.name || '')}</span>
+                        <span class="group-member-loc">${window.utils.escapeHtml(m.city || '')}</span>
+                      </div>
+                      <button class="btn-icon" title="Remove">
+                        ${window.utils.lucideIcon('x', 13)}
                       </button>
                     </div>
                   `).join('')}
                 </div>
-                <input type="text" class="input" id="newTagInput" placeholder="Add new tag…">
-                <button class="btn btn-primary btn-sm" id="addTagBtn">Add Tag</button>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+
+      setTimeout(() => this._initGroups(), 0);
+      return html;
+    } catch (err) {
+      console.error('Groups error:', err);
+      return `<div class="error-message">Error loading groups</div>`;
+    }
+  },
+
+  _initGroups() {
+    // Add event listeners if needed
+  },
+
+  // ============================================================================
+  // SETTINGS PAGE
+  // ============================================================================
+
+  settings: async function(params = {}) {
+    try {
+      params = this._hashToParams(params);
+      const activeTab = params.tab || 'general';
+
+      const html = `
+        <div class="page-header">
+          <div class="page-header-left">
+            <h1 class="page-title">Settings</h1>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <button class="tab ${activeTab === 'general' ? 'active' : ''}" onclick="window.app.switchSettingsTab('general')">General</button>
+          <button class="tab ${activeTab === 'users' ? 'active' : ''}" onclick="window.app.switchSettingsTab('users')">Users</button>
+          <button class="tab ${activeTab === 'spicy' ? 'active' : ''}" onclick="window.app.switchSettingsTab('spicy')">Spicy Mode</button>
+          <button class="tab ${activeTab === 'account' ? 'active' : ''}" onclick="window.app.switchSettingsTab('account')">Account</button>
+        </div>
+
+        <div class="content-area">
+          <!-- TAB 1: GENERAL -->
+          <div class="tab-panel ${activeTab === 'general' ? 'active' : ''}" id="tab-general">
+            <div class="settings-layout">
+              <div class="settings-section">
+                <div class="settings-section-title">App</div>
+                <div class="settings-row spaced">
+                  <div class="settings-row-label">
+                    <div class="settings-row-title">App name</div>
+                  </div>
+                  <div class="settings-row-input">
+                    <input class="input" type="text" value="Kith" style="width: 280px;">
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 2: USERS -->
+          <div class="tab-panel ${activeTab === 'users' ? 'active' : ''}" id="tab-users">
+            <div class="settings-layout">
+              <div class="users-table-wrap">
+                <div class="users-table-header">
+                  <div class="users-table-title">Users</div>
+                  <button class="btn btn-primary btn-sm">
+                    ${window.utils.lucideIcon('plus', 13)}
+                    Invite user
+                  </button>
+                </div>
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>User</th>
+                      <th>Role</th>
+                      <th>Status</th>
+                      <th>Last active</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><div style="display: flex; align-items: center; gap: 10px;"><div class="av av-sm">${window.utils.lucideIcon('user', 16)}</div>Jared A.</div></td>
+                      <td><span class="badge badge-accent">Main Admin</span></td>
+                      <td><span class="badge badge-green">Active</span></td>
+                      <td><span style="color: var(--text-muted); font-size: 0.875rem;">just now</span></td>
+                      <td></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 3: SPICY MODE -->
+          <div class="tab-panel ${activeTab === 'spicy' ? 'active' : ''}" id="tab-spicy">
+            <div class="settings-layout">
+              <div class="settings-section">
+                <div class="settings-section-title">Spicy Mode</div>
+                <div class="settings-row spaced">
+                  <div class="settings-row-label">
+                    <div class="settings-row-title">Enable Spicy Mode</div>
+                  </div>
+                  <div class="settings-row-input">
+                    <div class="toggle-wrap">
+                      <input type="checkbox" id="spicyEnableToggle" checked>
+                      <label for="spicyEnableToggle"></label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 4: ACCOUNT -->
+          <div class="tab-panel ${activeTab === 'account' ? 'active' : ''}" id="tab-account">
+            <div class="settings-layout">
+              <div class="settings-section">
+                <div class="settings-section-title">Profile</div>
+                <div class="settings-row spaced">
+                  <div class="settings-row-label">
+                    <div class="settings-row-title">Display name</div>
+                  </div>
+                  <div class="settings-row-input">
+                    <input class="input" type="text" value="Jared A." style="width: 280px;">
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
       `;
 
-      setTimeout(() => this.initSettings(), 0);
+      setTimeout(() => this._initSettings(), 0);
       return html;
     } catch (err) {
       console.error('Settings error:', err);
-      return '<div class="error-state">Failed to load settings</div>';
+      return `<div class="error-message">Error loading settings</div>`;
     }
   },
 
-  initSettings: function() {
-    // Tab switching
-    document.querySelectorAll('.settings-nav-item').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const tab = btn.dataset.tab;
-        document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.settings-nav-item').forEach(b => b.classList.remove('active'));
-        document.querySelector(`.settings-tab[data-tab="${tab}"]`)?.classList.add('active');
-        btn.classList.add('active');
-      });
-    });
-
-    // Save buttons
-    const saveGeneralBtn = document.getElementById('saveGeneralBtn');
-    if (saveGeneralBtn) {
-      saveGeneralBtn.addEventListener('click', async () => {
-        try {
-          const appName = document.getElementById('appNameInput').value;
-          await window.api.updateSetting('appName', appName);
-          window.utils.toast('Settings saved', 'success');
-        } catch (err) {
-          window.utils.toast('Failed to save settings', 'error');
-        }
-      });
-    }
-
-    // Import
-    const uploadImportBtn = document.getElementById('uploadImportBtn');
-    if (uploadImportBtn) {
-      uploadImportBtn.addEventListener('click', async () => {
-        const file = document.getElementById('importFileInput').files[0];
-        const platform = document.getElementById('importPlatformSelect').value;
-        if (!file || !platform) {
-          window.utils.toast('Please select file and platform', 'error');
-          return;
-        }
-        try {
-          const formData = new FormData();
-          formData.append('file', file);
-          formData.append('platform', platform);
-          const result = await window.api.uploadImport(formData);
-          window.utils.toast('Import started', 'success');
-          window.app.navigate('import-review', { jobId: result.id });
-        } catch (err) {
-          window.utils.toast('Import failed', 'error');
-        }
-      });
-    }
+  _initSettings() {
+    // Add event listeners if needed
   },
 
   // ============================================================================
-  // IMPORT REVIEW PAGE
+  // UTILITY FUNCTIONS
   // ============================================================================
 
-  'import-review': async function(params = {}) {
-    if (!params.jobId) {
-      return '<div class="error-state">Import job not found</div>';
+  _hashToParams(input) {
+    if (typeof input === 'string') {
+      const params = new URLSearchParams(input.replace(/^#/, ''));
+      const obj = {};
+      params.forEach((v, k) => {
+        obj[k] = v;
+      });
+      return obj;
     }
-
-    try {
-      const [job, records] = await Promise.all([
-        window.api.getImportJob(params.jobId),
-        window.api.getImportReview(params.jobId),
-      ]);
-
-      const html = `
-        <div class="page-header">
-          <div class="page-title">Review Import</div>
-        </div>
-
-        <div class="import-stats">
-          <div class="stat">Total: ${records.length}</div>
-          <div class="stat">Pending: ${records.filter(r => !r.reviewed).length}</div>
-        </div>
-
-        <div class="import-records">
-          ${(records || []).map((record, idx) => `
-            <div class="import-record" data-record-id="${window.utils.escapeHtml(record.id)}">
-              <div class="record-data">
-                <h4>${window.utils.escapeHtml(record.data.name)}</h4>
-                <p>${window.utils.escapeHtml(record.data.email || 'No email')}</p>
-              </div>
-              <div class="record-actions">
-                <button class="btn btn-sm" data-action="create">Create New</button>
-                <button class="btn btn-sm" data-action="skip">Skip</button>
-              </div>
-            </div>
-          `).join('')}
-        </div>
-
-        <div class="import-footer">
-          <button class="btn btn-secondary" id="skipAllBtn">Skip All</button>
-          <button class="btn btn-primary" id="finalizeBtn">Finalize Import</button>
-        </div>
-      `;
-
-      setTimeout(() => this.initImportReview(params.jobId), 0);
-      return html;
-    } catch (err) {
-      console.error('Import review error:', err);
-      return '<div class="error-state">Failed to load import review</div>';
-    }
+    return input;
   },
 
-  initImportReview: function(jobId) {
-    document.querySelectorAll('.record-actions .btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const recordEl = btn.closest('.import-record');
-        const recordId = recordEl.dataset.recordId;
-        const action = btn.dataset.action;
-
-        try {
-          await window.api.reviewImportRecord(recordId, { action });
-          recordEl.remove();
-        } catch (err) {
-          window.utils.toast('Failed to process record', 'error');
-        }
-      });
-    });
-
-    const finalizeBtn = document.getElementById('finalizeBtn');
-    if (finalizeBtn) {
-      finalizeBtn.addEventListener('click', async () => {
-        try {
-          await window.api.finalizeImport(jobId);
-          window.utils.toast('Import completed', 'success');
-          window.app.navigate('contacts');
-        } catch (err) {
-          window.utils.toast('Failed to finalize import', 'error');
-        }
-      });
-    }
+  _paramsToHash(params) {
+    const qs = new URLSearchParams(params).toString();
+    return '#' + qs;
   },
 };
+
+// Attach to window
+if (window.pages) {
+  Object.assign(window.pages, window.pages);
+}
