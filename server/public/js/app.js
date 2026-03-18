@@ -50,8 +50,25 @@ window.app = {
       }
     }
 
-    // No valid token
+    // No valid token — show login and bind the login form handler
     this.showLogin();
+    this._bindLoginForm();
+  },
+
+  /**
+   * Bind the login form submit handler (called before auth, so can't rely on setupEventHandlers)
+   */
+  _bindLoginForm() {
+    const loginForm = document.getElementById('loginForm');
+    if (loginForm && !loginForm._kithBound) {
+      loginForm._kithBound = true;
+      loginForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const username = document.getElementById('loginUsername').value;
+        const password = document.getElementById('loginPassword').value;
+        this.handleLogin(username, password);
+      });
+    }
   },
 
   /**
@@ -218,7 +235,11 @@ window.app = {
       }
     } catch (err) {
       console.error('Login failed:', err);
-      window.utils.toast(err.message || 'Login failed', 'error');
+      const errorEl = document.getElementById('loginError');
+      if (errorEl) {
+        errorEl.textContent = err.message || 'Login failed — check your credentials.';
+        errorEl.style.display = 'block';
+      }
     }
   },
 
