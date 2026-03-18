@@ -50,19 +50,18 @@ function stopImportWorker() {
  */
 async function processQueuedJobs() {
   try {
-    const result = await pool.query(
+    const [rows] = await pool.query(
       `SELECT id, user_id, source_platform, status
        FROM import_jobs
        WHERE status = 'queued'
-       LIMIT 1
-       FOR UPDATE SKIP LOCKED`
+       LIMIT 1`
     );
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return; // No jobs to process
     }
 
-    const job = result.rows[0];
+    const job = rows[0];
     await processImportJob(job);
   } catch (error) {
     console.error('Error processing queued jobs:', error);
@@ -78,7 +77,7 @@ async function processImportJob(job) {
   try {
     // Mark as processing
     await pool.query(
-      `UPDATE import_jobs SET status = 'processing' WHERE id = $1`,
+      `UPDATE import_jobs SET status = 'processing' WHERE id = ?`,
       [jobId]
     );
 
@@ -91,18 +90,18 @@ async function processImportJob(job) {
     }
 
     // Get uploaded files
-    const filesResult = await pool.query(
-      `SELECT id, original_filename FROM import_files WHERE import_job_id = $1`,
+    const [filesRows] = await pool.query(
+      `SELECT id, original_filename FROM import_files WHERE import_job_id = ?`,
       [jobId]
     );
 
-    if (filesResult.rows.length === 0) {
+    if (filesRows.length === 0) {
       throw new Error('No files found for import job');
     }
 
     // Parse files
     let rawRecords = [];
-    for (const file of filesResult.rows) {
+    for (const file of filesRows) {
       try {
         const records = await parser.parse(jobId, file.original_filename);
         rawRecords = rawRecords.concat(records);
@@ -112,7 +111,7 @@ async function processImportJob(job) {
       }
     }
 
-    console.log(`Parsed ${rawRecords.length} raw records from ${filesResult.rows.length} files`);
+    console.log(`Parsed ${rawRecords.length} raw records from ${filesRows.length} files`);
 
     // Normalize and match records
     let successCount = 0;
@@ -136,8 +135,8 @@ async function processImportJob(job) {
         // Create staging record
         await pool.query(
           `INSERT INTO import_staging
-           (import_job_id, source_platform, normalized_data, review_status, suggested_contact_id, confidence_score, is_spicy_source)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+           (import_job_id, source_platform, normalized_data, review_status, suggested_match_contact_id, match_confidence, is_spicy_source)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
           [
             jobId,
             source_platform,
@@ -161,8 +160,8 @@ async function processImportJob(job) {
     // Update job status
     await pool.query(
       `UPDATE import_jobs
-       SET status = 'awaiting_review', total_records = $1, processed_records = $2
-       WHERE id = $3`,
+       SET status = 'awaiting_review', total_records = ?, processed_records = ?
+       WHERE id = ?`,
       [rawRecords.length, successCount, jobId]
     );
 
@@ -172,7 +171,7 @@ async function processImportJob(job) {
 
     try {
       await pool.query(
-        `UPDATE import_jobs SET status = 'failed' WHERE id = $1`,
+        `UPDATE import_jobs SET status = 'failed' WHERE id = ?`,
         [jobId]
       );
     } catch (updateError) {

@@ -43,14 +43,13 @@ router.post('/upload', requireAuth, upload.array('files', 10), async (req, res) 
     }
 
     // Create import job record
-    const importJobResult = await pool.query(
+    const [rows] = await pool.query(
       `INSERT INTO import_jobs (user_id, source_platform, status, total_records, processed_records)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
+       VALUES (?, ?, ?, ?, ?)`,
       [userId, source_platform, 'queued', 0, 0]
     );
 
-    const importJobId = importJobResult.rows[0].id;
+    const importJobId = rows.insertId;
 
     // Store uploaded files temporarily
     const jobDir = path.join(MEDIA_PATH, 'imports', importJobId.toString());
@@ -65,7 +64,7 @@ router.post('/upload', requireAuth, upload.array('files', 10), async (req, res) 
     for (const file of req.files) {
       await pool.query(
         `INSERT INTO import_files (import_job_id, original_filename, file_size)
-         VALUES ($1, $2, $3)`,
+         VALUES (?, ?, ?)`,
         [importJobId, file.originalname, file.size]
       );
     }
@@ -101,14 +100,13 @@ router.post('/extension', requireExtensionAuth, async (req, res) => {
     }
 
     // Create import job
-    const importJobResult = await pool.query(
+    const [rows] = await pool.query(
       `INSERT INTO import_jobs (user_id, source_platform, status, total_records, processed_records)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
+       VALUES (?, ?, ?, ?, ?)`,
       [userId, source_platform, 'awaiting_review', records.length, records.length]
     );
 
-    const importJobId = importJobResult.rows[0].id;
+    const importJobId = rows.insertId;
 
     // Process media uploads
     const mediaMap = {};
@@ -142,8 +140,8 @@ router.post('/extension', requireExtensionAuth, async (req, res) => {
       const isSpicySource = ['snapchat', 'tiktok'].includes(source_platform);
 
       await pool.query(
-        `INSERT INTO import_staging (import_job_id, source_platform, normalized_data, is_spicy_source, review_status, confidence_score)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+        `INSERT INTO import_staging (import_job_id, source_platform, normalized_data, is_spicy_source, review_status, match_confidence)
+         VALUES (?, ?, ?, ?, ?, ?)`,
         [importJobId, source_platform, JSON.stringify(record), isSpicySource, 'pending', 0]
       );
     }
@@ -163,16 +161,16 @@ router.get('/jobs', requireAuth, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    const result = await pool.query(
+    const [rows] = await pool.query(
       `SELECT id, source_platform, status, total_records, processed_records, created_at
        FROM import_jobs
-       WHERE user_id = $1
+       WHERE user_id = ?
        ORDER BY created_at DESC
        LIMIT 100`,
       [userId]
     );
 
-    res.json(result.rows);
+    res.json(rows);
   } catch (error) {
     console.error('Get jobs error:', error);
     res.status(500).json({ error: 'Failed to retrieve import jobs' });
@@ -188,30 +186,30 @@ router.get('/jobs/:id', requireAuth, async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
 
-    const result = await pool.query(
+    const [rows] = await pool.query(
       `SELECT id, source_platform, status, total_records, processed_records, created_at, completed_at
        FROM import_jobs
-       WHERE id = $1 AND user_id = $2`,
+       WHERE id = ? AND user_id = ?`,
       [id, userId]
     );
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
-    const job = result.rows[0];
+    const job = rows[0];
 
     // Get staging record counts by review status
-    const stagingResult = await pool.query(
+    const [stagingRows] = await pool.query(
       `SELECT review_status, COUNT(*) as count
        FROM import_staging
-       WHERE import_job_id = $1
+       WHERE import_job_id = ?
        GROUP BY review_status`,
       [id]
     );
 
     const stagingCounts = {};
-    for (const row of stagingResult.rows) {
+    for (const row of stagingRows) {
       stagingCounts[row.review_status] = parseInt(row.count, 10);
     }
 
@@ -236,17 +234,17 @@ router.get('/review', requireAuth, async (req, res) => {
 
     let query = `
       SELECT s.id, s.import_job_id, s.source_platform, s.normalized_data,
-             s.is_spicy_source, s.review_status, s.confidence_score, s.suggested_contact_id,
+             s.is_spicy_source, s.review_status, s.match_confidence, s.suggested_match_contact_id,
              s.created_at
       FROM import_staging s
       JOIN import_jobs j ON s.import_job_id = j.id
-      WHERE j.user_id = $1 AND s.review_status = 'pending'
+      WHERE j.user_id = ? AND s.review_status = 'pending'
     `;
 
     const params = [userId];
 
     if (job_id) {
-      query += ` AND s.import_job_id = $2`;
+      query += ` AND s.import_job_id = ?`;
       params.push(job_id);
     }
 
@@ -278,27 +276,28 @@ router.put('/review/:id', requireAuth, async (req, res) => {
     }
 
     // Verify ownership
-    const stagingResult = await pool.query(
+    const [stagingRows] = await pool.query(
       `SELECT s.id FROM import_staging s
        JOIN import_jobs j ON s.import_job_id = j.id
-       WHERE s.id = $1 AND j.user_id = $2`,
+       WHERE s.id = ? AND j.user_id = ?`,
       [id, userId]
     );
+
+    const stagingResult = { rows: stagingRows };
 
     if (stagingResult.rows.length === 0) {
       return res.status(404).json({ error: 'Staging record not found' });
     }
 
     // Update staging record
-    const updateResult = await pool.query(
+    await pool.query(
       `UPDATE import_staging
-       SET review_status = $1, suggested_contact_id = $2, merge_field_decisions = $3
-       WHERE id = $4
-       RETURNING id`,
+       SET review_status = ?, suggested_match_contact_id = ?, merge_field_decisions = ?
+       WHERE id = ?`,
       [review_status, suggested_match_contact_id || null, JSON.stringify(merge_field_decisions || {}), id]
     );
 
-    res.json({ success: true, id: updateResult.rows[0].id });
+    res.json({ success: true, id: parseInt(id, 10) });
   } catch (error) {
     console.error('Update review error:', error);
     res.status(500).json({ error: 'Failed to update review decision' });
@@ -315,13 +314,13 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
     const userId = req.user.id;
 
     // Verify job ownership
-    const jobResult = await pool.query(
+    const [jobRows] = await pool.query(
       `SELECT id FROM import_jobs
-       WHERE id = $1 AND user_id = $2`,
+       WHERE id = ? AND user_id = ?`,
       [id, userId]
     );
 
-    if (jobResult.rows.length === 0) {
+    if (jobRows.length === 0) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
@@ -331,12 +330,14 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
       await client.query('BEGIN');
 
       // Get all reviewed staging records
-      const stagingResult = await client.query(
-        `SELECT id, normalized_data, review_status, suggested_contact_id, merge_field_decisions
+      const [stagingRows] = await client.query(
+        `SELECT id, normalized_data, review_status, suggested_match_contact_id, merge_field_decisions
          FROM import_staging
-         WHERE import_job_id = $1 AND review_status IN ('approved_new', 'approved_merge')`,
+         WHERE import_job_id = ? AND review_status IN ('approved_new', 'approved_merge')`,
         [id]
       );
+
+      const stagingResult = { rows: stagingRows };
 
       let processedCount = 0;
 
@@ -345,11 +346,10 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
 
         if (record.review_status === 'approved_new') {
           // Create new contact
-          const contactResult = await client.query(
+          const [contactRows] = await client.query(
             `INSERT INTO contacts (user_id, display_name, first_name, last_name, nickname,
                                    birthday, location, bio, occupation, website)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-             RETURNING id`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               userId,
               normalizedData.display_name || '',
@@ -364,14 +364,14 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
             ]
           );
 
-          const contactId = contactResult.rows[0].id;
+          const contactId = contactRows.insertId;
 
           // Add emails
           if (normalizedData.emails && Array.isArray(normalizedData.emails)) {
             for (const email of normalizedData.emails) {
               await client.query(
-                `INSERT INTO contact_emails (contact_id, email, email_type)
-                 VALUES ($1, $2, $3)`,
+                `INSERT INTO contact_emails (contact_id, email, label)
+                 VALUES (?, ?, ?)`,
                 [contactId, email.value, email.type || 'personal']
               );
             }
@@ -381,8 +381,8 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
           if (normalizedData.phones && Array.isArray(normalizedData.phones)) {
             for (const phone of normalizedData.phones) {
               await client.query(
-                `INSERT INTO contact_phones (contact_id, phone_number, phone_type)
-                 VALUES ($1, $2, $3)`,
+                `INSERT INTO contact_phones (contact_id, phone, label)
+                 VALUES (?, ?, ?)`,
                 [contactId, phone.value, phone.type || 'mobile']
               );
             }
@@ -392,8 +392,8 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
           if (normalizedData.social_links && Array.isArray(normalizedData.social_links)) {
             for (const link of normalizedData.social_links) {
               await client.query(
-                `INSERT INTO contact_social_links (contact_id, platform, username, profile_url)
-                 VALUES ($1, $2, $3, $4)`,
+                `INSERT INTO social_links (contact_id, platform, username, url)
+                 VALUES (?, ?, ?, ?)`,
                 [contactId, link.platform, link.username, link.profile_url]
               );
             }
@@ -402,7 +402,7 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
           // Write changelog
           await client.query(
             `INSERT INTO contact_changelogs (contact_id, action, change_details)
-             VALUES ($1, $2, $3)`,
+             VALUES (?, ?, ?)`,
             [contactId, 'imported', JSON.stringify({ import_job_id: id, source_platform: record.review_status })]
           );
         } else if (record.review_status === 'approved_merge' && record.suggested_contact_id) {
@@ -429,16 +429,15 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
             let paramIndex = 1;
 
             for (const [field, value] of Object.entries(updateFields)) {
-              setClauses.push(`${field} = $${paramIndex}`);
+              setClauses.push(`${field} = ?`);
               values.push(value);
-              paramIndex++;
             }
 
             values.push(contactId);
             const setClause = setClauses.join(', ');
 
             await client.query(
-              `UPDATE contacts SET ${setClause} WHERE id = $${paramIndex}`,
+              `UPDATE contacts SET ${setClause} WHERE id = ?`,
               values
             );
           }
@@ -446,15 +445,15 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
           // Merge emails
           if (decisions.emails && normalizedData.emails && Array.isArray(normalizedData.emails)) {
             for (const email of normalizedData.emails) {
-              const exists = await client.query(
-                `SELECT id FROM contact_emails WHERE contact_id = $1 AND email = $2`,
+              const [existsRows] = await client.query(
+                `SELECT id FROM contact_emails WHERE contact_id = ? AND email = ?`,
                 [contactId, email.value]
               );
 
-              if (exists.rows.length === 0) {
+              if (existsRows.length === 0) {
                 await client.query(
-                  `INSERT INTO contact_emails (contact_id, email, email_type)
-                   VALUES ($1, $2, $3)`,
+                  `INSERT INTO contact_emails (contact_id, email, label)
+                   VALUES (?, ?, ?)`,
                   [contactId, email.value, email.type || 'personal']
                 );
               }
@@ -464,15 +463,15 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
           // Merge phones
           if (decisions.phones && normalizedData.phones && Array.isArray(normalizedData.phones)) {
             for (const phone of normalizedData.phones) {
-              const exists = await client.query(
-                `SELECT id FROM contact_phones WHERE contact_id = $1 AND phone_number = $2`,
+              const [existsRows] = await client.query(
+                `SELECT id FROM contact_phones WHERE contact_id = ? AND phone = ?`,
                 [contactId, phone.value]
               );
 
-              if (exists.rows.length === 0) {
+              if (existsRows.length === 0) {
                 await client.query(
-                  `INSERT INTO contact_phones (contact_id, phone_number, phone_type)
-                   VALUES ($1, $2, $3)`,
+                  `INSERT INTO contact_phones (contact_id, phone, label)
+                   VALUES (?, ?, ?)`,
                   [contactId, phone.value, phone.type || 'mobile']
                 );
               }
@@ -482,15 +481,15 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
           // Merge social links
           if (decisions.social_links && normalizedData.social_links && Array.isArray(normalizedData.social_links)) {
             for (const link of normalizedData.social_links) {
-              const exists = await client.query(
-                `SELECT id FROM contact_social_links WHERE contact_id = $1 AND platform = $2 AND username = $3`,
+              const [existsRows] = await client.query(
+                `SELECT id FROM social_links WHERE contact_id = ? AND platform = ? AND username = ?`,
                 [contactId, link.platform, link.username]
               );
 
-              if (exists.rows.length === 0) {
+              if (existsRows.length === 0) {
                 await client.query(
-                  `INSERT INTO contact_social_links (contact_id, platform, username, profile_url)
-                   VALUES ($1, $2, $3, $4)`,
+                  `INSERT INTO social_links (contact_id, platform, username, url)
+                   VALUES (?, ?, ?, ?)`,
                   [contactId, link.platform, link.username, link.profile_url]
                 );
               }
@@ -500,7 +499,7 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
           // Write changelog
           await client.query(
             `INSERT INTO contact_changelogs (contact_id, action, change_details)
-             VALUES ($1, $2, $3)`,
+             VALUES (?, ?, ?)`,
             [contactId, 'merged_import', JSON.stringify({ import_job_id: id })]
           );
         }
@@ -512,7 +511,7 @@ router.post('/jobs/:id/finalize', requireAuth, async (req, res) => {
       await client.query(
         `UPDATE import_jobs
          SET status = 'completed', completed_at = NOW()
-         WHERE id = $1`,
+         WHERE id = ?`,
         [id]
       );
 
@@ -540,25 +539,25 @@ router.delete('/jobs/:id', requireAuth, async (req, res) => {
     const userId = req.user.id;
 
     // Verify ownership
-    const jobResult = await pool.query(
+    const [jobRows] = await pool.query(
       `SELECT id FROM import_jobs
-       WHERE id = $1 AND user_id = $2`,
+       WHERE id = ? AND user_id = ?`,
       [id, userId]
     );
 
-    if (jobResult.rows.length === 0) {
+    if (jobRows.length === 0) {
       return res.status(404).json({ error: 'Job not found' });
     }
 
     // Delete staging records
     await pool.query(
-      `DELETE FROM import_staging WHERE import_job_id = $1`,
+      `DELETE FROM import_staging WHERE import_job_id = ?`,
       [id]
     );
 
     // Delete job
     await pool.query(
-      `DELETE FROM import_jobs WHERE id = $1`,
+      `DELETE FROM import_jobs WHERE id = ?`,
       [id]
     );
 

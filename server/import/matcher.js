@@ -79,48 +79,46 @@ function normalizePhone(phone) {
 async function findMatch(normalizedRecord, userId, pool) {
   try {
     // Get all contacts for this user
-    const result = await pool.query(
-      `SELECT id, display_name, first_name, last_name FROM contacts WHERE user_id = $1`,
+    const [contacts] = await pool.query(
+      `SELECT id, display_name, first_name, last_name FROM contacts WHERE user_id = ?`,
       [userId]
     );
-
-    const contacts = result.rows;
 
     // Get emails and phones for all contacts
     const contactEmails = {};
     const contactPhones = {};
     const contactSocialLinks = {};
 
-    const emailResult = await pool.query(
-      `SELECT contact_id, email FROM contact_emails WHERE contact_id = ANY($1)`,
+    const [emailRows] = await pool.query(
+      `SELECT contact_id, email FROM contact_emails WHERE contact_id IN (?)`,
       [contacts.map(c => c.id)]
     );
 
-    for (const row of emailResult.rows) {
+    for (const row of emailRows) {
       if (!contactEmails[row.contact_id]) {
         contactEmails[row.contact_id] = [];
       }
       contactEmails[row.contact_id].push(normalizeEmail(row.email));
     }
 
-    const phoneResult = await pool.query(
-      `SELECT contact_id, phone_number FROM contact_phones WHERE contact_id = ANY($1)`,
+    const [phoneRows] = await pool.query(
+      `SELECT contact_id, phone FROM contact_phones WHERE contact_id IN (?)`,
       [contacts.map(c => c.id)]
     );
 
-    for (const row of phoneResult.rows) {
+    for (const row of phoneRows) {
       if (!contactPhones[row.contact_id]) {
         contactPhones[row.contact_id] = [];
       }
-      contactPhones[row.contact_id].push(normalizePhone(row.phone_number));
+      contactPhones[row.contact_id].push(normalizePhone(row.phone));
     }
 
-    const socialResult = await pool.query(
-      `SELECT contact_id, platform, username FROM contact_social_links WHERE contact_id = ANY($1)`,
+    const [socialRows] = await pool.query(
+      `SELECT contact_id, platform, username FROM social_links WHERE contact_id IN (?)`,
       [contacts.map(c => c.id)]
     );
 
-    for (const row of socialResult.rows) {
+    for (const row of socialRows) {
       if (!contactSocialLinks[row.contact_id]) {
         contactSocialLinks[row.contact_id] = [];
       }
