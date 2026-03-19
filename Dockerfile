@@ -1,17 +1,19 @@
 # ─────────────────────────────────────────────
-# Stage 1: Build the React frontend
+# Stage 1: Clone source and build React frontend
 # ─────────────────────────────────────────────
 FROM node:22-alpine AS frontend-builder
 
-WORKDIR /build
+RUN apk add --no-cache git
 
-# Install client deps first (layer cache)
-COPY client/package*.json ./client/
-RUN cd client && npm ci
+# Clone the repo (deploy token passed as build arg — never ends up in final image)
+ARG GITLAB_DEPLOY_TOKEN
+RUN git clone --depth 1 \
+    https://gitlab-deploy-token:${GITLAB_DEPLOY_TOKEN}@gitlab.example.com/homelab/knowledgecore.git \
+    /repo
 
-# Copy client source and build
-COPY client/ ./client/
-RUN cd client && npm run build
+WORKDIR /repo/kith/client
+
+RUN npm ci && npm run build
 
 # ─────────────────────────────────────────────
 # Stage 2: Production Node.js server
@@ -20,18 +22,13 @@ FROM node:22-alpine AS production
 
 WORKDIR /app
 
-# Install only production server deps (layer cache)
-COPY server/package*.json ./
+COPY --from=frontend-builder /repo/kith/server/package*.json ./
 RUN npm ci --omit=dev
 
-# Copy server source
-COPY server/src/ ./src/
-COPY server/init.sql ./init.sql
+COPY --from=frontend-builder /repo/kith/server/src/ ./src/
+COPY --from=frontend-builder /repo/kith/server/init.sql ./init.sql
+COPY --from=frontend-builder /repo/kith/client/dist/ ./public/
 
-# Copy built React app into the server's public dir
-COPY --from=frontend-builder /build/client/dist ./public/
-
-# Create media directory (mapped to the storage layer volume at runtime)
 RUN mkdir -p /media
 
 EXPOSE 3000
