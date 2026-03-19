@@ -4,6 +4,7 @@ services:
       context: .
       args:
         GITLAB_DEPLOY_TOKEN: ${GITLAB_DEPLOY_TOKEN}
+        CACHEBUST: ${CACHEBUST:-1}
     image: kith-local:latest
     container_name: ${SERVICE:-kith}
     ports:
