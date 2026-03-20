@@ -336,7 +336,7 @@ router.get('/', requireAuth, async (req, res) => {
       })) : []
     }));
 
-    res.json(transformedContacts);
+    res.json({ contacts: transformedContacts, total: transformedContacts.length });
   } catch (error) {
     console.error('List contacts error:', error);
     res.status(500).json({ error: 'Failed to list contacts' });
