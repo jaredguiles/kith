@@ -17,7 +17,7 @@ import { StarRating } from '@/components/shared/StarRating'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { formatDateTime, formatDate, EVENT_TYPES } from '@/lib/utils'
 import { Contact, Event } from '@/types'
-import { Plus, Trash2, Edit2, Check } from 'lucide-react'
+import { Plus, Trash2, PenLine, Check } from 'lucide-react'
 
 interface EventFormData {
   title: string
@@ -341,7 +341,7 @@ function EventCard({
           {!isCancelled && (
             <>
               <Button variant="outline" size="sm" className="flex-1" onClick={() => onEdit(event)}>
-                <Edit2 className="h-3 w-3 mr-1" />
+                <PenLine className="h-3 w-3 mr-1" />
                 Edit
               </Button>
               {!isPast && (

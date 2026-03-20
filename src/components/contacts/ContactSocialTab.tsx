@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
-import { Plus, Trash2, Edit2, ExternalLink, Globe } from 'lucide-react'
+import { Plus, Trash2, PenLine, ExternalLink, Globe } from 'lucide-react'
 
 interface ContactSocialTabProps {
   contactId: number
@@ -187,7 +187,7 @@ export function ContactSocialTab({ contactId }: ContactSocialTabProps) {
                   onClick={() => handleEdit(social)}
                   className="h-8 w-8"
                 >
-                  <Edit2 className="h-3 w-3" />
+                  <PenLine className="h-3 w-3" />
                 </Button>
                 <Button
                   variant="ghost"

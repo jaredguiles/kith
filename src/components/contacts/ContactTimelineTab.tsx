@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
-import { Plus, Trash2, Edit2, Calendar, FileText } from 'lucide-react'
+import { Plus, Trash2, PenLine, Calendar, FileText } from 'lucide-react'
 import { formatDate, formatDateTime } from '@/lib/utils'
 import { SpicyFlame } from '@/components/shared/SpicyFlame'
 
@@ -217,7 +217,7 @@ export function ContactTimelineTab({ contactId }: ContactTimelineTabProps) {
                               onClick={() => handleEditNote(note)}
                               className="h-6 w-6"
                             >
-                              <Edit2 className="h-3 w-3" />
+                              <PenLine className="h-3 w-3" />
                             </Button>
                             <Button
                               variant="ghost"

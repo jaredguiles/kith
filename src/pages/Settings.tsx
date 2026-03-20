@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { Plus, Trash2, Edit2, Copy, RefreshCw } from 'lucide-react'
+import { Plus, Trash2, PenLine, Copy, RefreshCw } from 'lucide-react'
 import { User, Tag } from '@/types'
 import { toast } from 'sonner'
 
@@ -283,7 +283,7 @@ export default function Settings() {
                       <Dialog>
                         <DialogTrigger asChild>
                           <Button variant="ghost" size="sm">
-                            <Edit2 className="h-4 w-4" />
+                            <PenLine className="h-4 w-4" />
                           </Button>
                         </DialogTrigger>
                         <DialogContent>

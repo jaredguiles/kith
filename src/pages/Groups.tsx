@@ -11,7 +11,7 @@ import { Avatar } from '@/components/shared/Avatar'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { Group, Contact } from '@/types'
 import * as LucideIcons from 'lucide-react'
-import { Plus, Edit2, Trash2, X, ChevronDown, ChevronUp } from 'lucide-react'
+import { Plus, PenLine, Trash2, X, ChevronDown, ChevronUp } from 'lucide-react'
 
 const ICON_OPTIONS = ['star', 'home', 'users', 'link', 'heart', 'zap', 'gift', 'coffee', 'book', 'music', 'camera', 'map']
 
@@ -168,7 +168,7 @@ function GroupCard({ group, onEdit, onDelete }: GroupCardProps) {
               className="p-1.5 hover:bg-muted rounded transition-colors"
               title="Edit group"
             >
-              <Edit2 className="h-4 w-4 text-muted-foreground" />
+              <PenLine className="h-4 w-4 text-muted-foreground" />
             </button>
             {!group.is_system && (
               <button

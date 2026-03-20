@@ -17,7 +17,7 @@ import { EmptyState } from '@/components/shared/EmptyState'
 import { ContactForm } from '@/components/contacts/ContactForm'
 import { formatDate } from '@/lib/utils'
 import { Contact } from '@/types'
-import { Search, Plus, Star, MoreVertical, Edit2, Trash2, Share2, Merge2 } from 'lucide-react'
+import { Search, Plus, Star, EllipsisVertical, PenLine, Trash2, Share2, GitMerge } from 'lucide-react'
 
 type SortField = 'name' | 'created_at' | 'updated_at' | 'location'
 
@@ -142,7 +142,7 @@ function ContactDetail({ contact, isOpen, onOpenChange }: ContactDetailProps) {
           {/* Actions */}
           <div className="border-t border-border pt-4 flex gap-2">
             <Button variant="outline" size="sm" className="flex-1">
-              <Edit2 className="h-4 w-4 mr-2" />
+              <PenLine className="h-4 w-4 mr-2" />
               Edit
             </Button>
             <Button
@@ -224,12 +224,12 @@ function ContactRow({ contact, onSelect }: { contact: Contact; onSelect: () => v
       <DropdownMenu>
         <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
           <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-            <MoreVertical className="h-4 w-4" />
+            <EllipsisVertical className="h-4 w-4" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem>
-            <Edit2 className="h-4 w-4 mr-2" />
+            <PenLine className="h-4 w-4 mr-2" />
             Edit
           </DropdownMenuItem>
           <DropdownMenuItem>
@@ -237,7 +237,7 @@ function ContactRow({ contact, onSelect }: { contact: Contact; onSelect: () => v
             Share
           </DropdownMenuItem>
           <DropdownMenuItem>
-            <Merge2 className="h-4 w-4 mr-2" />
+            <GitMerge className="h-4 w-4 mr-2" />
             Merge
           </DropdownMenuItem>
           <DropdownMenuItem

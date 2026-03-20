@@ -19,7 +19,7 @@ import {
   Edit,
   Trash2,
   Share2,
-  MoreVertical,
+  EllipsisVertical,
   Mail,
   Phone,
   MapPin,
@@ -168,7 +168,7 @@ export function ContactDetail({ contactId, open, onClose }: ContactDetailProps) 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon">
-                <MoreVertical className="h-4 w-4" />
+                <EllipsisVertical className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">

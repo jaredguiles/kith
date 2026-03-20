@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
-import { Mail, Phone, MapPin, Plus, Trash2, Edit2, X } from 'lucide-react'
+import { Mail, Phone, MapPin, Plus, Trash2, PenLine, X } from 'lucide-react'
 
 interface ContactDetailsTabProps {
   contactId: number
@@ -234,7 +234,7 @@ export function ContactDetailsTab({ contactId }: ContactDetailsTabProps) {
                   onClick={() => handleEditEmail(email)}
                   className="h-8 w-8"
                 >
-                  <Edit2 className="h-3 w-3" />
+                  <PenLine className="h-3 w-3" />
                 </Button>
                 <Button
                   variant="ghost"
@@ -280,7 +280,7 @@ export function ContactDetailsTab({ contactId }: ContactDetailsTabProps) {
                   onClick={() => handleEditPhone(phone)}
                   className="h-8 w-8"
                 >
-                  <Edit2 className="h-3 w-3" />
+                  <PenLine className="h-3 w-3" />
                 </Button>
                 <Button
                   variant="ghost"
@@ -330,7 +330,7 @@ export function ContactDetailsTab({ contactId }: ContactDetailsTabProps) {
                   onClick={() => handleEditAddress(address)}
                   className="h-8 w-8"
                 >
-                  <Edit2 className="h-3 w-3" />
+                  <PenLine className="h-3 w-3" />
                 </Button>
                 <Button
                   variant="ghost"
