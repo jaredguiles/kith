@@ -1,7 +1,6 @@
 services:
   kith:
     build: .
-    image: ${IMAGE}:${TAG}
     container_name: ${SERVICE}
     env_file:
       - .env
