@@ -8,7 +8,7 @@ RUN npm run build
 
 # Stage 2: Production runtime
 FROM node:lts-alpine
-RUN apk add --no-cache ffmpeg
+RUN apk add --no-cache ffmpeg curl
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev

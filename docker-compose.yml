@@ -1,26 +1,26 @@
 services:
   kith:
     build: .
-    image: ${IMAGE:-kith-local}:${TAG:-latest}
-    container_name: ${SERVICE:-kith}
-    ports:
-      - "${EXTERNAL_PORT:-8084}:3000"
+    image: ${IMAGE}:${TAG}
+    container_name: ${SERVICE}
     env_file:
       - .env
+    ports:
+      - "${EXTERNAL_PORT}:${INTERNAL_PORT}"
     volumes:
       - /srv/kith:/media
       - ./uploads:/app/uploads
     restart: ${RESTART_POLICY:-always}
     healthcheck:
-      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/api/health', (r) => { if (r.statusCode !== 200) process.exit(1) })\""]
+      test: [ "CMD-SHELL", "curl -sf http://localhost:${INTERNAL_PORT}/api/health || exit 1" ]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 30s
     labels:
-      traefik.enable: "true"
-      traefik.http.routers.kith.rule: Host(`${URL:-kith.example.com}`)
-      traefik.http.routers.kith.entrypoints: https
-      traefik.http.routers.kith.tls: "true"
-      traefik.http.routers.kith.tls.certresolver: letsencrypt
-      traefik.http.services.kith.loadbalancer.server.port: "3000"
+      - "traefik.enable=true"
+      - "traefik.http.routers.kith.rule=Host(`${URL}`)"
+      - "traefik.http.routers.kith.entrypoints=https"
+      - "traefik.http.routers.kith.tls=true"
+      - "traefik.http.routers.kith.tls.certresolver=letsencrypt"
+      - "traefik.http.services.kith.loadbalancer.server.port=${INTERNAL_PORT}"
