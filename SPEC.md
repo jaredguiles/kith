@@ -8,18 +8,47 @@ The name "Kith" comes from the Old English word meaning friends, acquaintances, 
 
 ### Key Differentiator: Spicy Mode
 
-Kith has a hidden layer of intimate/personal data that is concealed by default so the app is SFW when opened. A flame toggle activates "spicy mode" which changes the entire app color scheme (shifting to a warm/red-tinted palette) so it's immediately obvious what mode you're in. Spicy mode can be globally disabled in Settings, which removes the flame toggle entirely and prevents any spicy content from being viewed or shown.
+Kith has a hidden layer of intimate/personal data that is concealed by default so the app is SFW when opened. A flame toggle activates "spicy mode" which shifts the app's interactive/accent layer to a distinct palette so it's immediately obvious what mode you're in. Spicy mode can be globally disabled in Settings, which removes the flame toggle entirely and prevents any spicy content from being viewed or shown.
 
 ---
 
 ## Tech Stack
 
-- **Backend:** Node.js + Express (serves API + static HTML)
-- **Frontend:** Single HTML page with vanilla JS (no React, no build step, no bundler)
+### Frontend
+- **Framework:** React 19 + TypeScript
+- **Build tool:** Vite
+- **Component library:** shadcn/ui (components are copied into the codebase via the shadcn CLI — fully owned, not a package dependency)
+- **App shell:** shadcn-admin (provides dark sidebar layout and a working ⌘K command palette out of the box)
+- **Styling:** Tailwind CSS (via shadcn/ui)
+- **Server state:** TanStack Query (React Query) — caching, loading states, background refetching
+- **Client state:** Zustand — lightweight store for session-scoped state (spicy mode toggle, sidebar collapsed state, etc.)
+- **Routing:** React Router v6
+
+### Backend
+- **Server:** Node.js + Express
 - **Database:** MariaDB (db-host:3306, database: `kith`)
 - **Auth:** JWT (bcryptjs + jsonwebtoken)
-- **Deployment:** Docker via GitLab CI pipeline to the application server VM
+- **Deployment:** Docker — single container. Vite builds the frontend at image build time (multi-stage Dockerfile); Express serves the compiled `dist/` as static files in production.
 - **Media storage:** the storage layer volume mounted read-write at `/media` (maps to `/srv/kith` on host). The Chrome extension uploads media via the API; the server writes files to organized subdirectories under `PersonalExports/{Platform}/` on the storage layer. Manual uploads also go through the API. The media storage base path is configurable in Settings.
+
+### Self-Contained Deployment
+Copy the project files to a VM, run `docker compose up` — it works. No pre-build step required on the host. All frontend compilation happens inside the Docker build stage.
+
+### Module System
+The **server stays CommonJS** (`require`/`module.exports`). The **frontend uses ESM** (`import`/`export` via Vite). `package.json` must **not** have `"type": "module"` — this keeps `__dirname` and `require()` working in the Express server while Vite handles ESM for the frontend bundle independently.
+
+---
+
+## Development Phases
+
+### Phase 1 — Functional CRM
+Get the app working end-to-end with all core features. Default shadcn/ui dark styling is used throughout — no custom theming required. Contacts CRUD, groups, tags, timeline entries, notes, spicy profiles, user auth, sharing, events, reminders, notifications, and the command palette (ships with shadcn-admin).
+
+### Phase 2 — API & Data
+Connect the Chrome extension, import flows (CSV, vCard, Facebook, Instagram, Twitter, Google Contacts), export/backup, media/the storage layer integration, and any third-party sync.
+
+### Phase 3 — Design
+Apply Kith's custom color tokens, frosted glass surfaces, spicy mode palette shift, and the full branding layer. All visual/design decisions are deferred to this phase. See **BRANDING.md** for the complete design system reference — color tokens, typography, spacing, iconography, motion, accessibility, and the spicy mode visual system.
 
 ---
 
@@ -46,7 +75,7 @@ Kith has a hidden layer of intimate/personal data that is concealed by default s
 
 ### Default Seed
 
-- Main admin: username `admin`, email `admin@example.com`, password `changeme`
+- Main admin credentials read from `.env` (`ADMIN_USERNAME`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`) — created on first boot if no users exist.
 
 ---
 
@@ -432,8 +461,8 @@ Holds all parsed/normalized records from an import job, pending data review.
 - **Default Relationship Types** — Manage the list of relationship type options
 
 ### Appearance
-- **App Color Scheme** — Pick primary accent color (defaults defined in BRANDING.md). CSS variables update globally.
-- **Spicy Mode Color Scheme** — Pick the spicy mode accent color (defaults defined in BRANDING.md). When spicy mode is active, only the interactive/accent layer shifts — see BRANDING.md § 12.
+- **App Color Scheme** — Pick primary accent color. In Phase 1, shadcn/ui default dark theme is used. In Phase 3, Kith's full design token system is applied (see BRANDING.md).
+- **Spicy Mode Color Scheme** — Pick the spicy mode accent color. When spicy mode is active, only the interactive/accent layer shifts — see BRANDING.md for the full layered signal system (Phase 3).
 
 ### Spicy
 - **Enable Spicy Features** — Global toggle. When disabled: flame icon hidden, spicy_profiles inaccessible, all is_spicy content filtered out at the API level. No spicy content can be viewed or shown anywhere.
@@ -463,8 +492,8 @@ Holds all parsed/normalized records from an import job, pending data review.
 
 ### Toggle Behavior
 - Flame icon in sidebar header (only visible if spicy features are enabled in Settings)
-- **Off (default, SFW):** Normal app color scheme. All spicy content hidden — contacts with spicy data look normal but spicy sections are hidden, spicy notes/media/events filtered out, spicy_profiles not loaded.
-- **On (NSFW):** The accent/interactive layer shifts from purple to rose-red across all elements (buttons, active states, focus rings, sidebar strip) over 600ms. A subtle edge vignette and grain overlay fade in. All spicy content becomes visible. Surfaces, text, and layout are identical to normal mode — see BRANDING.md § 12 for the full layered signal system.
+- **Off (default, SFW):** Normal app appearance. All spicy content hidden — contacts with spicy data look normal but spicy sections are hidden, spicy notes/media/events filtered out, spicy_profiles not loaded.
+- **On (NSFW):** The accent/interactive layer shifts to the spicy palette across all elements (buttons, active states, focus rings, sidebar strip) over 600ms. A subtle edge vignette and grain overlay fade in. All spicy content becomes visible. Surfaces, text, and layout are identical to normal mode — see BRANDING.md for the full layered signal system (Phase 3).
 - Per-user preference saved to database.
 
 ### Spicy Profile Fields (comprehensive, inclusive of all orientations)
@@ -529,7 +558,7 @@ Events appear in the timeline of linked contacts.
 
 - Every create, update, delete, merge, share, import action is logged to `audit_log`
 - Stores: who, when, what entity, old values, new values
-- **UI:** Small text link at the bottom of a contact's profile ("View history") opens a modal/popup showing the change log for that contact
+- **UI:** Small text link at the bottom of a contact's profile ("View history") opens a dialog showing the change log for that contact
 - Critical for merge recovery — can look back to see values that weren't chosen
 - Audit writes are non-blocking (fire and forget)
 
@@ -844,58 +873,69 @@ Rendered as a small circle overlay on the avatar's bottom-right corner using CSS
 
 ---
 
-## UI Design System
+## UI / Component System
 
-### Core Principle: Uniform, Reusable Components
+Kith uses **shadcn/ui** for all components. Components are installed via the shadcn CLI and live in `src/components/ui/` — they are fully owned code, not a runtime dependency.
 
-Every page follows the same template structure. Every widget is copy-paste reusable with zero extra styling needed. All styling lives in `style.css` — page `<style>` blocks contain only layout-specific rules (column widths, view toggles, etc.).
+The app shell is based on **shadcn-admin**, which provides:
+- Dark sidebar layout with collapsible navigation
+- ⌘K / Ctrl+K command palette (pre-built, fully functional)
+- Page header and content area layout rhythm
+- Mobile-responsive sidebar drawer
 
-### Page Template
+### Key Components (shadcn/ui)
+
+- **Button** — variants: default (primary), secondary, destructive, ghost, outline, icon
+- **Dialog** — modal pattern: used for add/edit contact, merge confirmation, audit log, confirmations
+- **Sheet** — slide-in drawer: used for contact profile detail panel on desktop
+- **Badge** — tag pills, status indicators, group badges
+- **Avatar** — contact profile images with fallback initials; includes pride flag overlay slot
+- **Table / DataTable** — contact list, event list, import review. Sortable, filterable.
+- **Card** — used for profile sections, event cards, settings sections, group cards, dashboard widgets
+- **Form + Input / Select / Textarea** — all form controls via shadcn Form with react-hook-form
+- **Command** — powers the ⌘K command palette (provided by shadcn-admin)
+- **Popover** — filter dropdowns, multi-select menus
+- **Switch** — boolean toggles (spicy mode, settings)
+- **Tabs** — contact profile sections (Info, Timeline, Media, Spicy Profile, Change Log)
+- **Sonner** — toast notifications for success/error feedback (shadcn's current standard; the older `toast` component is deprecated)
+- **Progress** — import progress bar in the import widget
+- **Dropdown Menu** — contextual actions (contact row actions, nav menus)
+- **Tooltip** — icon-only button labels, truncated text
+
+> For Phase 3 visual specifications — custom color tokens, frosted glass surfaces, spicy mode signal system, typography scale, spacing system, motion/transitions, and accessibility standards — see **BRANDING.md**.
+
+### Page Layout
+
 ```
 ┌─────────────────────────────────────────────┐
-│ SIDEBAR (260px)  │  MAIN CONTENT            │
-│                  │  ┌─────────────────────┐  │
-│  Logo            │  │ PAGE HEADER         │  │
-│  Search          │  │ Title + actions     │  │
-│  + New person    │  ├─────────────────────┤  │
-│  Nav items       │  │ TOOLBAR             │  │
-│  ─────────       │  │ Search/filter/sort  │  │
-│  Favorites ▸     │  ├─────────────────────┤  │
-│  Groups ▸        │  │ CONTENT AREA        │  │
-│  ─────────       │  │ (scrollable)        │  │
-│  Settings        │  │                     │  │
-│  User + Logout   │  │                     │  │
-│                  │  └─────────────────────┘  │
+│ SIDEBAR (shadcn-admin shell)  │  MAIN CONTENT            │
+│                               │  ┌─────────────────────┐  │
+│  Logo                         │  │ PAGE HEADER         │  │
+│  ⌘K Search                    │  │ Title + actions     │  │
+│  + New person                 │  ├─────────────────────┤  │
+│  Nav items                    │  │ TOOLBAR             │  │
+│  ─────────                    │  │ Search/filter/sort  │  │
+│  Favorites ▸                  │  ├─────────────────────┤  │
+│  Groups ▸                     │  │ CONTENT AREA        │  │
+│  ─────────                    │  │ (scrollable)        │  │
+│  Settings                     │  │                     │  │
+│  User + Logout                │  │                     │  │
+│                               │  └─────────────────────┘  │
 └─────────────────────────────────────────────┘
 ```
 
-**Mobile (≤768px):** Sidebar collapses into a fixed left drawer toggled by a hamburger button. A `.mob-header` bar (logo + hamburger + user avatar) is always visible at the top of the main content area.
+**Mobile (≤768px):** Sidebar collapses into a fixed left drawer toggled by a hamburger button. A mobile header bar (logo + hamburger + user avatar) is always visible at the top.
 
-### Reusable Widgets / Components
-All built as vanilla JS render functions that return HTML strings. Same class names, same structure everywhere.
+### Command Palette (⌘K)
 
-- **Modal** — Standard overlay + card. Used for: add/edit contact, add event, merge, audit log, confirmations. All modals use the same `.modal-overlay > .modal > .modal-header + .modal-content + .modal-footer` structure.
-- **Tag pill** — `.tag-pill` with color prop. Used everywhere tags appear.
-- **Group badge** — `.group-badge` with icon + color. Uniform across sidebar, table, detail.
-- **Avatar** — `.av` with size variants (sm/md/lg). Includes pride flag overlay slot.
-- **Card** — `.card` container. Used for profile sections, event cards, settings sections.
-- **Button** — `.btn` with variants: `.btn-primary`, `.btn-secondary`, `.btn-danger`, `.btn-ghost`, `.btn-icon`. Same everywhere.
-- **Form controls** — `.form-group > .form-label + input/select/textarea`. Uniform styling.
-- **Table** — `.data-table` with `.table-row`, `.table-header`. Sortable, filterable.
-- **Feed item** — `.feed-item` for timeline/activity entries.
-- **Empty state** — `.empty-state` centered message + optional action button.
-- **Star rating** — `.star-rating` component, reusable for both regular and spicy ratings.
-- **Toast / notification** — `.toast` for success/error messages.
-- **Import progress widget** — `.import-widget` fixed bottom-right corner. Visible across all pages when import is active. Shows platform, progress bar, status, and "Review now" CTA.
-- **Popover** — `.popover-wrap > .popover > .popover-item` for filter dropdowns and multi-select menus.
-- **Toggle switch** — `.toggle-switch` for boolean settings.
+shadcn-admin ships with a working command palette. Kith extends it with:
+- Quick contact search and navigation
+- Fast action execution ("New contact", "Toggle spicy mode", "Go to settings")
+- A keyboard-first path to everything in the app
 
-### Layout Utilities
-- Flexbox: `.flex`, `.flex-col`, `.flex-center`, `.flex-between`, `.gap-*`
-- Grid: `.grid`, `.grid-2`, `.grid-3`, `.grid-4`
-- Spacing: `.mt-*`, `.mb-*`, `.p-*`
+### Spicy Mode Toggle
 
-> For complete design specifications — colors, typography, spacing, iconography, motion, accessibility, spicy mode visual system, and component patterns — see **BRANDING.md**.
+The flame icon in the sidebar header (only visible when spicy features are enabled in Settings) uses a Lucide `Flame` icon — stroke (unlit) at rest, filled and visually active when spicy mode is on. The spicy mode state is stored in Zustand and synced to the database as a user preference.
 
 ---
 
@@ -909,7 +949,7 @@ Clean, uncluttered dashboard with key information at a glance:
 - **Recent activity** — Last 10 timeline entries across all contacts (who, what, when)
 - **Quick stats** — Total contacts, contacts added this month, events this month, overdue reminders count
 
-Layout: cards in a responsive grid. Nothing cluttered — just the essentials with links to dive deeper.
+Layout: Cards in a responsive grid. Nothing cluttered — just the essentials with links to dive deeper.
 
 ---
 
@@ -929,8 +969,8 @@ Layout: cards in a responsive grid. Nothing cluttered — just the essentials wi
 ## Sidebar Layout
 
 - **Top:** Logo (custom or default "◆ Kith") + spicy flame toggle (if enabled) + user avatar
-- **Search:** Search bar with keyboard shortcut hint
-- **Button:** Accent-colored "+ New person" button (all roles — every user can add contacts to their own list)
+- **Search / ⌘K:** Command palette trigger (provided by shadcn-admin)
+- **Button:** "+ New person" button (all roles — every user can add contacts to their own list)
 - **Nav items:** Home, Contacts, Events, Notifications, (Settings — admin only)
 - **Favorites section:** Collapsible, shows favorited contacts as small avatar + name list
 - **Groups section:** Collapsible, each group shows icon + name + color dot + member count
@@ -941,7 +981,11 @@ Layout: cards in a responsive grid. Nothing cluttered — just the essentials wi
 ## Default Seed Data
 
 ### Default admin user
-- username: `admin`, email: `admin@example.com`, password: `changeme`, role: `main_admin`
+Created on first boot if no users exist. Credentials are read from `.env`:
+- `ADMIN_USERNAME` — default: `admin`
+- `ADMIN_EMAIL` — default: `admin@example.com`
+- `ADMIN_PASSWORD` — **set a strong value in `.env` before deploying**
+- role: `main_admin`
 
 ### Default tags
 - Friend, Family, Work, VIP, Shared
@@ -952,13 +996,13 @@ Layout: cards in a responsive grid. Nothing cluttered — just the essentials wi
 - Acquaintances (icon: `users`, color: #5b9cf5)
 - Shared (icon: `link`, color: #f59e0b) — auto-populated when contacts are shared
 
-Icons are Lucide icon names. Rendered as SVG in the UI.
+Icons are Lucide icon names. Rendered as SVG via `lucide-react`.
 
 ### Default app_settings
 - app_name: "Kith"
 - app_logo: null (uses default)
-- accent_color: per BRANDING.md (normal mode accent)
-- spicy_accent_color: per BRANDING.md (spicy mode accent)
+- accent_color: null (uses shadcn/ui default in Phase 1; set per BRANDING.md in Phase 3)
+- spicy_accent_color: null (uses shadcn/ui default in Phase 1; set per BRANDING.md in Phase 3)
 - spicy_enabled: true
 - media_path: "/media"
 - max_upload_size: 52428800 (50MB)
@@ -1110,108 +1154,14 @@ Icons are Lucide icon names. Rendered as SVG in the UI.
 
 - `.env` — Deployment config (DB creds, JWT secret, ports, URLs, homelab infra vars)
 - `docker-compose.yml` — Service definition with Traefik labels, read-write the storage layer media mount
-- `Dockerfile` — Node.js + FFmpeg container build
+- `Dockerfile` — Multi-stage build: Stage 1 runs Vite build; Stage 2 is the production Node.js + FFmpeg container
 - `files.json` — GitLab CI pipeline file list (determines which files/directories are synced to the VM)
-
----
-
-## File Structure
-
-> **Deployment location:** `knowledgecore/kith/` — deployed alongside other the application server services (baserow, monicahq, outline, whisper) via GitLab CI pipeline.
-
-```
-knowledgecore/kith/
-├── .env                         # Environment config (DB, JWT, ports, URLs)
-├── .gitignore
-├── docker-compose.yml           # Single-container service definition with Traefik labels
-├── Dockerfile                   # Node.js + FFmpeg container
-├── files.json                   # GitLab CI pipeline file list
-├── package.json
-├── SPEC.md                      # This file
-├── BRANDING.md                  # Complete design system reference
-├── logo.png                     # Brand logo (white on transparent)
-├── server/
-│   ├── index.js                 # Express app entry point
-│   ├── database/
-│   │   ├── connection.js        # MariaDB pool
-│   │   └── init.js              # Auto-create tables + seed data
-│   ├── middleware/
-│   │   └── auth.js              # JWT requireAuth / requireAdmin / requireOwner
-│   ├── routes/
-│   │   ├── auth.js
-│   │   ├── users.js
-│   │   ├── contacts.js          # Includes merge, share, photo, favorite, changelog
-│   │   ├── tags.js
-│   │   ├── groups.js
-│   │   ├── socials.js
-│   │   ├── spicy.js
-│   │   ├── events.js
-│   │   ├── timeline.js
-│   │   ├── notes.js
-│   │   ├── reminders.js
-│   │   ├── messages.js
-│   │   ├── media.js
-│   │   ├── audit.js
-│   │   ├── changelog.js         # Per-field contact change log
-│   │   ├── settings.js
-│   │   ├── preferences.js
-│   │   ├── import.js            # All import routes (upload, extension, jobs, review, finalize)
-│   │   └── health.js
-│   ├── import/
-│   │   ├── worker.js            # Background import job processor
-│   │   ├── normalizer.js        # Shared normalize helpers
-│   │   ├── parsers/
-│   │   │   ├── facebook.js      # Facebook export parser
-│   │   │   ├── instagram.js     # Instagram export parser
-│   │   │   ├── twitter.js       # Twitter/X export parser
-│   │   │   ├── google.js        # Google Contacts / Takeout parser
-│   │   │   ├── vcard.js         # vCard (.vcf) parser
-│   │   │   └── csv.js           # CSV parser (with column mapping)
-│   │   └── matcher.js           # Contact match detection + confidence scoring
-│   └── public/                  # Static files served by Express
-│       ├── index.html           # Single page app shell
-│       ├── css/
-│       │   └── style.css        # All styles — design system + components
-│       └── js/
-│           ├── app.js           # Main app logic, routing, state
-│           ├── api.js           # API client (fetch wrappers)
-│           ├── components.js    # Reusable UI widget render functions
-│           ├── pages.js         # Page-level render functions
-│           └── utils.js         # Formatters, helpers, pride flags
-├── chrome-extension/
-│   ├── manifest.json            # MV3 manifest
-│   ├── background/
-│   │   └── service-worker.js    # API communication, job tracking
-│   ├── content-scripts/
-│   │   ├── sniffies.js          # Sniffies scraper (migrated from tampermonkey_scripts/)
-│   │   └── snapchat.js          # Snapchat scraper (migrated from tampermonkey_scripts/)
-│   ├── popup/
-│   │   ├── popup.html
-│   │   ├── popup.js
-│   │   └── popup.css
-│   └── shared/
-│       ├── api.js               # Kith API client for extension
-│       ├── normalizer.js        # Platform → normalized format
-│       └── config.js            # Reads stored config
-├── tampermonkey_scripts/        # Legacy scripts (reference only — migrated to chrome-extension/)
-│   ├── Snapchat CRM Collector.js
-│   └── Sniffies CRM Collector.js
-└── mockups/                     # Design reference mockups (HTML/CSS)
-    ├── style.css
-    ├── login.html
-    ├── dashboard.html
-    ├── contacts.html
-    ├── events.html
-    ├── groups.html
-    ├── notifications.html
-    └── settings.html
-```
 
 ---
 
 ## Contact Profile / Detail View
 
-When a contact row is clicked in the contacts list, a profile panel opens (slide-in drawer on desktop, full-page on mobile). This is the primary view for all contact data.
+When a contact row is clicked in the contacts list, a profile panel opens (Sheet/slide-in drawer on desktop, full-page on mobile). This is the primary view for all contact data.
 
 ### Sections
 
@@ -1223,7 +1173,7 @@ When a contact row is clicked in the contacts list, a profile panel opens (slide
 
 **Social Links** — Platform icon + username + clickable URL for each linked social account.
 
-**Tags & Groups** — Tag pills (add/remove inline). Group memberships (add/remove inline).
+**Tags & Groups** — Tag badges (add/remove inline). Group memberships (add/remove inline).
 
 **Timeline** — Chronological feed of all interactions: notes, events, imported message batches, manual entries. Each item shows type icon, title, date, preview. Spicy items hidden when spicy mode off. "Add note" inline at top.
 
@@ -1234,7 +1184,7 @@ When a contact row is clicked in the contacts list, a profile panel opens (slide
 **Change Log** — Field-level diff history. Expandable. Shows field → old value → new value, source, timestamp.
 
 ### Actions available from profile
-- Edit any field inline or via modal
+- Edit any field inline or via dialog
 - Add / remove tags, groups, social links
 - Add timeline note
 - Link / unlink event
@@ -1254,26 +1204,19 @@ The Groups page displays all groups the user has access to as a 2-column card gr
 Each card shows: icon + name + description + member count + avatar stack (first 5 members). Card is expandable — clicking the header toggles a member list showing each member's avatar, name, and location. An "Add member" button appears at the bottom of the expanded list. Each member row has a remove (×) button.
 
 ### Actions
-- **Create group** — Modal with name, icon picker (Lucide icon name), color picker, description.
-- **Edit group** — Same modal pre-filled. System groups (Close Friends, Family, etc.) can be renamed but not deleted.
+- **Create group** — Dialog with name, icon picker (Lucide icon name), color picker, description.
+- **Edit group** — Same dialog pre-filled. System groups (Close Friends, Family, etc.) can be renamed but not deleted.
 - **Delete group** — Confirmation required. Removes group and all memberships; contacts are not deleted.
 - **Add member** — Inline search-as-you-type within the expanded card. Selecting a contact adds them immediately.
 - **Remove member** — Per-member × button in expanded view.
 
 ---
 
-## Mockup Reference & Known Issues
+## Mockup Reference
 
-The `mockups/v3/` directory contains HTML/CSS mockups that represent the visual design target. Claude Code should use these as **visual reference only** — they are not functional and should not be used as a basis for production HTML structure.
+The `mockups/` directory contains HTML/CSS mockups representing the Phase 3 visual design target. Use these as **visual reference for Phase 3 only** — they are not functional and should not be used as a basis for React component structure.
 
-### Known issues in the mockups to ignore when building
-- The filter/toolbar UI is inconsistent across pages — some pages have pill-style filters, others have dropdown popovers, and one is missing a background. Implement a single consistent pattern: pills for primary status filters (Upcoming / Past / All), a popover for type/category filters.
-- Some filter pills are missing hover states or active backgrounds.
-- The notifications page uses different padding conventions than the rest.
-- Mobile layout is mocked in CSS but has not been visually tested — implement the spec behavior (sidebar drawer, mob-header) rather than exactly replicating any specific mockup detail.
-- The data review, import, and groups pages do not yet have mockups — build from the spec.
-
-### What the mockups are authoritative on
+### What the mockups are authoritative on (for Phase 3)
 - Overall dark frosted-glass aesthetic and surface hierarchy
 - Sidebar structure, nav items, and flame toggle placement
 - Page header / toolbar / content area layout rhythm
@@ -1286,15 +1229,16 @@ The `mockups/v3/` directory contains HTML/CSS mockups that represent the visual 
 
 ### Container Architecture
 
-Kith runs as a **single Docker container** (Node.js + Express). The MariaDB database is external — hosted on the the application server VM at a fixed address. There is no database container in the compose file.
+Kith runs as a **single Docker container**. The Vite frontend is compiled inside the Docker build stage — no pre-build step is required on the host. Express serves the compiled `dist/` as static files. The MariaDB database is external — hosted on the the application server VM at a fixed address. There is no database container in the compose file.
 
 ```
-┌──────────────────────────────┐     ┌──────────────────┐
-│  kith container              │────▶│  MariaDB         │
-│  node:lts-alpine             │     │  db-host   │
-│  Express API + static files  │     │  port 3306       │
-│  Import worker (in-process)  │     └──────────────────┘
-└──────────────┬───────────────┘
+┌──────────────────────────────────┐     ┌──────────────────┐
+│  kith container                  │────▶│  MariaDB         │
+│  node:lts-alpine                 │     │  db-host   │
+│  Express API                     │     │  port 3306       │
+│  React app (served from /dist)   │     └──────────────────┘
+│  Import worker (in-process)      │
+└──────────────┬───────────────────┘
                │ volume mount
                ▼
      the storage layer media directory
@@ -1305,45 +1249,121 @@ Kith runs as a **single Docker container** (Node.js + Express). The MariaDB data
 ```yaml
 services:
   kith:
-    image: registry.gitlab.com/[user]/kith:latest
-    restart: unless-stopped
+    build: .                        # Builds from local Dockerfile (includes Vite build)
+    image: kith-local:latest        # Local tag name. CI pipeline uses ${IMAGE}:${TAG} from .env
+    container_name: ${SERVICE:-kith}
     ports:
-      - "3000:3000"
-    environment:
-      - NODE_ENV=production
-      - DB_HOST=${DB_HOST}
-      - DB_PORT=${DB_PORT}
-      - DB_USER=${DB_USER}
-      - DB_PASSWORD=${DB_PASSWORD}
-      - DB_NAME=${DB_NAME}
-      - JWT_SECRET=${JWT_SECRET}
-      - MEDIA_PATH=/media
-      - MAX_UPLOAD_SIZE=52428800
+      - "${EXTERNAL_PORT:-8084}:3000"
+    env_file:
+      - .env
     volumes:
-      - /srv/kith:/media    # the storage layer mount (read-write)
-      - ./uploads:/app/uploads   # Temp upload staging
+      - /srv/kith:/media       # the storage layer media mount. Docker creates this dir if absent —
+                                    # media uploads still work but won't be on the storage layer.
+      - ./uploads:/app/uploads      # Temp upload staging for multer. Auto-created by Docker.
+    restart: ${RESTART_POLICY:-always}
+    healthcheck:
+      test: [ "CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/api/health', (r) => { if (r.statusCode !== 200) process.exit(1) })\"" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s             # Vite build runs at docker build time, not startup
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.kith.rule=Host(`kith.example.com`)"
-      - "traefik.http.routers.kith.entrypoints=websecure"
+      - "traefik.http.routers.kith.rule=Host(`${URL:-kith.example.com}`)"
+      - "traefik.http.routers.kith.entrypoints=https"
+      - "traefik.http.routers.kith.tls=true"
       - "traefik.http.routers.kith.tls.certresolver=letsencrypt"
+      - "traefik.http.services.kith.loadbalancer.server.port=3000"
 ```
 
-### Dockerfile
+### Deploying to a New VM
+
+Kith is fully self-contained. To run it on any machine:
+
+**Prerequisites (on the target VM):**
+- Docker + Docker Compose
+- Network access to MariaDB at `DB_HOST` (update `.env` if the IP differs)
+- The Traefik network/proxy already running (labels are ignored if Traefik isn't present — app still works on the exposed port)
+
+**Steps:**
+```bash
+# 1. Copy the kith/ directory, docker-compose.yml, and .env to the VM
+# 2. Update .env with the correct DB_HOST, DB_PASSWORD, JWT_SECRET, URL, etc.
+# 3. Build and start
+docker compose up --build -d
+
+# That's it. The Dockerfile handles the Vite build inside Docker.
+# No npm install, no node, no build tools needed on the host.
+```
+
+**Media storage:** `/srv/kith` on the host is where media files land. If this path doesn't exist, Docker creates it as an empty directory — the app starts fine and media uploads work, they just won't be on the storage layer. Mount the storage layer there if you want persistent/shared media.
+
+**CI/CD (normal flow):** The GitLab pipeline builds the image as `${IMAGE}:${TAG}` (from `.env`), syncs files to the the application server VM, and runs `docker compose up -d`. The `build: .` in `docker-compose.yml` is the fallback for manual deploys.
+
+### Dockerfile (Multi-Stage)
 
 ```dockerfile
-FROM node:lts-alpine
-
-# FFmpeg for video thumbnail generation
-RUN apk add --no-cache ffmpeg
-
+# ── Stage 1: Build frontend ──────────────────────────────
+FROM node:lts-alpine AS builder
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci
 COPY . .
+RUN npm run build          # Vite compiles src/ → dist/
 
+# ── Stage 2: Production runtime ──────────────────────────
+FROM node:lts-alpine
+RUN apk add --no-cache ffmpeg
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --omit=dev
+COPY --from=builder /app/dist ./dist
+COPY server/ ./server/
 EXPOSE 3000
 CMD ["node", "server/index.js"]
+```
+
+Express serves `dist/` as static files and falls back to `dist/index.html` for all non-API routes (SPA routing). The server uses CommonJS so `__dirname` works as-is:
+
+```js
+// server/index.js (production static serving — CommonJS)
+const path = require('path')
+app.use(express.static(path.join(__dirname, '../dist')))
+app.get('*', (req, res) => {
+  if (!req.path.startsWith('/api')) {
+    res.sendFile(path.join(__dirname, '../dist/index.html'))
+  }
+})
+```
+
+### Vite Config (`vite.config.ts`)
+
+The `@/` path alias is **required** — shadcn/ui generates all component imports using `@/components/ui/...` and they will fail to resolve without it. No API proxy is needed: React and Express run in the same container so all `fetch('/api/...')` calls are same-origin, and Traefik handles edge routing. The minimal required config is:
+
+```ts
+// vite.config.ts
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: { '@': path.resolve(__dirname, './src') },  // required by shadcn/ui
+  },
+})
+```
+
+> **Local dev outside Docker (optional):** If you ever run `npm run dev` directly on a dev machine without Docker, Vite serves on port 5173 while Express is on 3000. In that case temporarily add a `server.proxy` block (`'/api' → 'http://localhost:3000'`). Normal workflow is `docker compose up` — no proxy needed.
+
+The `@/` alias must also be mirrored in `tsconfig.json`:
+
+```json
+// tsconfig.json (paths section)
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  }
+}
 ```
 
 ### Import Worker (in-process)
@@ -1359,8 +1379,7 @@ This keeps the Docker setup to a single container with zero additional services.
 
 ### npm Packages
 
-All packages are well-established, actively maintained, and available on npm with no native build dependencies (except `fluent-ffmpeg` which wraps the system FFmpeg binary):
-
+#### Backend (production dependencies)
 | Purpose | Package |
 |---------|---------|
 | HTTP server | `express` |
@@ -1371,9 +1390,32 @@ All packages are well-established, actively maintained, and available on npm wit
 | vCard parsing | `vcard4-parser` |
 | CSV parsing | `csv-parse` |
 | Video thumbnails | `fluent-ffmpeg` |
-| Request body parsing | `express.json()` (built-in) |
 | Environment variables | `dotenv` |
 | CORS | `cors` |
+
+#### Frontend (dev dependencies — compiled into `dist/` at build time, not needed in production runtime)
+| Purpose | Package |
+|---------|---------|
+| Framework | `react`, `react-dom` |
+| Build tool | `vite`, `@vitejs/plugin-react` (or `@vitejs/plugin-react-swc` for faster builds) |
+| TypeScript | `typescript` |
+| TS type defs | `@types/react`, `@types/react-dom`, `@types/node` |
+| Styling | `tailwindcss`, `postcss`, `autoprefixer` |
+| Routing | `react-router-dom` |
+| Server state | `@tanstack/react-query` |
+| Client state | `zustand` |
+| Forms | `react-hook-form`, `@hookform/resolvers`, `zod` |
+| Icons | `lucide-react` |
+| shadcn/ui utils | `class-variance-authority`, `clsx`, `tailwind-merge` |
+| Animation | `tailwindcss-animate` |
+| Toasts | `sonner` (shadcn now uses Sonner — the old `toast` component is deprecated) |
+| Command palette | `cmdk` (dependency of shadcn `Command` component) |
+| Data tables | `@tanstack/react-table` (dependency of shadcn `DataTable`) |
+| Date formatting | `date-fns` (birthday countdowns, timeline dates, event dates, etc.) |
+| Date picker UI | `react-day-picker` (dependency of shadcn `DatePicker` — used for birthday, met_date, event date fields) |
+| List virtualization | `@tanstack/react-virtual` (required for contact list — can reach thousands of entries) |
+
+> **Note on `@radix-ui/*` packages:** When you run `npx shadcn add <component>`, the CLI automatically adds the required `@radix-ui/react-*` primitives to `package.json` as regular `dependencies`. Since these are compiled into `dist/` by Vite, move them to `devDependencies` after running the CLI to keep the Stage 2 Docker image lean. Only Express and DB packages need to remain in `dependencies`.
 
 No ORM — raw SQL with `mysql2` for full control and no magic.
 
@@ -1410,24 +1452,32 @@ PORT=3000
 MEDIA_PATH=/media
 MAX_UPLOAD_SIZE=52428800
 JWT_SECRET=<secret>
+
+# Initial admin user — created on first boot if no users exist
+ADMIN_USERNAME=admin
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=<secret>
 ```
 
 ---
 
 ## Technical Notes
 
-- No React, no Vite, no build step. Vanilla HTML + JS served from `server/public/`
-- The `key` column in preferences/app_settings is a MariaDB reserved word — always use backticks in SQL
-- JS template literals conflict with SQL backticks — use escaped backticks or regular strings
-- `display_name` is auto-built from `first_name + last_name` if not explicitly provided
-- All deletes are soft deletes (set `deleted_at`)
-- Media paths reference the configured storage directory (set in Settings — default `/media` maps to the the storage layer volume mount)
-- Spicy mode availability is gated at the API level by the `spicy_enabled` app setting — when disabled, spicy endpoints return 403 and all queries filter out is_spicy content
-- Audit log writes and change log writes are non-blocking (fire and forget) to avoid slowing down user actions
-- CSS custom properties (variables) power the color scheme — toggling spicy mode swaps only the accent tokens on the app element; surfaces/text/structure are unchanged
-- Import jobs are processed asynchronously via a `worker_threads` worker in the same Node process — the main Express thread enqueues the job and returns immediately
-- The Chrome extension uses a separate long-lived API token (not a session JWT) — stored in `chrome.storage.local`, never expires unless revoked in Settings
-- Match detection runs on every import_staging insert — confidence scoring is rule-based only (no ML)
-- All import_staging records are retained after finalization for audit purposes
-- Video thumbnail generation uses `fluent-ffmpeg` + the system FFmpeg binary (installed in Docker image via `apk add ffmpeg`) — extracts frame at 1s into the video, saves as JPEG alongside the video file
+- **Frontend:** React 19 + TypeScript, built with Vite. The compiled `dist/` is served as static files by Express.
+- **Backend:** Node.js + Express, no ORM — raw SQL with `mysql2`.
+- **Spicy mode state** is stored in Zustand on the client and persisted to the `preferences` table (key: `spicy_visible`) via the preferences API. The state is loaded on app init from `GET /api/preferences`.
+- The `key` column in preferences/app_settings is a MariaDB reserved word — always use backticks in SQL.
+- `display_name` is auto-built from `first_name + last_name` if not explicitly provided.
+- All deletes are soft deletes (set `deleted_at`).
+- Media paths reference the configured storage directory (set in Settings — default `/media` maps to the the storage layer volume mount).
+- Spicy mode availability is gated at the API level by the `spicy_enabled` app setting — when disabled, spicy endpoints return 403 and all queries filter out is_spicy content.
+- Audit log writes and change log writes are non-blocking (fire and forget) to avoid slowing down user actions.
+- Import jobs are processed asynchronously via a `worker_threads` worker in the same Node process — the main Express thread enqueues the job and returns immediately.
+- The Chrome extension uses a separate long-lived API token (not a session JWT) — stored in `chrome.storage.local`, never expires unless revoked in Settings.
+- Match detection runs on every import_staging insert — confidence scoring is rule-based only (no ML).
+- All import_staging records are retained after finalization for audit purposes.
+- Video thumbnail generation uses `fluent-ffmpeg` + the system FFmpeg binary (installed in Docker image via `apk add ffmpeg`) — extracts frame at 1s into the video, saves as JPEG alongside the video file.
 - All users can create and manage their own contacts. Admins additionally can view all users' contacts. Only admins can access Settings.
+- **Phase 3 design:** All custom color tokens, frosted glass effects, typography scale, spacing system, motion standards, and the full spicy mode visual signal system are documented in BRANDING.md. No design customization is required for Phase 1 — shadcn/ui's default dark theme is used throughout.
+- **`components.json` must use `cssVariables: true`** — this is what makes Phase 3 color swapping easy. With CSS variables enabled, all shadcn/ui components reference `--primary`, `--accent`, `--background`, etc. as HSL tokens. In Phase 3, dropping in BRANDING.md's color values simply means overriding those variables in `globals.css` — no component code changes needed. Set `baseColor: "slate"` for Phase 1's neutral dark default.
+- **`uploads/` directory** is runtime-created by `multer` for temp upload staging. It is bind-mounted via `docker-compose.yml` (`./uploads:/app/uploads`) and should be in `.gitignore`. The `uploads/` path inside the container is `/app/uploads`.

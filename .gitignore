@@ -1,7 +1,5 @@
 node_modules/
+dist/
 uploads/
 *.log
 .DS_Store
-client/dist/
-client/node_modules/
-server/node_modules/

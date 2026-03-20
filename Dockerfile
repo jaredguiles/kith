@@ -1,19 +1,18 @@
-# Stage 1: Build React frontend
-FROM node:22-alpine AS frontend-builder
-WORKDIR /build/client
-COPY client/package.json client/package-lock.json ./
+# Stage 1: Build frontend
+FROM node:lts-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
 RUN npm ci
-COPY client/ ./
+COPY . .
 RUN npm run build
 
-# Stage 2: Production server
-FROM node:22-alpine
+# Stage 2: Production runtime
+FROM node:lts-alpine
+RUN apk add --no-cache ffmpeg
 WORKDIR /app
-COPY server/package.json server/package-lock.json ./
+COPY package*.json ./
 RUN npm ci --omit=dev
-COPY server/src/ ./src/
-COPY server/init.sql ./init.sql
-COPY --from=frontend-builder /build/client/dist ./public/
-RUN mkdir -p /media
+COPY --from=builder /app/dist ./dist
+COPY server/ ./server/
 EXPOSE 3000
-CMD ["node", "src/index.js"]
+CMD ["node", "server/index.js"]
