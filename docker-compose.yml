@@ -1,34 +1,26 @@
-version: '3.8'
-
 services:
   kith:
-    image: ${IMAGE}:${TAG}
-    container_name: kith
-    restart: ${RESTART_POLICY}
+    build: .
+    image: ${IMAGE:-kith-local}:${TAG:-latest}
+    container_name: ${SERVICE:-kith}
     ports:
-      - "${EXTERNAL_PORT}:${INTERNAL_PORT}"
-    environment:
-      NODE_ENV: ${NODE_ENV}
-      PORT: ${INTERNAL_PORT}
-      DB_HOST: ${DB_HOST}
-      DB_PORT: ${DB_PORT}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_NAME: ${DB_NAME}
-      JWT_SECRET: ${JWT_SECRET}
-      MEDIA_PATH: ${MEDIA_PATH}
-      MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE}
+      - "${EXTERNAL_PORT:-8084}:3000"
+    env_file:
+      - .env
     volumes:
-      - ./uploads:${MEDIA_PATH}
+      - /srv/kith:/media
+      - ./uploads:/app/uploads
+    restart: ${RESTART_POLICY:-always}
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:${INTERNAL_PORT}${HEALTHCHECK_ENDPOINT}"]
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000/api/health', (r) => { if (r.statusCode !== 200) process.exit(1) })\""]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 20s
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.kith.rule=Host(\`${URL}\`)"
-      - "traefik.http.routers.kith.entrypoints=websecure"
-      - "traefik.http.routers.kith.tls.certresolver=letsencrypt"
-      - "traefik.http.services.kith.loadbalancer.server.port=${INTERNAL_PORT}"
+      traefik.enable: "true"
+      traefik.http.routers.kith.rule: Host(`${URL:-kith.example.com}`)
+      traefik.http.routers.kith.entrypoints: https
+      traefik.http.routers.kith.tls: "true"
+      traefik.http.routers.kith.tls.certresolver: letsencrypt
+      traefik.http.services.kith.loadbalancer.server.port: "3000"
