@@ -26,11 +26,11 @@ async function requireAuth(req, res, next) {
     // Check if it's an extension token
     if (token.startsWith('ext_')) {
       try {
-        const result = await pool.query(
-          "SELECT value FROM app_settings WHERE key = 'extension_token'"
+        const [rows] = await pool.query(
+          "SELECT value FROM app_settings WHERE `key` = 'extension_token'"
         );
 
-        if (result.rows.length > 0 && result.rows[0].value === token) {
+        if (rows.length > 0 && rows[0].value === token) {
           // Extension token is valid, set user as main_admin (id=1)
           req.user = {
             id: 1,

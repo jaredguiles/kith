@@ -15,37 +15,29 @@ router.post('/login', async (req, res) => {
       return res.status(400).json({ error: 'Username and password required' });
     }
 
-    // Look up user by username or email
-    const result = await pool.query(
-      'SELECT id, username, email, password_hash, display_name, role, is_active FROM users WHERE username = $1 OR email = $1',
-      [username]
+    const [rows] = await pool.query(
+      'SELECT id, username, email, password_hash, display_name, role, is_active FROM users WHERE username = ? OR email = ?',
+      [username, username]
     );
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const user = result.rows[0];
+    const user = rows[0];
 
-    // Check if user is active
     if (!user.is_active) {
       return res.status(401).json({ error: 'User account is inactive' });
     }
 
-    // Verify password
     const passwordValid = await bcryptjs.compare(password, user.password_hash);
 
     if (!passwordValid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    // Sign JWT token (expires in 7 days)
     const token = jwt.sign(
-      {
-        id: user.id,
-        username: user.username,
-        role: user.role
-      },
+      { id: user.id, username: user.username, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -69,16 +61,16 @@ router.post('/login', async (req, res) => {
 // GET /api/auth/me
 router.get('/me', requireAuth, async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT id, username, email, display_name, role, is_active, created_at FROM users WHERE id = $1',
+    const [rows] = await pool.query(
+      'SELECT id, username, email, display_name, role, is_active, created_at FROM users WHERE id = ?',
       [req.user.id]
     );
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    res.json(result.rows[0]);
+    res.json(rows[0]);
   } catch (err) {
     console.error('Get current user error:', err);
     res.status(500).json({ error: 'Failed to fetch user' });
@@ -94,32 +86,25 @@ router.put('/password', requireAuth, async (req, res) => {
       return res.status(400).json({ error: 'Current and new password required' });
     }
 
-    // Get current user's password hash
-    const result = await pool.query(
-      'SELECT password_hash FROM users WHERE id = $1',
+    const [rows] = await pool.query(
+      'SELECT password_hash FROM users WHERE id = ?',
       [req.user.id]
     );
 
-    if (result.rows.length === 0) {
+    if (rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Verify current password
-    const passwordValid = await bcryptjs.compare(
-      current_password,
-      result.rows[0].password_hash
-    );
+    const passwordValid = await bcryptjs.compare(current_password, rows[0].password_hash);
 
     if (!passwordValid) {
       return res.status(401).json({ error: 'Current password is incorrect' });
     }
 
-    // Hash new password
     const hashedPassword = await bcryptjs.hash(new_password, 10);
 
-    // Update password
     await pool.query(
-      'UPDATE users SET password_hash = $1 WHERE id = $2',
+      'UPDATE users SET password_hash = ? WHERE id = ?',
       [hashedPassword, req.user.id]
     );
 
