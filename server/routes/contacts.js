@@ -272,7 +272,7 @@ router.get('/', requireAuth, async (req, res) => {
       FROM contacts c
       LEFT JOIN contact_tags ct ON c.id = ct.contact_id
       LEFT JOIN tags t ON ct.tag_id = t.id
-      LEFT JOIN shared_contacts sc ON c.id = sc.contact_id AND sc.user_id = ?
+      LEFT JOIN shared_contacts sc ON c.id = sc.contact_id AND sc.shared_with_user_id = ?
       WHERE c.deleted_at IS NULL
     `;
     let params = [req.user.id];
