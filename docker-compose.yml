@@ -1,5 +1,5 @@
 services:
-  Kith:
+  kith:
     build: .
     container_name: ${SERVICE}
     env_file:
