@@ -25,6 +25,8 @@ services:
       - "traefik.http.routers.kith.entrypoints=https"
       - "traefik.http.routers.kith.tls=true"
       - "traefik.http.routers.kith.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.kith.tls.domains[0].main=*.example.com"
+      - "traefik.http.routers.kith.tls.domains[0].sans=example.com"
       - "traefik.http.services.kith.loadbalancer.server.port=${INTERNAL_PORT}"
 
 networks:
