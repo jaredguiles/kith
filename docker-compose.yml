@@ -28,6 +28,7 @@ services:
       - "traefik.http.routers.kith.tls.domains[0].main=*.example.com"
       - "traefik.http.routers.kith.tls.domains[0].sans=example.com"
       - "traefik.http.services.kith.loadbalancer.server.port=${INTERNAL_PORT}"
+      - "traefik.http.routers.kith.middlewares=authentik-forwardauth@docker"
 
 networks:
   kith_network:
