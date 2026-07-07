@@ -7,6 +7,9 @@ services:
       - .secrets
     ports:
       - "${EXTERNAL_PORT}:${INTERNAL_PORT}"
+    volumes:
+      - /srv/kith:/media                       # the storage layer media mount (photos/videos + thumbnails)
+      - /opt/kith/uploads:/app/uploads   # Temp import-upload staging
     networks:
       - kith_network
     restart: ${RESTART_POLICY:-always}
@@ -18,14 +21,22 @@ services:
       start_period: 30s
     labels:
       - "traefik.enable=true"
+      # UI shell router — behind Authentik forwardauth (outer wall, D13)
       - "traefik.http.routers.kith.rule=Host(`${URL}`)"
       - "traefik.http.routers.kith.entrypoints=https"
       - "traefik.http.routers.kith.tls=true"
       - "traefik.http.routers.kith.tls.certresolver=letsencrypt"
       - "traefik.http.routers.kith.tls.domains[0].main=*.example.com"
       - "traefik.http.routers.kith.tls.domains[0].sans=example.com"
-      - "traefik.http.services.kith.loadbalancer.server.port=${INTERNAL_PORT}"
       - "traefik.http.routers.kith.middlewares=authentik-forwardauth@docker"
+      # API router — exempt from forwardauth (302s break SPA fetch; Kith JWT is
+      # the auth boundary per D13). Higher priority wins over the shell router.
+      - "traefik.http.routers.kith-api.rule=Host(`${URL}`) && PathPrefix(`/api`)"
+      - "traefik.http.routers.kith-api.entrypoints=https"
+      - "traefik.http.routers.kith-api.tls=true"
+      - "traefik.http.routers.kith-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.kith-api.priority=100"
+      - "traefik.http.services.kith.loadbalancer.server.port=${INTERNAL_PORT}"
     logging:
       driver: json-file
       options:

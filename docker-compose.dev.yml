@@ -1,0 +1,45 @@
+# Development override — throwaway local MariaDB.
+# the database server (db-host) is PRODUCTION ONLY and is never used for dev/test (D12).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# Dev DB: kith / kith / kith-dev-password on localhost:33061
+
+services:
+  kith:
+    env_file:
+      - .env
+      - .env.dev
+    environment:
+      - NODE_ENV=development
+    depends_on:
+      kith-dev-db:
+        condition: service_healthy
+    volumes:
+      - kith-dev-media:/media
+      - kith-dev-uploads:/app/uploads
+    labels: !override
+      - "traefik.enable=false"
+
+  kith-dev-db:
+    image: mariadb:11
+    container_name: kith-dev-db
+    environment:
+      - MARIADB_ROOT_PASSWORD=kith-dev-root
+      - MARIADB_DATABASE=kith
+      - MARIADB_USER=kith
+      - MARIADB_PASSWORD=kith-dev-password
+    ports:
+      - "33061:3306"
+    networks:
+      - kith_network
+    healthcheck:
+      test: [ "CMD", "healthcheck.sh", "--connect", "--innodb_initialized" ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  kith-dev-media:
+  kith-dev-uploads:
