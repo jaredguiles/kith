@@ -76,6 +76,10 @@ app.use('/api/contacts', require('./routes/contacts'));
 const { contactSatellites, satelliteItems } = require('./routes/satellites');
 app.use('/api/contacts/:id', contactSatellites);
 app.use('/api', satelliteItems);
+const { tagsRouter, contactTags } = require('./routes/tags');
+app.use('/api/tags', tagsRouter);
+app.use('/api/contacts/:id/tags', contactTags);
+app.use('/api/groups', require('./routes/groups'));
 
 // ---------------------------------------------------------------------------
 // Static SPA (no build step — vanilla files in server/public)
