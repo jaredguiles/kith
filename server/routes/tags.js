@@ -35,9 +35,16 @@ router.post('/', async (req, res, next) => {
       [String(name).trim(), owner]
     );
     if (dupes.length) return res.status(409).json({ error: 'A tag with that name already exists' });
-    const result = await query('INSERT INTO tags (name, color, owner_user_id) VALUES (?, ?, ?)', [
-      String(name).trim(), color || '#7c5bf5', owner,
-    ]);
+    let result;
+    try {
+      result = await query('INSERT INTO tags (name, color, owner_user_id) VALUES (?, ?, ?)', [
+        String(name).trim(), color || '#7c5bf5', owner,
+      ]);
+    } catch (err) {
+      // check-then-insert race: unique index wins — surface as conflict, not 500
+      if (err && err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'A tag with that name already exists' });
+      throw err;
+    }
     auditWrite(req.user.id, null, 'create', 'tag', result.insertId, null, { name, color }, `Created tag ${name}`);
     res.status(201).json({ id: result.insertId });
   } catch (err) { next(err); }
@@ -45,6 +52,7 @@ router.post('/', async (req, res, next) => {
 
 async function loadTag(req, res, next) {
   const id = Number(req.params.tagId ?? req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Tag not found' });
   const rows = await query('SELECT * FROM tags WHERE id = ?', [id]);
   if (rows.length === 0) return res.status(404).json({ error: 'Tag not found' });
   const tag = rows[0];
@@ -90,8 +98,14 @@ contactTags.use(requireAuth);
 contactTags.post('/:tagId', requireContactAccess('id', { edit: true }), async (req, res, next) => {
   try {
     const tagId = Number(req.params.tagId);
-    const rows = await query('SELECT * FROM tags WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)', [tagId, req.user.id]);
-    if (rows.length === 0 && !isAdmin(req.user)) return res.status(404).json({ error: 'Tag not found' });
+    if (!Number.isInteger(tagId) || tagId <= 0) return res.status(404).json({ error: 'Tag not found' });
+    const rows = await query('SELECT * FROM tags WHERE id = ?', [tagId]);
+    // nonexistent tag is 404 for everyone (admin included) — otherwise the FK insert 500s
+    if (rows.length === 0) return res.status(404).json({ error: 'Tag not found' });
+    const tag = rows[0];
+    if (tag.owner_user_id !== null && tag.owner_user_id !== req.user.id && !isAdmin(req.user)) {
+      return res.status(404).json({ error: 'Tag not found' });
+    }
     await query('INSERT IGNORE INTO contact_tags (contact_id, tag_id) VALUES (?, ?)', [req.contact.id, tagId]);
     rebuildSearchIndexAsync(req.contact.id);
     res.json({ ok: true });
@@ -100,7 +114,9 @@ contactTags.post('/:tagId', requireContactAccess('id', { edit: true }), async (r
 
 contactTags.delete('/:tagId', requireContactAccess('id', { edit: true }), async (req, res, next) => {
   try {
-    await query('DELETE FROM contact_tags WHERE contact_id = ? AND tag_id = ?', [req.contact.id, Number(req.params.tagId)]);
+    const tagId = Number(req.params.tagId);
+    if (!Number.isInteger(tagId) || tagId <= 0) return res.status(404).json({ error: 'Tag not found' });
+    await query('DELETE FROM contact_tags WHERE contact_id = ? AND tag_id = ?', [req.contact.id, tagId]);
     rebuildSearchIndexAsync(req.contact.id);
     res.json({ ok: true });
   } catch (err) { next(err); }

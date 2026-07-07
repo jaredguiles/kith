@@ -19,6 +19,7 @@ const parsers = {
   csv: require('./parsers/csv'),
 };
 const { findBestMatch } = require('./matcher');
+const { encryptField } = require('../lib/crypto');
 
 let pool;
 
@@ -99,6 +100,9 @@ async function parseFiles(job, filePaths) {
 async function processJob(job) {
   console.log(`[import-worker] processing job ${job.id} (${job.source_platform})`);
   await q("UPDATE import_jobs SET status = 'processing' WHERE id = ?", [job.id]);
+  // requeued crash-recovery jobs may carry partial staging rows — clear them
+  // so a re-parse doesn't duplicate records
+  await q('DELETE FROM import_staging WHERE import_job_id = ?', [job.id]);
 
   try {
     const filePaths = job.file_paths ? (typeof job.file_paths === 'string' ? JSON.parse(job.file_paths) : job.file_paths) : [];
@@ -107,6 +111,7 @@ async function processJob(job) {
     if (!records.length) {
       const msg = errors.length ? errors.slice(0, 5).join('; ') : 'No records found in the uploaded file(s)';
       await q("UPDATE import_jobs SET status = 'error', error_message = ? WHERE id = ?", [msg.slice(0, 2000), job.id]);
+      cleanupJobFiles(job);
       await notify(job.user_id, 'import_complete',
         `${platformLabel(job.source_platform)} import failed`, msg.slice(0, 300), '#/review');
       return;
@@ -122,10 +127,16 @@ async function processJob(job) {
         rec.media = (rec.media || []).map((m) => ({ ...m, is_spicy: true }));
       }
       const match = findBestMatch(rec, candidates);
+      // Spicy sources: never stage cleartext — encrypt the normalized JSON
+      // (readers decrypt based on the job's is_spicy_source flag). The token
+      // is wrapped via JSON.stringify so the JSON column stays valid.
+      const payload = job.is_spicy_source
+        ? JSON.stringify(encryptField(JSON.stringify(rec)))
+        : JSON.stringify(rec);
       await q(
         `INSERT INTO import_staging (import_job_id, source_platform, source_id, normalized_data, suggested_match_contact_id, match_confidence)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [job.id, job.source_platform, rec.source_id || null, JSON.stringify(rec),
+        [job.id, job.source_platform, rec.source_id || null, payload,
          match ? match.contactId : null, match ? match.confidence : null]
       );
       processed += 1;
@@ -151,8 +162,19 @@ async function processJob(job) {
   } catch (err) {
     console.error(`[import-worker] job ${job.id} failed:`, err.message);
     await q("UPDATE import_jobs SET status = 'error', error_message = ? WHERE id = ?", [String(err.message).slice(0, 2000), job.id]);
+    cleanupJobFiles(job);
     await notify(job.user_id, 'import_complete', `${platformLabel(job.source_platform)} import failed`, String(err.message).slice(0, 300), '#/review');
   }
+}
+
+/** Best-effort removal of a job's uploaded files (mirrors routes/import.js cleanup). */
+function cleanupJobFiles(job) {
+  try {
+    const paths = job.file_paths
+      ? (typeof job.file_paths === 'string' ? JSON.parse(job.file_paths) : job.file_paths)
+      : [];
+    for (const p of paths) fs.unlink(p, () => {});
+  } catch { /* ignore */ }
 }
 
 function platformLabel(p) {
@@ -179,5 +201,37 @@ async function poll() {
   }
 }
 
+/**
+ * Crash recovery: jobs left in 'processing' by a previous worker/process crash
+ * would otherwise be stuck forever. Single-worker design (one worker thread,
+ * one poll loop) makes a blanket requeue at startup safe — except jobs claimed
+ * by a finalize in flight (finalize reuses 'processing'; those have staging
+ * rows with review decisions and must return to 'awaiting_review', not be
+ * re-parsed).
+ */
+async function recoverStuckJobs() {
+  try {
+    const [reviewed] = await getPool().execute(
+      `UPDATE import_jobs j SET j.status = 'awaiting_review'
+       WHERE j.status = 'processing' AND EXISTS (
+         SELECT 1 FROM import_staging s
+         WHERE s.import_job_id = j.id
+           AND (s.reviewed_at IS NOT NULL OR s.final_contact_id IS NOT NULL)
+       )`
+    );
+    if (reviewed.affectedRows > 0) {
+      console.log(`[import-worker] restored ${reviewed.affectedRows} interrupted finalize job(s) to 'awaiting_review'`);
+    }
+    const [requeued] = await getPool().execute(
+      "UPDATE import_jobs SET status = 'queued' WHERE status = 'processing'"
+    );
+    if (requeued.affectedRows > 0) {
+      console.log(`[import-worker] requeued ${requeued.affectedRows} job(s) stuck in 'processing' from a previous run`);
+    }
+  } catch (err) {
+    console.error('[import-worker] stuck-job recovery failed:', err.message);
+  }
+}
+
 console.log('[import-worker] started');
-poll();
+recoverStuckJobs().then(poll);

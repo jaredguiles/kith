@@ -17,6 +17,18 @@ function normName(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Comparison key for phones: last 10 digits. Makes '+15551234567' and
+ * '5551234567' compare equal (country-code prefix differences). Stored
+ * normalized form is unchanged — this is matcher-comparison only.
+ */
+function phoneMatchKey(v) {
+  const norm = normalizePhone(v);
+  if (!norm) return null;
+  const digits = norm.replace(/\D/g, '');
+  return digits.slice(-10);
+}
+
 /** Levenshtein-based similarity 0..1. */
 function nameSimilarity(a, b) {
   a = normName(a); b = normName(b);
@@ -53,9 +65,9 @@ function scoreCandidate(record, candidate) {
   const candEmails = new Set([contact.email, ...emails.map((e) => e.email)].map(normalizeEmail).filter(Boolean));
   for (const e of recEmails) if (candEmails.has(e)) { best = Math.max(best, 0.95); break; }
 
-  // exact phone
-  const recPhones = new Set((record.phones || []).map((p) => normalizePhone(p.phone)).filter(Boolean));
-  const candPhones = new Set([contact.phone, ...phones.map((p) => p.phone)].map(normalizePhone).filter(Boolean));
+  // exact phone (compared on last-10-digit suffix — tolerates +1 prefixes)
+  const recPhones = new Set((record.phones || []).map((p) => phoneMatchKey(p.phone)).filter(Boolean));
+  const candPhones = new Set([contact.phone, ...phones.map((p) => p.phone)].map(phoneMatchKey).filter(Boolean));
   for (const p of recPhones) if (candPhones.has(p)) { best = Math.max(best, 0.95); break; }
 
   // social link (platform + username)
@@ -99,4 +111,4 @@ function findBestMatch(record, candidates, threshold = 0.5) {
   return best;
 }
 
-module.exports = { scoreCandidate, findBestMatch, nameSimilarity };
+module.exports = { scoreCandidate, findBestMatch, nameSimilarity, phoneMatchKey };

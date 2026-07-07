@@ -26,19 +26,28 @@ function normalizeEmail(v) {
   return s.toLowerCase();
 }
 
-/** Accepts many date shapes → "YYYY-MM-DD" or null. */
+/** Accepts many date shapes → "YYYY-MM-DD" or null. Range-validates month/day. */
 function normalizeDate(v) {
   if (!v) return null;
   if (v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10);
   const s = String(v).trim();
+  const build = (y, mo, d) => {
+    const yn = Number(y), mn = Number(mo), dn = Number(d);
+    if (!(mn >= 1 && mn <= 12) || !(dn >= 1 && dn <= 31) || !(yn >= 1 && yn <= 9999)) return null;
+    return `${String(yn).padStart(4, '0')}-${String(mn).padStart(2, '0')}-${String(dn).padStart(2, '0')}`;
+  };
   let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
-  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); // MM/DD/YYYY
-  if (m) return `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+  if (m) return build(m[1], m[2], m[3]);
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); // MM/DD/YYYY (DD/MM when first field > 12)
+  if (m) {
+    let [, a, b, y] = m;
+    if (Number(a) > 12 && Number(b) <= 12) [a, b] = [b, a]; // ambiguous → DD/MM heuristic
+    return build(y, a, b);
+  }
   m = s.match(/^(\d{8})$/); // vCard BDAY 19900415
-  if (m) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
-  m = s.match(/^--(\d{2})-?(\d{2})$/); // vCard year-less --0415
-  if (m) return `1900-${m[1]}-${m[2]}`;
+  if (m) return build(s.slice(0, 4), s.slice(4, 6), s.slice(6, 8));
+  m = s.match(/^--(\d{2})-?(\d{2})$/); // vCard year-less --0415 — can't represent without a year
+  if (m) return null;
   const t = Date.parse(s);
   if (!isNaN(t)) return new Date(t).toISOString().slice(0, 10);
   return null;

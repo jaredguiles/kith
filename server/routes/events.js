@@ -10,6 +10,8 @@ const { query, withTransaction } = require('../database/connection');
 const { requireAuth, contactAccess, isAdmin } = require('../middleware/auth');
 const { auditWrite } = require('../lib/audit');
 const { spicyVisible } = require('./contacts');
+const { isValidDate } = require('../lib/contacts');
+const { decryptField } = require('../lib/crypto');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -44,8 +46,10 @@ router.get('/', async (req, res, next) => {
     if (upcoming === '1') where.push("e.starts_at >= NOW() AND e.status = 'upcoming'");
     if (past === '1') where.push('(e.starts_at < NOW() OR e.status IN (\'completed\',\'cancelled\'))');
     if (contact_id) {
+      const cid = Number(contact_id);
+      if (!Number.isInteger(cid) || cid <= 0) return res.status(400).json({ error: 'Invalid contact_id' });
       where.push('EXISTS (SELECT 1 FROM event_contacts ec WHERE ec.event_id = e.id AND ec.contact_id = ?)');
-      params.push(Number(contact_id));
+      params.push(cid);
     }
 
     const rows = await query(
@@ -76,12 +80,22 @@ router.get('/:id', loadEvent, async (req, res, next) => {
       [req.event.id]
     );
     const media = await query(
-      `SELECT m.id, m.type, m.file_path, m.thumbnail_path, m.caption, m.is_spicy FROM event_media em
+      `SELECT m.id, m.type, m.thumbnail_path, m.caption, m.is_spicy FROM event_media em
        JOIN media_assets m ON m.id = em.media_id AND m.deleted_at IS NULL WHERE em.event_id = ?
        ${(await spicyVisible(req.user)) ? '' : 'AND m.is_spicy = 0'}`,
       [req.event.id]
     );
-    res.json({ event: req.event, contacts, media });
+    res.json({
+      event: req.event,
+      contacts,
+      // never expose fs paths — mirror the media list route shape
+      media: media.map((m) => ({
+        id: m.id, type: m.type,
+        caption: m.is_spicy ? decryptField(m.caption) : m.caption,
+        is_spicy: m.is_spicy,
+        has_thumbnail: Boolean(m.thumbnail_path),
+      })),
+    });
   } catch (err) { next(err); }
 });
 
@@ -90,6 +104,12 @@ router.post('/', async (req, res, next) => {
   try {
     const { title, type, description, location, starts_at, ends_at, status, is_spicy, contact_ids } = req.body || {};
     if (!title || !String(title).trim()) return res.status(400).json({ error: 'Title is required' });
+    if (!starts_at) return res.status(400).json({ error: 'Start date is required' });
+    if (!isValidDate(starts_at)) return res.status(400).json({ error: 'Invalid start date' });
+    if (ends_at != null && ends_at !== '' && !isValidDate(ends_at)) return res.status(400).json({ error: 'Invalid end date' });
+
+    const cids = [...new Set((contact_ids || []).map(Number))];
+    if (cids.some((c) => !Number.isInteger(c) || c <= 0)) return res.status(400).json({ error: 'Invalid contact id in contact_ids' });
 
     let spicyFlag = is_spicy ? 1 : 0;
     if (spicyFlag && !(await spicyVisible(req.user))) spicyFlag = 0;
@@ -99,11 +119,11 @@ router.post('/', async (req, res, next) => {
         `INSERT INTO events (owner_user_id, title, type, description, location, is_spicy, starts_at, ends_at, status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [req.user.id, String(title).trim(), EVENT_TYPES.includes(type) ? type : 'other',
-         description || null, location || null, spicyFlag, starts_at || null, ends_at || null,
+         description || null, location || null, spicyFlag, starts_at, ends_at || null,
          ['upcoming', 'completed', 'cancelled'].includes(status) ? status : 'upcoming']
       );
       const eventId = r.insertId;
-      for (const cid of [...new Set((contact_ids || []).map(Number))]) {
+      for (const cid of cids) {
         const found = await contactAccess(req.user, cid);
         if (found) await conn.execute('INSERT IGNORE INTO event_contacts (event_id, contact_id) VALUES (?, ?)', [eventId, cid]);
       }
@@ -126,8 +146,14 @@ router.put('/:id', loadEvent, async (req, res, next) => {
     if ('type' in b) set('type', EVENT_TYPES.includes(b.type) ? b.type : 'other');
     if ('description' in b) set('description', b.description || null);
     if ('location' in b) set('location', b.location || null);
-    if ('starts_at' in b) set('starts_at', b.starts_at || null);
-    if ('ends_at' in b) set('ends_at', b.ends_at || null);
+    if ('starts_at' in b) {
+      if (b.starts_at && !isValidDate(b.starts_at)) return res.status(400).json({ error: 'Invalid start date' });
+      set('starts_at', b.starts_at || null);
+    }
+    if ('ends_at' in b) {
+      if (b.ends_at && !isValidDate(b.ends_at)) return res.status(400).json({ error: 'Invalid end date' });
+      set('ends_at', b.ends_at || null);
+    }
     if ('status' in b && ['upcoming', 'completed', 'cancelled'].includes(b.status)) set('status', b.status);
     if ('followup_notes' in b) set('followup_notes', b.followup_notes || null);
     if ('rating' in b) set('rating', b.rating == null ? null : Math.max(1, Math.min(5, Number(b.rating) || 1)));
@@ -144,6 +170,7 @@ router.put('/:id', loadEvent, async (req, res, next) => {
 
     if (Array.isArray(b.contact_ids)) {
       const wanted = [...new Set(b.contact_ids.map(Number))];
+      if (wanted.some((c) => !Number.isInteger(c) || c <= 0)) return res.status(400).json({ error: 'Invalid contact id in contact_ids' });
       const current = (await query('SELECT contact_id FROM event_contacts WHERE event_id = ?', [req.event.id])).map((r) => r.contact_id);
       for (const cid of wanted.filter((c) => !current.includes(c))) {
         const found = await contactAccess(req.user, cid);
@@ -172,6 +199,7 @@ router.delete('/:id', loadEvent, async (req, res, next) => {
 router.post('/:id/media/:mediaId', loadEvent, async (req, res, next) => {
   try {
     const mediaId = Number(req.params.mediaId);
+    if (!Number.isInteger(mediaId) || mediaId <= 0) return res.status(404).json({ error: 'Media not found' });
     const rows = await query('SELECT * FROM media_assets WHERE id = ? AND deleted_at IS NULL', [mediaId]);
     if (!rows.length) return res.status(404).json({ error: 'Media not found' });
     const m = rows[0];
@@ -183,7 +211,9 @@ router.post('/:id/media/:mediaId', loadEvent, async (req, res, next) => {
 
 router.delete('/:id/media/:mediaId', loadEvent, async (req, res, next) => {
   try {
-    await query('DELETE FROM event_media WHERE event_id = ? AND media_id = ?', [req.event.id, Number(req.params.mediaId)]);
+    const mediaId = Number(req.params.mediaId);
+    if (!Number.isInteger(mediaId) || mediaId <= 0) return res.status(404).json({ error: 'Media not found' });
+    await query('DELETE FROM event_media WHERE event_id = ? AND media_id = ?', [req.event.id, mediaId]);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

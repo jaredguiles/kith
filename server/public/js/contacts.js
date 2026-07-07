@@ -29,8 +29,14 @@ const listState = {
 // ------------------------------------------------------------- list page
 async function renderContacts(el, params) {
   if (params.id) return renderContactDetail(el, params.id);
-  if (params.group) listState.group = params.group;
-  if (params.tag) listState.tag = params.tag;
+  // Filters derive strictly from the route params: plain #/contacts clears
+  // them, and group/tag are mutually exclusive (never silently ANDed).
+  const nextGroup = params.group || '';
+  const nextTag = params.tag || '';
+  if (nextGroup !== listState.group || nextTag !== listState.tag) listState.page = 1;
+  listState.group = nextGroup;
+  listState.tag = nextTag;
+  if (!nextGroup && !nextTag && listState.search) { listState.search = ''; listState.page = 1; }
 
   el.innerHTML = `
   <div class="page-inner">
@@ -111,12 +117,21 @@ function renderFilterControls(el) {
     pop.addEventListener('click', (e) => {
       const t = e.target.closest('[data-tag], [data-group], [data-clear]');
       if (!t) return;
-      listState.tag = t.dataset.tag || '';
-      listState.group = t.dataset.group || '';
-      listState.page = 1;
       pop.remove();
-      renderFilterControls(el);
-      loadTable(el);
+      // Keep the URL authoritative: renderContacts derives filters from params.
+      const target = t.dataset.group ? `/contacts?group=${encodeURIComponent(t.dataset.group)}`
+        : t.dataset.tag ? `/contacts?tag=${encodeURIComponent(t.dataset.tag)}`
+        : '/contacts';
+      if (location.hash.replace(/^#/, '') === target) {
+        // hash unchanged → no hashchange event; refresh in place
+        listState.tag = t.dataset.tag || '';
+        listState.group = t.dataset.group || '';
+        listState.page = 1;
+        renderFilterControls(el);
+        loadTable(el);
+      } else {
+        navigate(target);
+      }
     });
   });
 }
@@ -127,14 +142,22 @@ async function loadTable(el) {
   const pagerEl = el.querySelector('#contacts-pager');
   if (!tableEl) return;
 
-  const data = await api.get('/api/contacts' + qs({
-    search: listState.search || undefined,
-    tag: listState.tag || undefined,
-    group: listState.group || undefined,
-    favorites: listState.favorites ? 1 : undefined,
-    sort: listState.sort, sortDir: listState.sortDir,
-    page: listState.page, limit: listState.limit,
-  }));
+  let data;
+  try {
+    data = await api.get('/api/contacts' + qs({
+      search: listState.search || undefined,
+      tag: listState.tag || undefined,
+      group: listState.group || undefined,
+      favorites: listState.favorites ? 1 : undefined,
+      sort: listState.sort, sortDir: listState.sortDir,
+      page: listState.page, limit: listState.limit,
+    }));
+  } catch (err) {
+    countEl.textContent = '';
+    pagerEl.innerHTML = '';
+    tableEl.innerHTML = emptyState('alert-circle', "Couldn't load contacts", err?.message || 'Check your connection and try again.');
+    return;
+  }
 
   countEl.textContent = `${data.total} ${data.total === 1 ? 'person' : 'people'}`;
 
@@ -174,9 +197,10 @@ async function loadTable(el) {
         <td>${c.rating ? starRating(c.rating) : '<span class="td-muted">—</span>'}</td>
         <td class="td-muted">${timeAgo(c.updated_at)}</td>
         <td>
+          ${c.is_shared_in ? '' : `
           <button class="btn btn-icon" data-fav="${c.id}" aria-label="${c.is_favorite ? 'Unfavorite' : 'Favorite'}">
             <span class="star-rating ${c.is_favorite ? '' : 'readonly'}"><span class="star ${c.is_favorite ? 'filled' : ''}">${icon('star')}</span></span>
-          </button>
+          </button>`}
         </td>
       </tr>`).join('')}
     </tbody>
@@ -261,9 +285,10 @@ export async function renderContactDetail(el, id) {
           </div>
         </div>
         <div class="flex gap-1">
+          ${access !== 'shared' ? `
           <button class="btn btn-icon lg" data-action="fav" aria-label="Toggle favorite">
             <span class="star-rating"><span class="star ${c.is_favorite ? 'filled' : ''}">${icon('star')}</span></span>
-          </button>
+          </button>` : ''}
           ${canEdit ? `<button class="btn btn-icon lg" data-action="edit" aria-label="Edit">${icon('edit')}</button>` : ''}
           ${access !== 'shared' ? `<button class="btn btn-icon lg" data-action="merge" aria-label="Merge">${icon('merge')}</button>` : ''}
           ${access !== 'shared' ? `<button class="btn btn-icon lg" data-action="share" aria-label="Share">${icon('share')}</button>` : ''}
@@ -301,6 +326,16 @@ export async function renderContactDetail(el, id) {
             ${canEdit && !isBasic ? `<button class="btn btn-ghost btn-sm" data-action="add-contact-method">${icon('plus')} Add</button>` : ''}
           </div>
           <div id="contact-methods">
+            ${c.email && !emails.some((e) => e.email === c.email) ? `
+              <div class="flex-between" style="padding:5px 0">
+                <span class="flex items-center gap-2 text-sm">${icon('mail')} ${esc(c.email)} <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span></span>
+                <span class="text-micro text-muted">primary</span>
+              </div>` : ''}
+            ${c.phone && !phones.some((p) => p.phone === c.phone) ? `
+              <div class="flex-between" style="padding:5px 0">
+                <span class="flex items-center gap-2 text-sm">${icon('phone')} ${esc(c.phone)} <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span></span>
+                <span class="text-micro text-muted">primary</span>
+              </div>` : ''}
             ${emails.map((e) => `
               <div class="flex-between" style="padding:5px 0" data-sat="emails" data-sat-id="${e.id}">
                 <span class="flex items-center gap-2 text-sm">${icon('mail')} ${esc(e.email)} ${e.is_primary ? '<span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>' : ''}</span>
@@ -319,7 +354,7 @@ export async function renderContactDetail(el, id) {
                 <span class="flex items-center gap-2"><span class="text-micro text-muted">${esc(a.label || '')}</span>
                 ${canEdit && !isBasic ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}</span>
               </div>`).join('')}
-            ${!emails.length && !phones.length && !(addresses || []).length ? '<div class="text-sm text-muted" style="padding:6px 0">No contact details yet.</div>' : ''}
+            ${!c.email && !c.phone && !emails.length && !phones.length && !(addresses || []).length ? '<div class="text-sm text-muted" style="padding:6px 0">No contact details yet.</div>' : ''}
           </div>
         </div>
 

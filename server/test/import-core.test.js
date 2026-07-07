@@ -26,8 +26,22 @@ test('normalizeDate accepts multiple shapes', () => {
   assert.equal(normalizeDate('1990-04-15'), '1990-04-15');
   assert.equal(normalizeDate('04/15/1990'), '1990-04-15');
   assert.equal(normalizeDate('19900415'), '1990-04-15');
-  assert.equal(normalizeDate('--0415'), '1900-04-15');
   assert.equal(normalizeDate('garbage'), null);
+});
+
+test('normalizeDate validates ranges and handles DD/MM heuristic', () => {
+  // first field > 12 → must be DD/MM
+  assert.equal(normalizeDate('31/12/1990'), '1990-12-31');
+  // impossible in either interpretation → null (drop birthday, keep record)
+  assert.equal(normalizeDate('13/13/2020'), null);
+  // impossible 8-digit vCard BDAY → null
+  assert.equal(normalizeDate('19901301'), null);
+  assert.equal(normalizeDate('19900132'), null);
+  // year-less vCard --MMDD can't be represented → null (no fabricated 1900)
+  assert.equal(normalizeDate('--0415'), null);
+  assert.equal(normalizeDate('--04-15'), null);
+  // impossible ISO-ish → null
+  assert.equal(normalizeDate('1990-31-12'), null);
 });
 
 test('splitName splits first/last', () => {
@@ -109,6 +123,45 @@ test('nameSimilarity is symmetric and bounded', () => {
   assert.equal(nameSimilarity('John Doe', 'john doe'), 1);
   const s = nameSimilarity('Jonathan Doe', 'Jon Doe');
   assert.ok(s > 0 && s < 1);
+});
+
+test('phone matching tolerates +1 country-code prefix', () => {
+  const { phoneMatchKey } = require('../import/matcher');
+  assert.equal(phoneMatchKey('+1 (555) 123-4567'), phoneMatchKey('555-123-4567'));
+  assert.equal(phoneMatchKey('+15551234567'), '5551234567');
+  assert.equal(phoneMatchKey('bad'), null);
+  // matcher: record phone '5551234567' vs contact phone '+15551234567' → 0.95
+  const rec = makeRecord({ display_name: 'X', phones: [{ label: 'mobile', phone: '555-123-4567' }] });
+  const c = candidate({ contact: { display_name: 'Someone Else', email: null, location: null } });
+  assert.equal(scoreCandidate(rec, c), 0.95);
+});
+
+// ---------------------------------------------------------------- ziputil
+const { deepFixEncoding } = require('../import/ziputil');
+
+test('deepFixEncoding repairs mojibake but leaves valid UTF-8 alone', () => {
+  assert.equal(deepFixEncoding('Zo\u00C3\u00AB'), 'Zoë');        // 'ZoÃ«' → fixed
+  assert.equal(deepFixEncoding('Zoë'), 'Zoë');                    // already valid → unchanged
+  assert.equal(deepFixEncoding('中村'), '中村');                   // CJK → unchanged
+  assert.equal(deepFixEncoding('😀'), '😀');                      // emoji → unchanged
+  assert.equal(deepFixEncoding('plain ascii'), 'plain ascii');
+  // nested structures
+  assert.deepEqual(deepFixEncoding({ a: ['Zo\u00C3\u00AB', '中村'] }), { a: ['Zoë', '中村'] });
+  // classic UTF-8-read-as-latin1 artifact for U+2019 (’): E2 80 99 → â + C1 controls
+  assert.equal(deepFixEncoding('don\u00E2\u0080\u0099t'), 'don\u2019t');
+  // cp1252-flavored mojibake (â€™) is NOT reversible via latin1 — left unchanged
+  assert.equal(deepFixEncoding('don\u00E2\u20AC\u2122t'), 'don\u00E2\u20AC\u2122t');
+});
+
+// ---------------------------------------------------------------- vcard QP
+const { decodeQP } = require('../import/parsers/vcard');
+
+test('decodeQP decodes multi-byte UTF-8 sequences', () => {
+  assert.equal(decodeQP('=C3=A9'), 'é');
+  assert.equal(decodeQP('Andr=C3=A9'), 'André');
+  assert.equal(decodeQP('=E4=B8=AD=E6=9D=91'), '中村');
+  assert.equal(decodeQP('plain'), 'plain');
+  assert.equal(decodeQP('a=ZZb'), 'a=ZZb'); // invalid escape left as-is
 });
 
 // ---------------------------------------------------------------- crypto

@@ -20,11 +20,23 @@ function unfold(text) {
   return text.replace(/\r\n[ \t]/g, '').replace(/\n[ \t]/g, '').replace(/=\r?\n/g, ''); // also QP soft breaks
 }
 
-/** Decode quoted-printable when ENCODING=QUOTED-PRINTABLE (vCard 2.1). */
+/** Decode quoted-printable when ENCODING=QUOTED-PRINTABLE (vCard 2.1).
+ *  Decodes =XX sequences into a byte buffer and interprets the whole value
+ *  as UTF-8 once, so multi-byte sequences ('=C3=A9' → 'é') survive. */
 function decodeQP(value) {
-  return value.replace(/=([0-9A-F]{2})/gi, (_, hex) => {
-    try { return Buffer.from(hex, 'hex').toString('latin1'); } catch { return _; }
-  });
+  const bytes = [];
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === '=' && /^[0-9A-Fa-f]{2}$/.test(value.slice(i + 1, i + 3))) {
+      bytes.push(parseInt(value.slice(i + 1, i + 3), 16));
+      i += 2;
+    } else {
+      // literal char — QP literals are ASCII; encode defensively as UTF-8
+      const b = Buffer.from(ch, 'utf8');
+      for (const byte of b) bytes.push(byte);
+    }
+  }
+  return Buffer.from(bytes).toString('utf8');
 }
 
 /** Parse a single card with a tolerant line-based parser (2.1/3.0/4.0). */
@@ -123,4 +135,4 @@ function parseVcf(input) {
   return { records, errors };
 }
 
-module.exports = { parse: parseVcf, extensions: ['.vcf', '.vcard'] };
+module.exports = { parse: parseVcf, extensions: ['.vcf', '.vcard'], decodeQP };

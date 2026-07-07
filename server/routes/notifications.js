@@ -77,22 +77,25 @@ router.get('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/notifications/count — unread stored + derived count for the badge
+// GET /api/notifications/count — unread STORED notifications only; derived
+// items (birthdays/events/overdue reminders) are undismissable and would make
+// the badge permanent, so they count in the list but not the badge.
 router.get('/count', async (req, res, next) => {
   try {
     const rows = await query(
       'SELECT COUNT(*) AS c FROM notifications WHERE user_id = ? AND dismissed_at IS NULL AND read_at IS NULL',
       [req.user.id]
     );
-    const derived = await derivedNotifications(req.user);
-    res.json({ count: rows[0].c + derived.length });
+    res.json({ count: rows[0].c });
   } catch (err) { next(err); }
 });
 
 // POST /api/notifications/:id/read
 router.post('/:id/read', async (req, res, next) => {
   try {
-    await query('UPDATE notifications SET read_at = NOW() WHERE id = ? AND user_id = ?', [Number(req.params.id), req.user.id]);
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Notification not found' });
+    await query('UPDATE notifications SET read_at = NOW() WHERE id = ? AND user_id = ?', [id, req.user.id]);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -100,7 +103,9 @@ router.post('/:id/read', async (req, res, next) => {
 // POST /api/notifications/:id/dismiss
 router.post('/:id/dismiss', async (req, res, next) => {
   try {
-    await query('UPDATE notifications SET dismissed_at = NOW() WHERE id = ? AND user_id = ?', [Number(req.params.id), req.user.id]);
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Notification not found' });
+    await query('UPDATE notifications SET dismissed_at = NOW() WHERE id = ? AND user_id = ?', [id, req.user.id]);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

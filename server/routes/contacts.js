@@ -10,7 +10,7 @@ const { requireAuth, requireContactAccess, isAdmin } = require('../middleware/au
 const { auditWrite, changelogWrite, diffFields } = require('../lib/audit');
 const {
   zodiacFromBirthday, buildDisplayName, rebuildSearchIndex, rebuildSearchIndexAsync,
-  filterContactByScope, CONTACT_FIELDS,
+  filterContactByScope, CONTACT_FIELDS, isValidDate,
 } = require('../lib/contacts');
 const { getSetting } = require('./settings');
 
@@ -86,18 +86,23 @@ router.get('/', async (req, res, next) => {
     const joinShare = `LEFT JOIN shared_contacts sc ON sc.contact_id = c.id AND sc.shared_with_user_id = ${Number(req.user.id)}`;
     const joinSearch = search ? 'LEFT JOIN contact_search_index csi ON csi.contact_id = c.id' : '';
 
-    const rows = await query(
-      `SELECT SQL_CALC_FOUND_ROWS c.*, sc.share_scope AS shared_scope, sc.permissions AS shared_permissions,
-              (c.owner_user_id != ${Number(req.user.id)}) AS is_shared_in
-       FROM contacts c
+    // Same FROM/WHERE for rows + total. SQL_CALC_FOUND_ROWS/FOUND_ROWS() is
+    // connection-scoped and query() uses a fresh pool connection per call —
+    // a separate COUNT(*) is the only concurrency-safe way to get the total.
+    const fromWhere = `FROM contacts c
        ${joinShare}
        ${joinSearch}
-       WHERE ${where.join(' AND ')}
+       WHERE ${where.join(' AND ')}`;
+
+    const rows = await query(
+      `SELECT c.*, sc.share_scope AS shared_scope, sc.permissions AS shared_permissions,
+              (c.owner_user_id != ${Number(req.user.id)}) AS is_shared_in
+       ${fromWhere}
        ORDER BY ${orderCol} ${dir}, c.id ASC
        LIMIT ${lim} OFFSET ${off}`,
       params
     );
-    const totalRows = await query('SELECT FOUND_ROWS() AS total');
+    const totalRows = await query(`SELECT COUNT(*) AS total ${fromWhere}`, params);
     const total = totalRows[0].total;
 
     const showSpicy = await spicyVisible(req.user);
@@ -122,7 +127,9 @@ router.get('/', async (req, res, next) => {
       if (!showSpicy) c.is_spicy = 0;
       c.tags = tagsByContact[r.id] || [];
       if (r.shared_scope && r.owner_user_id !== req.user.id && !isAdmin(req.user)) {
-        c = { ...filterContactByScope(c, r.shared_scope), tags: c.tags, is_shared_in: 1, shared_permissions: r.shared_permissions, is_spicy: showSpicy && r.shared_scope === 'full_spicy' ? r.is_spicy : 0 };
+        const isBasic = r.shared_scope === 'basic';
+        // basic scope hides tags in list just like the detail route does
+        c = { ...filterContactByScope(c, r.shared_scope), tags: isBasic ? [] : c.tags, is_shared_in: 1, shared_permissions: r.shared_permissions, is_spicy: showSpicy && r.shared_scope === 'full_spicy' ? r.is_spicy : 0 };
       }
       return c;
     });
@@ -175,6 +182,12 @@ router.post('/', async (req, res, next) => {
     for (const f of CONTACT_FIELDS) if (f in body) data[f] = body[f];
 
     data.display_name = buildDisplayName(data);
+    for (const df of ['birthday', 'met_date']) {
+      if (data[df] === '') data[df] = null;
+      if (data[df] != null && !isValidDate(data[df])) {
+        return res.status(400).json({ error: `Invalid ${df === 'birthday' ? 'birthday' : 'met date'} — use YYYY-MM-DD` });
+      }
+    }
     if (data.birthday && !data.zodiac_sign) data.zodiac_sign = zodiacFromBirthday(data.birthday);
     if (data.rating != null) data.rating = Math.max(0, Math.min(5, Number(data.rating) || 0));
     for (const b of ['is_favorite', 'is_spicy', 'is_anonymous']) if (b in data) data[b] = data[b] ? 1 : 0;
@@ -205,6 +218,15 @@ router.put('/:id', requireContactAccess('id', { edit: true }), async (req, res, 
     const data = {};
     for (const f of CONTACT_FIELDS) if (f in body) data[f] = body[f];
     if (Object.keys(data).length === 0) return res.status(400).json({ error: 'Nothing to update' });
+
+    for (const df of ['birthday', 'met_date']) {
+      if (df in data) {
+        if (data[df] === '') data[df] = null;
+        if (data[df] != null && !isValidDate(data[df])) {
+          return res.status(400).json({ error: `Invalid ${df === 'birthday' ? 'birthday' : 'met date'} — use YYYY-MM-DD` });
+        }
+      }
+    }
 
     if ('first_name' in data || 'last_name' in data || 'display_name' in data) {
       data.display_name = buildDisplayName({ ...c, ...data, display_name: data.display_name });

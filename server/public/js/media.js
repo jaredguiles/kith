@@ -29,7 +29,9 @@ async function renderContactMedia(container, contact, canEdit, refresh) {
     <div class="media-grid">
       ${media.map((m) => `
         <button class="media-tile ${m.is_spicy ? 'is-spicy' : ''}" data-media-id="${m.id}" data-media-type="${esc(m.type)}" aria-label="View media">
-          <img src="/api/media/${m.id}/${m.type === 'video' ? 'thumbnail' : 'file'}" alt="${esc(m.caption || '')}" loading="lazy">
+          ${m.type === 'video' && !m.has_thumbnail
+            ? `<span class="media-tile-placeholder">${icon('video')}</span>`
+            : `<img src="/api/media/${m.id}/${m.type === 'video' ? 'thumbnail' : 'file'}" alt="${esc(m.caption || '')}" loading="lazy">`}
           ${m.type === 'video' ? `<span class="media-type">${icon('video')}</span>` : ''}
         </button>`).join('')}
     </div>` : emptyState('image', 'No media yet', canEdit ? 'Upload photos or videos of this person.' : 'Nothing here.')}`;

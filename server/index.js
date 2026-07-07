@@ -10,9 +10,16 @@ const express = require('express');
 const helmet = require('helmet');
 
 const { initDatabase } = require('./database/init');
+const { getPool } = require('./database/connection');
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+// Traefik is the single reverse-proxy hop in front of the app; trust it so
+// req.ip reflects the real client IP from X-Forwarded-For (login throttling
+// in middleware/auth.js keys on req.ip).
+app.set('trust proxy', 1);
 
 // ---------------------------------------------------------------------------
 // Production safety: refuse to start with placeholder secrets (§7.4 / SPEC).
@@ -60,19 +67,50 @@ app.use(
         frameAncestors: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
+        // Outside production the app may be served over plain HTTP (dev
+        // instance has no TLS). upgrade-insecure-requests would force every
+        // asset to https:// and render a blank page, so disable it (and HSTS)
+        // unless NODE_ENV=production.
+        upgradeInsecureRequests: IS_PROD ? [] : null,
       },
     },
+    hsts: IS_PROD,
     crossOriginEmbedderPolicy: false,
+    // COOP is ignored by browsers on untrustworthy (plain-HTTP) origins and
+    // only produces console noise on the dev instance — send it in prod only.
+    crossOriginOpenerPolicy: IS_PROD,
   })
 );
 
 app.use(express.json({ limit: '1mb' }));
 
 // ---------------------------------------------------------------------------
-// Health
+// Health — deep check: pings the DB (cheap SELECT 1, short timeout).
+// Returns 200 when the DB answers, 503 when it does not. Never throws.
 // ---------------------------------------------------------------------------
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok' });
+app.get('/api/health', async (req, res) => {
+  let timer = null;
+  try {
+    // .catch on the query promise: if the timeout wins the race and the query
+    // rejects later, it must not surface as an unhandled rejection.
+    const ping = getPool().query('SELECT 1');
+    await Promise.race([
+      ping,
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, 2000);
+        timer.unref();
+      }).then(() => {
+        ping.catch(() => { /* swallow late rejection */ });
+        throw new Error('db health timeout');
+      }),
+    ]);
+    res.json({ status: 'ok', db: 'up' });
+  } catch (err) {
+    console.error('[health] DB ping failed:', err.message);
+    res.status(503).json({ status: 'degraded', db: 'down' });
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -141,6 +179,10 @@ app.get(/^\/(?!api\/).*/, (req, res) => {
 // Boot: init DB (schema + seed + migrations), then listen. Retry a few times —
 // the dev DB container may still be warming up.
 // ---------------------------------------------------------------------------
+let server = null;
+let importWorker = null;
+let shuttingDown = false;
+
 async function boot() {
   const maxAttempts = 10;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -157,7 +199,7 @@ async function boot() {
     }
   }
 
-  app.listen(PORT, () => {
+  server = app.listen(PORT, () => {
     console.log(`Kith listening on :${PORT} (${process.env.NODE_ENV || 'development'})`);
   });
 
@@ -171,13 +213,66 @@ function startImportWorker() {
   const { Worker } = require('node:worker_threads');
   const workerPath = path.join(__dirname, 'import', 'worker.js');
   const worker = new Worker(workerPath);
+  importWorker = worker;
   worker.on('error', (err) => console.error('[import-worker] error:', err.message));
   worker.on('exit', (code) => {
-    if (code !== 0) {
+    if (importWorker === worker) importWorker = null;
+    if (code !== 0 && !shuttingDown) {
       console.error(`[import-worker] exited with code ${code}; restarting in 10s`);
       setTimeout(startImportWorker, 10000);
     }
   });
 }
 
-boot();
+// ---------------------------------------------------------------------------
+// Graceful shutdown: stop accepting connections, terminate the import worker,
+// drain the DB pool, then exit 0. Force-exit after 10s if cleanup hangs.
+// ---------------------------------------------------------------------------
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[shutdown] received ${signal}; closing`);
+
+  const forceTimer = setTimeout(() => {
+    console.error('[shutdown] cleanup timed out after 10s; forcing exit');
+    process.exit(1);
+  }, 10000);
+  forceTimer.unref();
+
+  try {
+    if (server) {
+      await new Promise((resolve) => server.close(resolve));
+    }
+    if (importWorker) {
+      await importWorker.terminate().catch(() => { /* ignore */ });
+      importWorker = null;
+    }
+    await getPool().end().catch((err) => console.error('[shutdown] pool.end failed:', err.message));
+    console.log('[shutdown] clean exit');
+    process.exit(0);
+  } catch (err) {
+    console.error('[shutdown] error during cleanup:', err.message);
+    process.exit(1);
+  }
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+// ---------------------------------------------------------------------------
+// Process-level error handlers: log unhandled rejections; exit on uncaught
+// exceptions (state is unknown — restart policy brings the container back).
+// ---------------------------------------------------------------------------
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', reason instanceof Error ? reason.stack : reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', err.stack || err);
+  process.exit(1);
+});
+
+boot().catch((err) => {
+  console.error('FATAL: boot failed:', err.stack || err);
+  process.exit(1);
+});

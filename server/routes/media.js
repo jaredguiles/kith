@@ -63,6 +63,13 @@ async function mediaAccess(user, media) {
     if (found && found.access === 'shared') {
       const scope = found.share.share_scope;
       if (scope === 'full' || scope === 'full_spicy') return { access: 'shared', scope };
+      // basic scope exposes photo_url — allow read of exactly the contact's
+      // current (non-spicy) profile photo so the avatar renders.
+      // photo_url is always the authenticated media route: /api/media/:id/file
+      if (scope === 'basic' && !media.is_spicy &&
+          found.contact.photo_url === `/api/media/${media.id}/file`) {
+        return { access: 'shared', scope };
+      }
     }
   }
   return null;
@@ -97,13 +104,15 @@ router.get('/', async (req, res, next) => {
     const params = [];
 
     if (contact_id) {
-      const found = await contactAccess(req.user, Number(contact_id));
+      const cidNum = Number(contact_id);
+      if (!Number.isInteger(cidNum) || cidNum <= 0) return res.status(404).json({ error: 'Contact not found' });
+      const found = await contactAccess(req.user, cidNum);
       if (!found) return res.status(404).json({ error: 'Contact not found' });
       if (found.access === 'shared' && found.share.share_scope === 'basic') {
         return res.json({ media: [] });
       }
       where.push('m.contact_id = ?');
-      params.push(Number(contact_id));
+      params.push(cidNum);
       if (found.access === 'shared' && found.share.share_scope !== 'full_spicy') where.push('m.is_spicy = 0');
     } else if (!isAdmin(req.user)) {
       where.push('m.owner_user_id = ?');
@@ -244,6 +253,10 @@ router.put('/:id', loadMedia, async (req, res, next) => {
       if (b.contact_id) {
         const found = await contactAccess(req.user, Number(b.contact_id));
         if (!found) return res.status(404).json({ error: 'Contact not found' });
+        // mirror the upload check: no re-parenting onto read-only shared contacts
+        if (found.access === 'shared' && found.share.permissions !== 'edit') {
+          return res.status(403).json({ error: 'Read-only access to this contact' });
+        }
         cid = found.contact.id;
       }
       updates.push('contact_id = ?');

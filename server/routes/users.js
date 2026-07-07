@@ -12,7 +12,25 @@ const { auditWrite } = require('../lib/audit');
 
 const router = express.Router();
 
-router.use(requireAuth, requireAdmin);
+// All routes require auth; admin gate is applied per-route below so that
+// /directory stays available to regular users (sharing flow username→id).
+router.use(requireAuth);
+
+// GET /api/users/directory — ANY authenticated user. Active users only,
+// minimal fields (no email, no password_hash).
+router.get('/directory', async (req, res, next) => {
+  try {
+    const rows = await query(
+      'SELECT id, username, display_name FROM users WHERE is_active = 1 ORDER BY display_name, username'
+    );
+    res.json({ users: rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Everything below is admin-only.
+router.use(requireAdmin);
 
 // GET /api/users
 router.get('/', async (req, res, next) => {
@@ -42,11 +60,20 @@ router.post('/', async (req, res, next) => {
     if (dupes.length > 0) return res.status(409).json({ error: 'Username or email already in use' });
 
     const hash = await bcrypt.hash(password, 10);
-    const result = await query(
-      `INSERT INTO users (username, email, display_name, password_hash, role, is_active, must_change_password)
-       VALUES (?, ?, ?, ?, ?, 1, 1)`,
-      [username, email, display_name || username, hash, newRole]
-    );
+    let result;
+    try {
+      result = await query(
+        `INSERT INTO users (username, email, display_name, password_hash, role, is_active, must_change_password)
+         VALUES (?, ?, ?, ?, ?, 1, 1)`,
+        [username, email, display_name || username, hash, newRole]
+      );
+    } catch (err) {
+      // Check-then-insert race: unique key on username/email wins.
+      if (err && err.code === 'ER_DUP_ENTRY') {
+        return res.status(409).json({ error: 'Username or email already in use' });
+      }
+      throw err;
+    }
     await query('INSERT INTO preferences (user_id, `key`, value, type) VALUES (?, ?, ?, ?)', [
       result.insertId, 'spicy_visible', JSON.stringify(false), 'boolean',
     ]);
@@ -82,17 +109,29 @@ router.put('/:id', async (req, res, next) => {
     }
     if (is_active !== undefined && target.role !== 'main_admin') {
       updates.push('is_active = ?'); params.push(is_active ? 1 : 0);
+      // Deactivation kills existing sessions immediately.
+      if (!is_active) updates.push('token_version = token_version + 1');
     }
     if (password) {
       if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
       updates.push('password_hash = ?'); params.push(await bcrypt.hash(password, 10));
       updates.push('must_change_password = 1');
+      // Admin password reset invalidates the user's existing tokens.
+      updates.push('token_version = token_version + 1');
     }
     if (updates.length === 0) return res.status(400).json({ error: 'Nothing to update' });
 
     params.push(id);
     await query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
-    auditWrite(req.user.id, null, 'update', 'user', id, null, req.body, `Updated user ${target.username}`);
+    // Audit only whitelisted, non-secret fields — NEVER the plaintext password.
+    const audited = {
+      ...(email !== undefined && { email }),
+      ...(display_name !== undefined && { display_name }),
+      ...(role !== undefined && { role }),
+      ...(is_active !== undefined && { is_active: Boolean(is_active) }),
+      password_changed: Boolean(password),
+    };
+    auditWrite(req.user.id, null, 'update', 'user', id, null, audited, `Updated user ${target.username}`);
     res.json({ ok: true });
   } catch (err) {
     next(err);
@@ -108,7 +147,7 @@ router.delete('/:id', async (req, res, next) => {
     if (rows[0].role === 'main_admin') return res.status(403).json({ error: 'The main admin cannot be deactivated' });
     if (id === req.user.id) return res.status(400).json({ error: 'You cannot deactivate yourself' });
 
-    await query('UPDATE users SET is_active = 0 WHERE id = ?', [id]);
+    await query('UPDATE users SET is_active = 0, token_version = token_version + 1 WHERE id = ?', [id]);
     auditWrite(req.user.id, null, 'delete', 'user', id, null, null, `Deactivated user ${rows[0].username}`);
     res.json({ ok: true });
   } catch (err) {

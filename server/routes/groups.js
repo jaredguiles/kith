@@ -34,6 +34,7 @@ router.get('/', async (req, res, next) => {
 router.get('/:id/members', async (req, res, next) => {
   try {
     const groupId = Number(req.params.id);
+    if (!Number.isInteger(groupId) || groupId <= 0) return res.status(404).json({ error: 'Group not found' });
     const groups = await query('SELECT * FROM `groups` WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)', [groupId, req.user.id]);
     if (!groups.length) return res.status(404).json({ error: 'Group not found' });
     const admin = isAdmin(req.user);
@@ -57,10 +58,11 @@ router.post('/', async (req, res, next) => {
     const { name, color, icon, description, system } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Group name is required' });
     if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) return res.status(400).json({ error: 'Color must be a hex value' });
-    const owner = system && isAdmin(req.user) ? null : req.user.id;
+    const isSystemGroup = system && isAdmin(req.user);
+    const owner = isSystemGroup ? null : req.user.id;
     const result = await query(
-      'INSERT INTO `groups` (name, color, icon, description, owner_user_id, is_system) VALUES (?, ?, ?, ?, ?, 0)',
-      [String(name).trim(), color || '#7c5bf5', icon || 'users', description || null, owner]
+      'INSERT INTO `groups` (name, color, icon, description, owner_user_id, is_system) VALUES (?, ?, ?, ?, ?, ?)',
+      [String(name).trim(), color || '#7c5bf5', icon || 'users', description || null, owner, isSystemGroup ? 1 : 0]
     );
     auditWrite(req.user.id, null, 'create', 'group', result.insertId, null, { name }, `Created group ${name}`);
     res.status(201).json({ id: result.insertId });
@@ -69,6 +71,7 @@ router.post('/', async (req, res, next) => {
 
 async function loadGroup(req, res, next) {
   const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Group not found' });
   const rows = await query('SELECT * FROM `groups` WHERE id = ?', [id]);
   if (rows.length === 0) return res.status(404).json({ error: 'Group not found' });
   const group = rows[0];
@@ -115,9 +118,12 @@ router.delete('/:id', loadGroup, async (req, res, next) => {
 router.post('/:id/members/:contactId', async (req, res, next) => {
   try {
     const groupId = Number(req.params.id);
+    if (!Number.isInteger(groupId) || groupId <= 0) return res.status(404).json({ error: 'Group not found' });
+    const contactId = Number(req.params.contactId);
+    if (!Number.isInteger(contactId) || contactId <= 0) return res.status(404).json({ error: 'Contact not found' });
     const groups = await query('SELECT * FROM `groups` WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)', [groupId, req.user.id]);
     if (!groups.length) return res.status(404).json({ error: 'Group not found' });
-    const found = await contactAccess(req.user, Number(req.params.contactId));
+    const found = await contactAccess(req.user, contactId);
     if (!found) return res.status(404).json({ error: 'Contact not found' });
     if (found.access === 'shared' && found.share.permissions !== 'edit') {
       return res.status(403).json({ error: 'Read-only access to this contact' });
@@ -131,9 +137,12 @@ router.post('/:id/members/:contactId', async (req, res, next) => {
 router.delete('/:id/members/:contactId', async (req, res, next) => {
   try {
     const groupId = Number(req.params.id);
+    if (!Number.isInteger(groupId) || groupId <= 0) return res.status(404).json({ error: 'Group not found' });
+    const contactId = Number(req.params.contactId);
+    if (!Number.isInteger(contactId) || contactId <= 0) return res.status(404).json({ error: 'Contact not found' });
     const groups = await query('SELECT * FROM `groups` WHERE id = ? AND (owner_user_id IS NULL OR owner_user_id = ?)', [groupId, req.user.id]);
     if (!groups.length) return res.status(404).json({ error: 'Group not found' });
-    const found = await contactAccess(req.user, Number(req.params.contactId));
+    const found = await contactAccess(req.user, contactId);
     if (!found) return res.status(404).json({ error: 'Contact not found' });
     await query('DELETE FROM group_members WHERE group_id = ? AND contact_id = ?', [groupId, found.contact.id]);
     res.json({ ok: true });

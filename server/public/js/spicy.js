@@ -167,11 +167,11 @@ async function openShareModal(contact, refresh) {
   let users = [];
   let shares = [];
   try {
-    // any user can share; needs the user list — served to all authed users? users route is admin-only.
-    // Use a lightweight approach: admins get the list; non-admins type a username.
-    const data = await api.get('/api/users');
-    users = (data.users || []).filter((u) => u.id !== state.user.id && u.is_active);
-  } catch { /* non-admin */ }
+    // /api/users/directory is available to ANY authenticated user (id,
+    // username, display_name of active users) — built for this picker.
+    const data = await api.get('/api/users/directory');
+    users = (data.users || []).filter((u) => u.id !== state.user.id);
+  } catch (err) { toast(err.message, 'error'); }
   try {
     shares = (await api.get(`/api/contacts/${contact.id}/share`)).shares || [];
   } catch { /* ignore */ }
@@ -187,7 +187,7 @@ async function openShareModal(contact, refresh) {
       <div class="divider"></div>` : ''}
     ${users.length
       ? formGroup('Share with', selectInput('share_user', users.map((u) => ({ value: u.id, label: u.display_name || u.username })), ''))
-      : formGroup('Username', textInput('share_username', '', 'placeholder="Exact username"'))}
+      : '<div class="text-sm text-muted mb-2">No other users to share with.</div>'}
     <div class="form-row">
       ${formGroup('Permissions', selectInput('permissions', [{ value: 'read', label: 'Read only' }, { value: 'edit', label: 'Can edit' }], 'read'))}
       ${formGroup('Scope', selectInput('share_scope', [

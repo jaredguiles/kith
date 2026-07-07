@@ -14,6 +14,7 @@ const {
   recordFailure,
   recordSuccess,
 } = require('../middleware/auth');
+const { auditWrite } = require('../lib/audit');
 
 const router = express.Router();
 
@@ -29,16 +30,20 @@ router.post('/login', async (req, res, next) => {
     }
 
     const rows = await query(
-      'SELECT id, username, email, display_name, password_hash, role, is_active, must_change_password FROM users WHERE username = ? OR email = ?',
+      'SELECT id, username, email, display_name, password_hash, role, is_active, must_change_password, token_version FROM users WHERE username = ? OR email = ?',
       [username, username]
     );
     const user = rows[0];
     const ok = user && user.is_active && (await bcrypt.compare(password, user.password_hash));
     if (!ok) {
       recordFailure(req, username);
+      // Non-fatal audit of failed attempts (no password logged)
+      auditWrite(user ? user.id : null, null, 'login_failed', 'user', user ? user.id : null, null,
+        { identifier: String(username).trim().toLowerCase(), ip: req.ip }, 'Failed login attempt');
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     recordSuccess(req, username);
+    auditWrite(user.id, null, 'login', 'user', user.id, null, { ip: req.ip }, `User ${user.username} logged in`);
 
     const token = signToken(user);
     setAuthCookie(res, token);
@@ -91,8 +96,18 @@ router.put('/password', requireAuth, async (req, res, next) => {
     if (!ok) return res.status(401).json({ error: 'Current password is incorrect' });
 
     const hash = await bcrypt.hash(new_password, 10);
-    await query('UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?', [hash, req.user.id]);
-    res.json({ ok: true });
+    // Bump token_version so all previously issued JWTs are invalidated…
+    await query(
+      'UPDATE users SET password_hash = ?, must_change_password = 0, token_version = token_version + 1 WHERE id = ?',
+      [hash, req.user.id]
+    );
+    // …then re-issue a fresh token for THIS session so the user stays logged in.
+    const fresh = await query('SELECT id, username, role, token_version FROM users WHERE id = ?', [req.user.id]);
+    const token = signToken(fresh[0]);
+    setAuthCookie(res, token);
+    auditWrite(req.user.id, null, 'password_change', 'user', req.user.id, null,
+      { password_changed: true }, `User ${req.user.username} changed their password`);
+    res.json({ ok: true, token });
   } catch (err) {
     next(err);
   }

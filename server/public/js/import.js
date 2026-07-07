@@ -118,7 +118,12 @@ async function pollImportWidget(active = false) {
   let jobs = [];
   try {
     jobs = (await api.get('/api/import/jobs')).jobs || [];
-  } catch { return; }
+  } catch (err) {
+    // transient failure — keep polling instead of silently going dormant,
+    // but stop on auth loss (401 handling reloads to login anyway).
+    if (err?.status !== 401) widgetTimer = setTimeout(() => pollImportWidget(active), 8000);
+    return;
+  }
 
   const live = jobs.filter((j) => ['queued', 'processing', 'awaiting_review'].includes(j.status));
   if (!live.length) {
@@ -222,19 +227,35 @@ async function renderReview(el, params) {
     b.addEventListener('click', async () => {
       const jobId = Number(b.dataset.bulkApprove);
       const rows = records.filter((r) => r.import_job_id === jobId && r.review_status === 'pending');
+      let failed = 0;
       for (const r of rows) {
         const decision = r.suggested_match_contact_id && Number(r.match_confidence) >= 0.7 ? 'approved_merge' : 'approved_new';
-        await api.put(`/api/import/review/${r.id}`, { review_status: decision }).catch(() => {});
+        try {
+          await api.put(`/api/import/review/${r.id}`, { review_status: decision });
+        } catch (err) {
+          if (err?.status === 401) return; // auth lost — abort (api.js reloads)
+          failed++;
+        }
       }
-      toast('Suggestions applied. Finalize to commit.');
+      if (failed) toast(`${failed} record${failed === 1 ? '' : 's'} failed to update.`, 'error');
+      else toast('Suggestions applied. Finalize to commit.');
       renderReview(el, params);
     }));
   el.querySelectorAll('[data-bulk-skip]').forEach((b) =>
     b.addEventListener('click', async () => {
       const jobId = Number(b.dataset.bulkSkip);
       const rows = records.filter((r) => r.import_job_id === jobId && r.review_status === 'pending');
-      for (const r of rows) await api.put(`/api/import/review/${r.id}`, { review_status: 'skipped' }).catch(() => {});
-      toast('Remaining records skipped.');
+      let failed = 0;
+      for (const r of rows) {
+        try {
+          await api.put(`/api/import/review/${r.id}`, { review_status: 'skipped' });
+        } catch (err) {
+          if (err?.status === 401) return; // auth lost — abort (api.js reloads)
+          failed++;
+        }
+      }
+      if (failed) toast(`${failed} record${failed === 1 ? '' : 's'} failed to skip.`, 'error');
+      else toast('Remaining records skipped.');
       renderReview(el, params);
     }));
 
@@ -376,7 +397,7 @@ async function openConflictResolution(stagingId, targetId, onDone) {
     ${autoFills.length ? `<div class="text-sm text-secondary">Filled automatically (currently empty): ${autoFills.map((f) => esc(f.replace(/_/g, ' '))).join(', ')}.</div>` : ''}
     <div class="text-sm text-muted mt-2">Emails, phones, socials, and messages merge additively.</div>`;
 
-  openModal(modalShell('conflict-res', `Merge conflicts — ${esc(d.display_name || '')}`, content,
+  openModal(modalShell('conflict-res', `Merge conflicts — ${d.display_name || ''}`, content,
     `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>
      <button class="btn btn-primary" data-action="save-decisions">Save decisions</button>`,
     { size: 'modal-xl' }), {

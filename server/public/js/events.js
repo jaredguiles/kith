@@ -79,7 +79,14 @@ async function loadEvents(el) {
   const params = { type: evState.type || undefined };
   if (evState.filter === 'upcoming') params.upcoming = 1;
   if (evState.filter === 'past') params.past = 1;
-  const data = await api.get('/api/events' + qs(params));
+  let data;
+  try {
+    data = await api.get('/api/events' + qs(params));
+  } catch (err) {
+    el.querySelector('#events-count').textContent = '';
+    listEl.innerHTML = emptyState('alert-circle', "Couldn't load events", err?.message || 'Check your connection and try again.');
+    return;
+  }
   const events = data.events || [];
   el.querySelector('#events-count').textContent = `${events.length} ${events.length === 1 ? 'event' : 'events'}`;
 
@@ -121,7 +128,13 @@ function eventCard(ev) {
 
 // --------------------------------------------------------- event detail
 async function openEventDetail(id, onChanged) {
-  const data = await api.get(`/api/events/${id}`);
+  let data;
+  try {
+    data = await api.get(`/api/events/${id}`);
+  } catch (err) {
+    toast(err?.message || "Couldn't open this event.", 'error');
+    return;
+  }
   const ev = data.event;
   const contacts = data.contacts || [];
 
@@ -219,7 +232,7 @@ export function openEventForm(existing, onSaved, presetContact = null) {
       ${formGroup('Status', selectInput('status', ['upcoming', 'completed', 'cancelled'], ev.status || 'upcoming'))}
     </div>
     <div class="form-row">
-      ${formGroup('Starts', `<input class="form-input" name="starts_at" type="datetime-local" value="${esc(toLocalInput(ev.starts_at))}">`)}
+      ${formGroup('Starts', `<input class="form-input" name="starts_at" type="datetime-local" value="${esc(toLocalInput(ev.starts_at))}" required>`)}
       ${formGroup('Ends (optional)', `<input class="form-input" name="ends_at" type="datetime-local" value="${esc(toLocalInput(ev.ends_at))}">`)}
     </div>
     ${formGroup('Location', textInput('location', ev.location))}
@@ -278,7 +291,9 @@ export function openEventForm(existing, onSaved, presetContact = null) {
       overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
         const values = readForm(overlay.querySelector('.modal-content'));
         delete values.undefined;
-        values.starts_at = fromLocalInput(overlay.querySelector('[name="starts_at"]').value);
+        const startsRaw = overlay.querySelector('[name="starts_at"]').value;
+        if (!startsRaw) { toast('Start date is required', 'error'); return; }
+        values.starts_at = fromLocalInput(startsRaw);
         values.ends_at = fromLocalInput(overlay.querySelector('[name="ends_at"]').value);
         values.contact_ids = [...linked.keys()];
         const spicyToggle = overlay.querySelector('[data-toggle="is_spicy"]');

@@ -11,6 +11,7 @@ const { requireAuth, requireContactAccess, contactAccess, isAdmin } = require('.
 const { auditWrite } = require('../lib/audit');
 const { spicyVisible } = require('./contacts');
 const { encryptField, decryptField } = require('../lib/crypto');
+const { rebuildSearchIndexAsync, isValidDate } = require('../lib/contacts');
 
 // ------------------------------------------------------------- timeline
 const timelineRouter = express.Router();
@@ -46,10 +47,14 @@ timelineRouter.get('/', async (req, res, next) => {
     ]);
 
     const items = [...manual, ...notes, ...events, ...msgBatches]
-      .map((it) => ({
-        ...it,
-        description: it.kind === 'note' && it.is_spicy ? decryptField(it.description) : it.description,
-      }))
+      .map((it) => {
+        // spicy timeline entries + notes are field-encrypted; decryptField
+        // passes legacy plaintext rows through unchanged
+        if (it.is_spicy && (it.kind === 'note' || it.kind === 'timeline')) {
+          return { ...it, title: decryptField(it.title), description: decryptField(it.description) };
+        }
+        return it;
+      })
       .sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
 
     res.json({ timeline: items.slice(0, 200) });
@@ -60,19 +65,27 @@ timelineRouter.get('/', async (req, res, next) => {
 timelineRouter.post('/', async (req, res, next) => {
   try {
     const { contact_id, type, title, description, is_spicy, occurred_at } = req.body || {};
-    const found = await contactAccess(req.user, Number(contact_id));
+    const cid = Number(contact_id);
+    if (!Number.isInteger(cid) || cid <= 0) return res.status(404).json({ error: 'Contact not found' });
+    const found = await contactAccess(req.user, cid);
     if (!found) return res.status(404).json({ error: 'Contact not found' });
     if (found.access === 'shared' && found.share.permissions !== 'edit') {
       return res.status(403).json({ error: 'Read-only access' });
     }
     let spicyFlag = is_spicy ? 1 : 0;
     if (spicyFlag && !(await spicyVisible(req.user))) spicyFlag = 0;
+    if (occurred_at != null && occurred_at !== '' && !isValidDate(occurred_at)) {
+      return res.status(400).json({ error: 'Invalid occurred_at date' });
+    }
+    // spicy entries are field-encrypted like notes/messages (§7.E Layer C)
+    const storedTitle = spicyFlag && title ? encryptField(String(title)) : (title || null);
+    const storedDescription = spicyFlag && description ? encryptField(String(description)) : (description || null);
     const result = await query(
       `INSERT INTO timeline_events (contact_id, type, title, description, is_spicy, occurred_at)
        VALUES (?, ?, ?, ?, ?, COALESCE(?, NOW()))`,
-      [found.contact.id, type || 'note', title || null, description || null, spicyFlag, occurred_at || null]
+      [found.contact.id, type || 'note', storedTitle, storedDescription, spicyFlag, occurred_at || null]
     );
-    auditWrite(req.user.id, found.contact.id, 'create', 'timeline_event', result.insertId, null, { type, title }, 'Added timeline entry');
+    auditWrite(req.user.id, found.contact.id, 'create', 'timeline_event', result.insertId, null, { type, is_spicy: spicyFlag }, 'Added timeline entry');
     res.status(201).json({ id: result.insertId });
   } catch (err) { next(err); }
 });
@@ -80,7 +93,9 @@ timelineRouter.post('/', async (req, res, next) => {
 // DELETE /api/timeline/:id — soft (manual entries only)
 timelineRouter.delete('/:id', async (req, res, next) => {
   try {
-    const rows = await query('SELECT * FROM timeline_events WHERE id = ? AND deleted_at IS NULL', [Number(req.params.id)]);
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Not found' });
+    const rows = await query('SELECT * FROM timeline_events WHERE id = ? AND deleted_at IS NULL', [id]);
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     const found = await contactAccess(req.user, rows[0].contact_id);
     if (!found) return res.status(404).json({ error: 'Not found' });
@@ -119,7 +134,9 @@ notesRouter.post('/', async (req, res, next) => {
   try {
     const { contact_id, content, is_spicy } = req.body || {};
     if (!content || !String(content).trim()) return res.status(400).json({ error: 'Note content is required' });
-    const found = await contactAccess(req.user, Number(contact_id));
+    const cid = Number(contact_id);
+    if (!Number.isInteger(cid) || cid <= 0) return res.status(404).json({ error: 'Contact not found' });
+    const found = await contactAccess(req.user, cid);
     if (!found) return res.status(404).json({ error: 'Contact not found' });
     if (found.access === 'shared' && found.share.permissions !== 'edit') return res.status(403).json({ error: 'Read-only access' });
     let spicyFlag = is_spicy ? 1 : 0;
@@ -130,12 +147,15 @@ notesRouter.post('/', async (req, res, next) => {
       [found.contact.id, stored, spicyFlag]
     );
     auditWrite(req.user.id, found.contact.id, 'create', 'note', result.insertId, null, { is_spicy: spicyFlag }, 'Added note');
+    rebuildSearchIndexAsync(found.contact.id);
     res.status(201).json({ id: result.insertId });
   } catch (err) { next(err); }
 });
 
 async function loadNote(req, res, next) {
-  const rows = await query('SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL', [Number(req.params.id)]);
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Note not found' });
+  const rows = await query('SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL', [id]);
   if (!rows.length) return res.status(404).json({ error: 'Note not found' });
   const found = await contactAccess(req.user, rows[0].contact_id);
   if (!found) return res.status(404).json({ error: 'Note not found' });
@@ -154,6 +174,7 @@ notesRouter.put('/:id', loadNote, async (req, res, next) => {
     if (spicyFlag && !(await spicyVisible(req.user))) spicyFlag = req.note.is_spicy;
     const stored = spicyFlag ? encryptField(String(content)) : String(content);
     await query('UPDATE notes SET content = ?, is_spicy = ? WHERE id = ?', [stored, spicyFlag, req.note.id]);
+    rebuildSearchIndexAsync(req.note.contact_id);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -162,6 +183,7 @@ notesRouter.put('/:id', loadNote, async (req, res, next) => {
 notesRouter.delete('/:id', loadNote, async (req, res, next) => {
   try {
     await query('UPDATE notes SET deleted_at = NOW() WHERE id = ?', [req.note.id]);
+    rebuildSearchIndexAsync(req.note.contact_id);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -190,6 +212,7 @@ remindersRouter.post('/', async (req, res, next) => {
     const { title, description, due_at, contact_id } = req.body || {};
     if (!title || !String(title).trim()) return res.status(400).json({ error: 'Title is required' });
     if (!due_at) return res.status(400).json({ error: 'Due date is required' });
+    if (!isValidDate(due_at)) return res.status(400).json({ error: 'Invalid due date' });
     let cid = null;
     if (contact_id) {
       const found = await contactAccess(req.user, Number(contact_id));
@@ -204,7 +227,9 @@ remindersRouter.post('/', async (req, res, next) => {
 });
 
 async function loadReminder(req, res, next) {
-  const rows = await query('SELECT * FROM reminders WHERE id = ? AND deleted_at IS NULL', [Number(req.params.id)]);
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Reminder not found' });
+  const rows = await query('SELECT * FROM reminders WHERE id = ? AND deleted_at IS NULL', [id]);
   if (!rows.length) return res.status(404).json({ error: 'Reminder not found' });
   if (rows[0].owner_user_id !== req.user.id && !isAdmin(req.user)) return res.status(404).json({ error: 'Reminder not found' });
   req.reminder = rows[0];
@@ -219,7 +244,10 @@ remindersRouter.put('/:id', loadReminder, async (req, res, next) => {
     const params = [];
     if (title && String(title).trim()) { updates.push('title = ?'); params.push(String(title).trim()); }
     if (description !== undefined) { updates.push('description = ?'); params.push(description || null); }
-    if (due_at) { updates.push('due_at = ?'); params.push(due_at); }
+    if (due_at) {
+      if (!isValidDate(due_at)) return res.status(400).json({ error: 'Invalid due date' });
+      updates.push('due_at = ?'); params.push(due_at);
+    }
     if (contact_id !== undefined) {
       let cid = null;
       if (contact_id) {
@@ -279,11 +307,16 @@ messagesRouter.get('/', async (req, res, next) => {
 messagesRouter.post('/', async (req, res, next) => {
   try {
     const { contact_id, platform, direction, content, is_spicy, sent_at } = req.body || {};
-    const found = await contactAccess(req.user, Number(contact_id));
+    const cid = Number(contact_id);
+    if (!Number.isInteger(cid) || cid <= 0) return res.status(404).json({ error: 'Contact not found' });
+    const found = await contactAccess(req.user, cid);
     if (!found) return res.status(404).json({ error: 'Contact not found' });
     if (found.access === 'shared' && found.share.permissions !== 'edit') return res.status(403).json({ error: 'Read-only access' });
     let spicyFlag = is_spicy ? 1 : 0;
     if (spicyFlag && !(await spicyVisible(req.user))) spicyFlag = 0;
+    if (sent_at != null && sent_at !== '' && !isValidDate(sent_at)) {
+      return res.status(400).json({ error: 'Invalid sent_at date' });
+    }
     const stored = spicyFlag ? encryptField(String(content || '')) : (content || null);
     const result = await query(
       'INSERT INTO messages (contact_id, platform, direction, content, is_spicy, sent_at) VALUES (?, ?, ?, ?, ?, COALESCE(?, NOW()))',

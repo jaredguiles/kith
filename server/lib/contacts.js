@@ -71,6 +71,26 @@ function rebuildSearchIndexAsync(contactId) {
   rebuildSearchIndex(contactId).catch((err) => console.error('[search-index] rebuild failed:', err.message));
 }
 
+/**
+ * Cheap date/datetime validation for user-supplied date strings.
+ * Accepts `YYYY-MM-DD` optionally followed by a time part
+ * (`THH:MM[:SS[.mmm]][Z]` or ` HH:MM[:SS]`). Returns false for anything
+ * that doesn't match the shape or doesn't parse to a real date
+ * (e.g. 2024-02-31). Empty/null handling is the caller's concern.
+ */
+function isValidDate(value) {
+  const s = String(value);
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})([T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?Z?)?$/);
+  if (!m) return false;
+  const d = new Date(s.replace(' ', 'T'));
+  if (Number.isNaN(d.getTime())) return false;
+  // Guard JS Date rollover (2024-02-31 → Mar 2): components must round-trip.
+  const day = new Date(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`);
+  return day.getUTCFullYear() === Number(m[1]) &&
+         day.getUTCMonth() + 1 === Number(m[2]) &&
+         day.getUTCDate() === Number(m[3]);
+}
+
 // Fields a `basic`-scope share recipient may see (SPEC §Sharing)
 const BASIC_FIELDS = ['id', 'display_name', 'first_name', 'last_name', 'email', 'phone', 'photo_url', 'is_favorite', 'created_at', 'updated_at'];
 
@@ -100,6 +120,7 @@ module.exports = {
   buildDisplayName,
   rebuildSearchIndex,
   rebuildSearchIndexAsync,
+  isValidDate,
   filterContactByScope,
   CONTACT_FIELDS,
   BASIC_FIELDS,

@@ -3,7 +3,7 @@
 import { api, qs, setToken } from './api.js';
 import { esc, initials, debounce } from './utils.js';
 import { icon } from './icons.js';
-import { toast, openModal, modalShell, toggleSwitch } from './components.js';
+import { toast, openModal, modalShell, toggleSwitch, emptyState } from './components.js';
 import { renderPage, pageTitles } from './pages.js';
 
 // ---------------------------------------------------------------- state
@@ -21,6 +21,15 @@ export const state = {
 };
 
 const root = document.getElementById('root');
+
+// CSP ('script-src self', no unsafe-inline) makes inline onerror handlers dead.
+// Avatars render initials UNDER the <img> (the photo covers them when loaded);
+// on load failure remove the broken img so the initials show. Capture phase:
+// 'error' on media elements does not bubble.
+document.addEventListener('error', (e) => {
+  const t = e.target;
+  if (t && t.tagName === 'IMG' && t.closest?.('.av')) t.remove();
+}, true);
 
 // ---------------------------------------------------------------- router
 const ROUTES = ['home', 'contacts', 'events', 'notifications', 'settings', 'review', 'groups'];
@@ -60,7 +69,11 @@ async function renderCurrentPage() {
   document.querySelectorAll('.nav-item[data-nav]').forEach((el) => {
     el.classList.toggle('active', el.dataset.nav === state.route.page);
   });
-  await renderPage(pageEl, state.route);
+  try {
+    await renderPage(pageEl, state.route);
+  } catch (err) {
+    pageEl.innerHTML = `<div class="page-inner">${emptyState('alert-circle', "Couldn't load this page", err?.message || 'Something went wrong. Try again.')}</div>`;
+  }
   document.title = `${pageTitles[state.route.page] || 'Kith'} · ${state.settings.app_name || 'Kith'}`;
 }
 
@@ -75,14 +88,28 @@ export async function setSpicyActive(active, { skipPin = false } = {}) {
     promptSpicyPin();
     return;
   }
+  const prevActive = state.spicyActive;
+  // optimistic UI: apply the class immediately…
   state.spicyActive = active;
   document.body.classList.add('accent-transition');
   document.body.classList.toggle('spicy-mode', active);
   document.getElementById('flame-toggle')?.classList.toggle('active', active);
   document.getElementById('flame-toggle')?.setAttribute('aria-pressed', active ? 'true' : 'false');
   setTimeout(() => document.body.classList.remove('accent-transition'), 700);
-  api.put('/api/preferences/spicy_visible', { value: active, type: 'boolean' }).catch(() => {});
-  state.preferences.spicy_visible = active;
+
+  // …but persist BEFORE re-rendering so pages never race the server state.
+  try {
+    await api.put('/api/preferences/spicy_visible', { value: active, type: 'boolean' });
+    state.preferences.spicy_visible = active;
+  } catch (err) {
+    // revert the optimistic UI
+    state.spicyActive = prevActive;
+    document.body.classList.toggle('spicy-mode', prevActive);
+    document.getElementById('flame-toggle')?.classList.toggle('active', prevActive);
+    document.getElementById('flame-toggle')?.setAttribute('aria-pressed', prevActive ? 'true' : 'false');
+    toast(err.message || "Couldn't switch spicy mode.", 'error');
+    return;
+  }
 
   clearTimeout(state.spicyTimer);
   const mins = Number(state.settings.spicy_auto_disable_minutes || 0);
@@ -190,9 +217,12 @@ function shellHtml() {
           ${icon('chevron-down', 'chev')} Favorites
         </button>
         <div id="sidebar-favorites"></div>
-        <button class="sidebar-section-label" data-collapse="groups" aria-expanded="true">
-          ${icon('chevron-down', 'chev')} Groups
-        </button>
+        <div class="sidebar-section-row">
+          <button class="sidebar-section-label" data-collapse="groups" aria-expanded="true">
+            ${icon('chevron-down', 'chev')} Groups
+          </button>
+          <a class="sidebar-section-action" href="#/groups" aria-label="Manage groups" title="Manage groups">${icon('settings')}</a>
+        </div>
         <div id="sidebar-groups"></div>
       </div>
       <div class="sidebar-footer">
@@ -483,10 +513,12 @@ function renderForcedPasswordChange() {
     const errEl = document.getElementById('pw-error');
     errEl.classList.add('hidden');
     try {
-      await api.put('/api/auth/password', {
+      const res = await api.put('/api/auth/password', {
         current_password: document.getElementById('pw-current').value,
         new_password: document.getElementById('pw-new').value,
       });
+      // Old tokens are invalidated server-side; adopt the fresh one.
+      if (res?.token) setToken(res.token);
       state.user.must_change_password = false;
       toast('Password changed.');
       await start();
@@ -508,6 +540,15 @@ async function loadContext() {
   state.spicyEnabled = Boolean(state.settings.spicy_enabled);
   // Session spicy state restores from preference only when no PIN is required.
   state.spicyActive = state.spicyEnabled && !state.settings.spicy_require_pin && Boolean(state.preferences.spicy_visible);
+  // With a PIN required the flame starts OFF — but the server-side preference
+  // may still be true from last session, which would leak spicy content in
+  // server-filtered responses. Sync it back to false before rendering.
+  if (state.settings.spicy_require_pin && !state.spicyActive && state.preferences.spicy_visible) {
+    try {
+      await api.put('/api/preferences/spicy_visible', { value: false, type: 'boolean' });
+      state.preferences.spicy_visible = false;
+    } catch { /* keep booting; toggle will re-sync on next use */ }
+  }
 }
 
 async function start() {

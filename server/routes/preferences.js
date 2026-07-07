@@ -13,6 +13,40 @@ router.use(requireAuth);
 
 const HIDDEN_KEYS = ['spicy_pin_hash'];
 
+// --- PIN verify throttle (mirror of the login throttle style, per user id) ---
+const PIN_MAX_FAILURES = 5;
+const PIN_LOCKOUT_MS = 15 * 60 * 1000;
+const pinAttempts = new Map(); // userId -> { count, lockedUntil }
+
+function pinThrottleCheck(userId) {
+  const entry = pinAttempts.get(userId);
+  if (!entry) return { blocked: false };
+  if (entry.lockedUntil && entry.lockedUntil > Date.now()) {
+    return { blocked: true, retryAfterSec: Math.ceil((entry.lockedUntil - Date.now()) / 1000) };
+  }
+  if (entry.lockedUntil && entry.lockedUntil <= Date.now()) pinAttempts.delete(userId); // lazy expiry
+  return { blocked: false };
+}
+
+function pinRecordFailure(userId) {
+  const entry = pinAttempts.get(userId) || { count: 0, lockedUntil: 0 };
+  entry.count += 1;
+  if (entry.count >= PIN_MAX_FAILURES) entry.lockedUntil = Date.now() + PIN_LOCKOUT_MS;
+  pinAttempts.set(userId, entry);
+}
+
+function pinRecordSuccess(userId) {
+  pinAttempts.delete(userId);
+}
+
+// periodic cleanup so the map can't grow unbounded
+setInterval(() => {
+  const now = Date.now();
+  for (const [uid, entry] of pinAttempts) {
+    if (entry.lockedUntil && entry.lockedUntil <= now) pinAttempts.delete(uid);
+  }
+}, 10 * 60 * 1000).unref();
+
 // GET /api/preferences
 router.get('/', async (req, res, next) => {
   try {
@@ -48,12 +82,20 @@ router.post('/spicy-pin', async (req, res, next) => {
 // POST /api/preferences/spicy-pin/verify
 router.post('/spicy-pin/verify', async (req, res, next) => {
   try {
+    const throttle = pinThrottleCheck(req.user.id);
+    if (throttle.blocked) {
+      return res.status(429).json({ error: `Too many attempts — try again in ${Math.ceil(throttle.retryAfterSec / 60)} min` });
+    }
     const { pin } = req.body || {};
     const rows = await query('SELECT value FROM preferences WHERE user_id = ? AND `key` = ?', [req.user.id, 'spicy_pin_hash']);
     if (rows.length === 0) return res.json({ ok: true, noPin: true });
     const hash = JSON.parse(rows[0].value);
     const ok = await bcrypt.compare(String(pin ?? ''), hash);
-    if (!ok) return res.status(401).json({ error: 'Wrong PIN' });
+    if (!ok) {
+      pinRecordFailure(req.user.id);
+      return res.status(401).json({ error: 'Wrong PIN' });
+    }
+    pinRecordSuccess(req.user.id);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

@@ -57,7 +57,7 @@ async function renderHome(el) {
         ${birthdays.length ? birthdays.map((b) => `
           <a class="flex-between" style="padding:7px 0;border-bottom:1px solid var(--border);text-decoration:none;color:inherit" href="#/contacts/${b.id}">
             <span class="flex items-center gap-2">
-              <span class="av sm">${b.photo_url ? `<img src="${esc(b.photo_url)}" alt="">` : esc(initials(b.display_name))}</span>
+              <span class="av sm">${esc(initials(b.display_name))}${b.photo_url ? `<img src="${esc(b.photo_url)}" alt="">` : ''}</span>
               <span class="text-sm font-medium">${esc(b.display_name)}</span>
             </span>
             <span class="badge ${b.days_until <= 7 ? 'amber' : 'neutral'}">${b.days_until === 0 ? 'Today' : b.days_until === 1 ? 'Tomorrow' : `${b.days_until}d`}</span>

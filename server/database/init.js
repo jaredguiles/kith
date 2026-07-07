@@ -28,6 +28,7 @@ const TABLES = [
     role ENUM('main_admin','admin','user') NOT NULL DEFAULT 'user',
     is_active BOOLEAN NOT NULL DEFAULT 1,
     must_change_password BOOLEAN NOT NULL DEFAULT 0,
+    token_version INT NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
@@ -549,10 +550,33 @@ async function seed() {
 }
 
 // ---------------------------------------------------------------------------
+// Idempotent column additions for pre-existing databases (CREATE TABLE IF NOT
+// EXISTS won't add columns to tables that already exist). Guarded by an
+// information_schema check so this is safe to run on every boot.
+// ---------------------------------------------------------------------------
+async function ensureColumn(table, column, definition) {
+  const rows = await query(
+    `SELECT COUNT(*) AS n FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [table, column]
+  );
+  if (Number(rows[0].n) === 0) {
+    await query(`ALTER TABLE \`${table}\` ADD COLUMN \`${column}\` ${definition}`);
+    console.log(`[init] added column ${table}.${column}`);
+  }
+}
+
+async function ensureColumns() {
+  // JWT token-version invalidation (logout / password change kills old tokens)
+  await ensureColumn('users', 'token_version', 'INT NOT NULL DEFAULT 0');
+}
+
+// ---------------------------------------------------------------------------
 async function initDatabase() {
   for (const ddl of TABLES) {
     await query(ddl);
   }
+  await ensureColumns();
   await runMigrations();
   await seed();
   console.log('[init] database schema + seed OK');

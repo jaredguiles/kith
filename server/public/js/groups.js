@@ -15,7 +15,13 @@ const GROUP_ICONS = ['users', 'star', 'home', 'link', 'heart', 'briefcase', 'cof
 
 // ------------------------------------------------------------ groups page
 async function renderGroups(el) {
-  const data = await api.get('/api/groups');
+  let data;
+  try {
+    data = await api.get('/api/groups');
+  } catch (err) {
+    el.innerHTML = `<div class="page-inner">${emptyState('alert-circle', "Couldn't load groups", err?.message || 'Check your connection and try again.')}</div>`;
+    return;
+  }
   const groups = data.groups || [];
 
   el.innerHTML = `
@@ -47,7 +53,7 @@ function groupCard(g) {
         </div>
       </div>
       <div class="flex items-center gap-2">
-        <span class="text-sm text-muted">${Number(g.member_count) || 0} members</span>
+        <span class="text-sm text-muted" data-member-count>${Number(g.member_count) || 0} members</span>
         <span class="av-stack" data-avatars></span>
         ${icon('chevron-down', 'chev')}
       </div>
@@ -68,8 +74,18 @@ function bindGroupCard(card, pageEl) {
 
   const loadMembers = async () => {
     const membersEl = card.querySelector('[data-members]');
-    const data = await api.get(`/api/groups/${groupId}/members`);
+    let data;
+    try {
+      data = await api.get(`/api/groups/${groupId}/members`);
+    } catch (err) {
+      membersEl.innerHTML = `<div class="text-sm text-muted p-2">${esc(err?.message || "Couldn't load members.")}</div>`;
+      return;
+    }
     const members = data.members || [];
+
+    // keep the header count in sync with add/remove
+    const countEl = card.querySelector('[data-member-count]');
+    if (countEl) countEl.textContent = `${members.length} members`;
     membersEl.innerHTML = `
       ${members.map((m) => `
         <div class="flex-between" style="padding:6px 0;border-bottom:1px solid var(--border)">

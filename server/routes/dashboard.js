@@ -7,6 +7,7 @@ const express = require('express');
 const { query } = require('../database/connection');
 const { requireAuth, requireAdmin, isAdmin } = require('../middleware/auth');
 const { spicyVisible } = require('./contacts');
+const { decryptField } = require('../lib/crypto');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -41,7 +42,7 @@ router.get('/dashboard', async (req, res, next) => {
          ORDER BY e.starts_at ASC LIMIT 5`
       ),
       query(
-        `SELECT tl.id, tl.type, tl.title, tl.description, tl.occurred_at, tl.created_at,
+        `SELECT tl.id, tl.type, tl.title, tl.description, tl.is_spicy, tl.occurred_at, tl.created_at,
                 c.id AS contact_id, c.display_name AS contact_name
          FROM timeline_events tl JOIN contacts c ON c.id = tl.contact_id AND c.deleted_at IS NULL ${scope}
          WHERE tl.deleted_at IS NULL ${showSpicy ? '' : 'AND tl.is_spicy = 0'}
@@ -64,6 +65,9 @@ router.get('/dashboard', async (req, res, next) => {
        ORDER BY n.created_at DESC LIMIT 10`
     );
     const combined = [...activity, ...notes]
+      .map((a) => (a.is_spicy
+        ? { ...a, title: decryptField(a.title), description: decryptField(a.description) }
+        : a))
       .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
       .slice(0, 10);
 
@@ -79,13 +83,21 @@ router.get('/export', requireAdmin, async (req, res, next) => {
       'social_links', 'tags', 'contact_tags', 'groups', 'group_members',
       'shared_contacts', 'events', 'event_contacts', 'event_media', 'timeline_events',
       'notes', 'reminders', 'messages', 'media_assets', 'audit_log',
-      'contact_field_changelog', 'import_jobs', 'import_staging', 'app_settings',
+      'contact_field_changelog', 'import_jobs', 'app_settings',
       'preferences', 'spicy_profiles',
+      // 'import_staging' intentionally excluded: raw/normalized third-party
+      // dumps (message bodies etc.) don't belong in a backup export
     ];
     const dump = { exported_at: new Date().toISOString(), version: 1, tables: {} };
     for (const t of tables) {
-      const rows = await query(`SELECT * FROM \`${t}\``);
+      let rows = await query(`SELECT * FROM \`${t}\``);
       if (t === 'users') rows.forEach((r) => { delete r.password_hash; });
+      if (t === 'preferences') {
+        // never export secret hashes (spicy_pin_hash and any future *_hash keys)
+        rows = rows.filter((r) => !/_hash$/.test(String(r.key)));
+      }
+      // belt-and-braces: strip any *_hash column from every table
+      rows.forEach((r) => { for (const k of Object.keys(r)) if (/_hash$/.test(k)) delete r[k]; });
       dump.tables[t] = rows;
     }
     // Note: spicy_profiles + spicy note/message content export as CIPHERTEXT —

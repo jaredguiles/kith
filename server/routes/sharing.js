@@ -58,9 +58,11 @@ shareRouter.post('/', requireContactAccess('id'), async (req, res, next) => {
 shareRouter.delete('/:userId', requireContactAccess('id'), async (req, res, next) => {
   try {
     if (req.contactAccess === 'shared') return res.status(403).json({ error: 'Only the owner can unshare a contact' });
-    await query('DELETE FROM shared_contacts WHERE contact_id = ? AND shared_with_user_id = ?', [req.contact.id, Number(req.params.userId)]);
+    const targetId = Number(req.params.userId);
+    if (!Number.isInteger(targetId) || targetId <= 0) return res.status(400).json({ error: 'Invalid user id' });
+    await query('DELETE FROM shared_contacts WHERE contact_id = ? AND shared_with_user_id = ?', [req.contact.id, targetId]);
     auditWrite(req.user.id, req.contact.id, 'unshare', 'contact', req.contact.id, null,
-      { unshared_from: Number(req.params.userId) }, `Unshared ${req.contact.display_name}`);
+      { unshared_from: targetId }, `Unshared ${req.contact.display_name}`);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });
@@ -88,6 +90,7 @@ mergeRouter.post('/:otherId', requireContactAccess('id', { edit: true }), async 
   try {
     const winner = req.contact;
     const otherId = Number(req.params.otherId);
+    if (!Number.isInteger(otherId) || otherId <= 0) return res.status(404).json({ error: 'Other contact not found' });
     if (otherId === winner.id) return res.status(400).json({ error: 'Cannot merge a contact into itself' });
     const foundB = await contactAccess(req.user, otherId);
     if (!foundB) return res.status(404).json({ error: 'Other contact not found' });

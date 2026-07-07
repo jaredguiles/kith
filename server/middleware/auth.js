@@ -10,9 +10,11 @@ const COOKIE_NAME = 'kith_token';
 const TOKEN_TTL = '7d'; // O6 default
 
 function signToken(user) {
-  return jwt.sign({ sub: user.id, username: user.username, role: user.role }, process.env.JWT_SECRET, {
-    expiresIn: TOKEN_TTL,
-  });
+  return jwt.sign(
+    { sub: user.id, username: user.username, role: user.role, tv: user.token_version ?? 0 },
+    process.env.JWT_SECRET,
+    { expiresIn: TOKEN_TTL }
+  );
 }
 
 function setAuthCookie(res, token) {
@@ -65,11 +67,16 @@ async function requireAuth(req, res, next) {
     }
 
     const rows = await query(
-      'SELECT id, username, email, display_name, role, is_active, must_change_password FROM users WHERE id = ?',
+      'SELECT id, username, email, display_name, role, is_active, must_change_password, token_version FROM users WHERE id = ?',
       [payload.sub]
     );
     if (rows.length === 0 || !rows[0].is_active) {
       return res.status(401).json({ error: 'Account is not active' });
+    }
+    // Token-version invalidation: password changes / admin resets bump
+    // token_version, killing all previously issued tokens.
+    if ((payload.tv ?? 0) !== (rows[0].token_version ?? 0)) {
+      return res.status(401).json({ error: 'Session expired — please sign in again' });
     }
     req.user = rows[0];
 
@@ -160,7 +167,9 @@ const MAX_FAILURES = 5;
 const WINDOW_MS = 15 * 60 * 1000;
 
 function throttleKey(req, username) {
-  return `${req.ip}|${String(username || '').toLowerCase()}`;
+  // Normalize: trim + lowercase so 'admin ' / 'ADMIN' share one budget
+  // (DB lookup uses a PAD SPACE collation, so 'admin ' matches 'admin').
+  return `${req.ip}|${String(username || '').trim().toLowerCase()}`;
 }
 
 function checkThrottle(req, username) {

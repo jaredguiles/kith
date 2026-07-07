@@ -42,10 +42,21 @@ export function fmtDateTime(d) {
 export function parseDate(d) {
   if (!d) return null;
   if (d instanceof Date) return d;
-  // MariaDB dateStrings: "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS" (treat as local)
-  const m = String(d).match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  const s = String(d);
+  // MariaDB dateStrings: "YYYY-MM-DD" or "YYYY-MM-DD HH:MM:SS".
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
   if (!m) return null;
-  return new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 0), +(m[5] || 0), +(m[6] || 0));
+  // Date-only (birthdays, met_date…): construct as LOCAL midnight so the
+  // calendar day never shifts.
+  if (m[4] === undefined) return new Date(+m[1], +m[2] - 1, +m[3]);
+  // Datetime with an explicit timezone marker: let Date parse it as-is.
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(s)) {
+    const parsed = new Date(s.replace(' ', 'T'));
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  // Bare "YYYY-MM-DD HH:MM:SS" from the DB is UTC — parse it as UTC so
+  // timeAgo()/fmtDateTime() don't drift by the local offset.
+  return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +(m[5] || 0), +(m[6] || 0)));
 }
 
 export function timeAgo(d) {
@@ -67,10 +78,14 @@ export function toLocalInput(d) {
   return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}`;
 }
 
-/** datetime-local value → "YYYY-MM-DD HH:MM:SS" for the API. */
+/** datetime-local value → "YYYY-MM-DD HH:MM:SS" (UTC) for the API. */
 export function fromLocalInput(v) {
   if (!v) return null;
-  return v.replace('T', ' ') + (v.length === 16 ? ':00' : '');
+  const local = new Date(v); // datetime-local values parse as local time
+  if (Number.isNaN(local.getTime())) return null;
+  const p = (n) => String(n).padStart(2, '0');
+  return `${local.getUTCFullYear()}-${p(local.getUTCMonth() + 1)}-${p(local.getUTCDate())} ` +
+    `${p(local.getUTCHours())}:${p(local.getUTCMinutes())}:${p(local.getUTCSeconds())}`;
 }
 
 export function ageFromBirthday(birthday) {

@@ -3,6 +3,8 @@
 
 let memToken = null;
 
+const RELOAD_FLAG = 'kith_401_reloaded';
+
 export function setToken(t) { memToken = t; }
 
 async function request(method, url, body, opts = {}) {
@@ -19,6 +21,25 @@ async function request(method, url, body, opts = {}) {
   let data = null;
   const ct = res.headers.get('content-type') || '';
   if (ct.includes('application/json')) data = await res.json().catch(() => null);
+
+  if (res.ok) {
+    // Any successful request proves the session is valid again — reset the
+    // one-shot reload guard so a future expiry can trigger a fresh reload.
+    try { sessionStorage.removeItem(RELOAD_FLAG); } catch { /* storage unavailable */ }
+  } else if (res.status === 401 && !url.startsWith('/api/auth') && !url.startsWith('/api/preferences/spicy-pin')) {
+    // Session expired mid-app (tokens invalidated server-side, cookie gone…).
+    // Clear client auth state and force a reboot: boot() routes to the login
+    // screen on 401. A sessionStorage flag prevents reload loops; /api/auth/*
+    // is excluded so the login page's own failures never reload, and the
+    // spicy-pin verify endpoint is excluded because it 401s on a wrong PIN.
+    memToken = null;
+    let alreadyReloaded = false;
+    try {
+      alreadyReloaded = sessionStorage.getItem(RELOAD_FLAG) === '1';
+      if (!alreadyReloaded) sessionStorage.setItem(RELOAD_FLAG, '1');
+    } catch { alreadyReloaded = true; /* no storage → don't risk a loop */ }
+    if (!alreadyReloaded) location.reload();
+  }
 
   if (!res.ok) {
     const err = new Error(data?.error || `Request failed (${res.status})`);

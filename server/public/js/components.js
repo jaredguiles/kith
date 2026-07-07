@@ -4,17 +4,16 @@
 import { esc, initials, prideFlagGradient } from './utils.js';
 import { icon } from './icons.js';
 
-/** Avatar with optional photo, pride-flag overlay. size: sm|md|lg */
+/** Avatar with optional photo, pride-flag overlay. size: sm|md|lg
+ * Initials always render underneath the <img>; a loaded photo covers them and
+ * a global capture 'error' listener (app.js) removes broken imgs (CSP forbids
+ * inline onerror handlers). */
 export function avatar(contact, size = 'md') {
   const cls = size === 'md' ? 'av' : `av ${size}`;
   const flag = prideFlagGradient(contact?.orientation);
   const flagHtml = flag ? `<span class="flag" style="background:${flag}"></span>` : '';
-  const photo = contact?.photo_url
-    ? `<img src="/api/media/${esc(contact.photo_media_id ?? '')}/file" alt="" onerror="this.remove()">`
-    : '';
-  // photo_url may be a direct media route; prefer explicit URL when given
-  const img = contact?.photo_url ? `<img src="${esc(contact.photo_url)}" alt="" onerror="this.remove()">` : '';
-  return `<span class="${cls}">${img || esc(initials(contact?.display_name))}${flagHtml}</span>`;
+  const img = contact?.photo_url ? `<img src="${esc(contact.photo_url)}" alt="">` : '';
+  return `<span class="${cls}">${esc(initials(contact?.display_name))}${img}${flagHtml}</span>`;
 }
 
 export function tagPill(tag, { removable = false } = {}) {

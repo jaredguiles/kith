@@ -11,7 +11,7 @@ const { query, withTransaction } = require('../database/connection');
 const { requireAuth, isAdmin } = require('../middleware/auth');
 const { auditWrite, changelogWrite } = require('../lib/audit');
 const { rebuildSearchIndex, buildDisplayName, zodiacFromBirthday } = require('../lib/contacts');
-const { encryptField } = require('../lib/crypto');
+const { encryptField, decryptField } = require('../lib/crypto');
 const { spicyVisible } = require('./contacts');
 
 const router = express.Router();
@@ -90,20 +90,48 @@ router.post('/csv', (req, res, next) => {
     const filePath = req.files[0].path;
 
     if (req.body.peek === 'true' || req.body.peek === '1') {
-      // return headers + first rows for the mapping UI; keep the file for the real run
-      const csvParser = require('../import/parsers/csv');
-      const buf = fs.readFileSync(filePath);
-      const result = csvParser.parse(buf);
-      return res.json({
-        headers: result.headers,
-        sample_count: result.records.length,
-        auto_map: result.headers.reduce((acc, h) => {
-          const auto = csvParser.AUTO_MAP[String(h).toLowerCase().replace(/[_\-.]+/g, ' ').replace(/\s+/g, ' ').trim()];
-          if (auto) acc[h] = auto;
-          return acc;
-        }, {}),
-        temp_path: path.basename(filePath),
-      });
+      // return headers + auto-mapping for the mapping UI. Only the first 64KB
+      // and the first 2 rows are parsed — the frontend re-uploads the file for
+      // the real run, so the peek temp file is deleted here.
+      try {
+        const csvParser = require('../import/parsers/csv');
+        const { parse: csvParse } = require('csv-parse/sync');
+        let buf;
+        const fd = fs.openSync(filePath, 'r');
+        try {
+          const chunk = Buffer.alloc(64 * 1024);
+          const bytes = fs.readSync(fd, chunk, 0, chunk.length, 0);
+          buf = chunk.subarray(0, bytes);
+        } finally {
+          fs.closeSync(fd);
+        }
+        // drop a potentially truncated trailing line from the partial read
+        const text = buf.toString('utf8');
+        const lastNl = text.lastIndexOf('\n');
+        const headText = lastNl > 0 && buf.length === 64 * 1024 ? text.slice(0, lastNl) : text;
+        let rows;
+        try {
+          rows = csvParse(headText, {
+            columns: true, skip_empty_lines: true, relax_column_count: true,
+            relax_quotes: true, bom: true, trim: true, to: 2,
+          });
+        } catch (err) {
+          return res.status(400).json({ error: `CSV parse failed: ${err.message}` });
+        }
+        const headers = rows.length ? Object.keys(rows[0]) : [];
+        if (!headers.length) return res.status(400).json({ error: 'CSV contains no data rows' });
+        return res.json({
+          headers,
+          sample_count: rows.length,
+          auto_map: headers.reduce((acc, h) => {
+            const auto = csvParser.AUTO_MAP[String(h).toLowerCase().replace(/[_\-.]+/g, ' ').replace(/\s+/g, ' ').trim()];
+            if (auto) acc[h] = auto;
+            return acc;
+          }, {}),
+        });
+      } finally {
+        fs.unlink(filePath, () => {}); // peek file is never consumed — clean it up
+      }
     }
 
     let mapping = null;
@@ -133,7 +161,9 @@ router.get('/jobs', async (req, res, next) => {
 });
 
 async function loadJob(req, res, next) {
-  const rows = await query('SELECT * FROM import_jobs WHERE id = ?', [Number(req.params.id)]);
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Import job not found' });
+  const rows = await query('SELECT * FROM import_jobs WHERE id = ?', [id]);
   if (!rows.length) return res.status(404).json({ error: 'Import job not found' });
   if (rows[0].user_id !== req.user.id && !isAdmin(req.user)) return res.status(404).json({ error: 'Import job not found' });
   req.job = rows[0];
@@ -159,6 +189,24 @@ router.delete('/jobs/:id', loadJob, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/**
+ * Decode a staging row's normalized_data into a record object.
+ * Spicy jobs store the JSON encrypted (a JSON-string-wrapped token); cleartext
+ * jobs store plain JSON. Handles both driver shapes (string vs pre-parsed).
+ */
+function decodeNormalizedData(raw, isSpicy) {
+  let val = raw;
+  if (typeof raw === 'string') {
+    try { val = JSON.parse(raw); }
+    catch { val = raw; } // mysql2 pre-parsed JSON column → raw may already be the token string
+  }
+  if (isSpicy && typeof val === 'string') {
+    const plain = decryptField(val);
+    try { val = JSON.parse(plain); } catch { val = {}; }
+  }
+  return val && typeof val === 'object' ? val : {};
+}
+
 // GET /api/import/review?job_id=
 router.get('/review', async (req, res, next) => {
   try {
@@ -182,7 +230,7 @@ router.get('/review', async (req, res, next) => {
     res.json({
       records: rows.map((r) => ({
         ...r,
-        normalized_data: typeof r.normalized_data === 'string' ? JSON.parse(r.normalized_data) : r.normalized_data,
+        normalized_data: decodeNormalizedData(r.normalized_data, Boolean(r.is_spicy_source)),
       })),
     });
   } catch (err) { next(err); }
@@ -191,9 +239,11 @@ router.get('/review', async (req, res, next) => {
 // PUT /api/import/review/:id — decision on one staging record
 router.put('/review/:id', async (req, res, next) => {
   try {
+    const stagingId = Number(req.params.id);
+    if (!Number.isInteger(stagingId) || stagingId <= 0) return res.status(404).json({ error: 'Record not found' });
     const rows = await query(
       `SELECT s.*, j.user_id AS job_user FROM import_staging s JOIN import_jobs j ON j.id = s.import_job_id WHERE s.id = ?`,
-      [Number(req.params.id)]
+      [stagingId]
     );
     if (!rows.length || (rows[0].job_user !== req.user.id && !isAdmin(req.user))) {
       return res.status(404).json({ error: 'Record not found' });
@@ -202,13 +252,27 @@ router.put('/review/:id', async (req, res, next) => {
     if (!['pending', 'approved_new', 'approved_merge', 'skipped'].includes(review_status)) {
       return res.status(400).json({ error: 'Invalid review status' });
     }
-    if (review_status === 'approved_merge' && !suggested_match_contact_id && !rows[0].suggested_match_contact_id) {
+    // validate the merge target at write time (avoid FK 500s at finalize)
+    let targetId = null;
+    if (suggested_match_contact_id !== undefined && suggested_match_contact_id !== null) {
+      targetId = Number(suggested_match_contact_id);
+      if (!Number.isInteger(targetId) || targetId <= 0) {
+        return res.status(400).json({ error: 'Invalid merge target contact id' });
+      }
+      const targets = await query(
+        'SELECT id, owner_user_id FROM contacts WHERE id = ? AND deleted_at IS NULL', [targetId]);
+      if (!targets.length) return res.status(404).json({ error: 'Merge target contact not found' });
+      if (targets[0].owner_user_id !== rows[0].job_user && !isAdmin(req.user)) {
+        return res.status(404).json({ error: 'Merge target contact not found' });
+      }
+    }
+    if (review_status === 'approved_merge' && !targetId && !rows[0].suggested_match_contact_id) {
       return res.status(400).json({ error: 'A merge target is required' });
     }
     await query(
       `UPDATE import_staging SET review_status = ?, suggested_match_contact_id = COALESCE(?, suggested_match_contact_id),
               merge_field_decisions = ?, reviewed_at = NOW() WHERE id = ?`,
-      [review_status, suggested_match_contact_id || null,
+      [review_status, targetId,
        merge_field_decisions ? JSON.stringify(merge_field_decisions) : null, rows[0].id]
     );
     res.json({ ok: true });
@@ -216,7 +280,7 @@ router.put('/review/:id', async (req, res, next) => {
 });
 
 // Contact columns an import record can set
-const IMPORT_CONTACT_FIELDS = ['display_name', 'first_name', 'last_name', 'nickname', 'email', 'phone', 'birthday', 'location', 'bio', 'occupation', 'company', 'website'];
+const IMPORT_CONTACT_FIELDS = ['display_name', 'first_name', 'last_name', 'nickname', 'email', 'phone', 'birthday', 'location', 'bio', 'occupation', 'company', 'website', 'sex'];
 
 /** Create a brand-new contact from a normalized record. */
 async function createFromRecord(conn, rec, job) {
@@ -323,10 +387,24 @@ function platformKey(p) {
 
 // POST /api/import/jobs/:id/finalize
 router.post('/jobs/:id/finalize', loadJob, async (req, res, next) => {
+  // Atomic claim: only one finalize can move the job out of awaiting_review.
+  // ('processing' is reused as the in-flight state — the status enum has no
+  // dedicated 'finalizing' value; the worker's crash recovery restores jobs
+  // with reviewed rows back to awaiting_review, never re-queues them.)
+  const claim = await query(
+    "UPDATE import_jobs SET status = 'processing' WHERE id = ? AND status = 'awaiting_review'",
+    [req.job.id]
+  ).catch((err) => { next(err); return null; });
+  if (claim === null) return;
+  if (!claim.affectedRows) return res.status(409).json({ error: 'Job is not awaiting review' });
+
   try {
-    if (req.job.status !== 'awaiting_review') return res.status(400).json({ error: 'Job is not awaiting review' });
+    // final_contact_id IS NULL skips rows already committed by a previous
+    // (crashed/partial) finalize → idempotent retry
     const staged = await query(
-      `SELECT * FROM import_staging WHERE import_job_id = ? AND review_status IN ('approved_new','approved_merge','skipped','pending','error')`,
+      `SELECT * FROM import_staging
+       WHERE import_job_id = ? AND final_contact_id IS NULL
+         AND review_status IN ('approved_new','approved_merge','skipped','pending','error')`,
       [req.job.id]
     );
 
@@ -341,7 +419,7 @@ router.post('/jobs/:id/finalize', loadJob, async (req, res, next) => {
         skipped += 1;
         continue;
       }
-      const rec = typeof row.normalized_data === 'string' ? JSON.parse(row.normalized_data) : row.normalized_data;
+      const rec = decodeNormalizedData(row.normalized_data, Boolean(req.job.is_spicy_source));
       try {
         await withTransaction(async (conn) => {
           if (row.review_status === 'approved_new') {
@@ -371,12 +449,20 @@ router.post('/jobs/:id/finalize', loadJob, async (req, res, next) => {
       }
     }
 
-    for (const id of touched) await rebuildSearchIndex(id);
+    // search-index rebuild is best-effort — an index error must not abort a
+    // finalize whose per-record commits already happened
+    for (const id of touched) {
+      try { await rebuildSearchIndex(id); }
+      catch (err) { console.error(`[import] rebuildSearchIndex(${id}) failed:`, err.message); }
+    }
 
     await query(
       `UPDATE import_jobs SET status = 'complete', new_contacts = ?, merged_contacts = ?, skipped_records = ?, completed_at = NOW() WHERE id = ?`,
       [created, merged, skipped, req.job.id]
     );
+    // staged data now lives in real tables — blank the (potentially sensitive)
+    // normalized payloads regardless of spicy flag
+    await query("UPDATE import_staging SET normalized_data = '{}' WHERE import_job_id = ?", [req.job.id]);
     // best-effort upload cleanup
     try {
       const paths = req.job.file_paths ? JSON.parse(req.job.file_paths) : [];
@@ -391,7 +477,14 @@ router.post('/jobs/:id/finalize', loadJob, async (req, res, next) => {
     auditWrite(req.user.id, null, 'import', 'import_job', req.job.id, null,
       { created, merged, skipped }, 'Finalized import');
     res.json({ ok: true, created, merged, skipped });
-  } catch (err) { next(err); }
+  } catch (err) {
+    // release the claim so finalize can be retried (per-record commits that
+    // already happened are protected by final_contact_id IS NULL)
+    try {
+      await query("UPDATE import_jobs SET status = 'awaiting_review' WHERE id = ? AND status = 'processing'", [req.job.id]);
+    } catch { /* ignore */ }
+    next(err);
+  }
 });
 
 module.exports = router;
