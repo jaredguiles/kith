@@ -95,6 +95,7 @@ app.use('/api/audit-log', auditRouter);
 app.use('/api/changelog', changelogRouter);
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api', require('./routes/dashboard'));
+app.use('/api/import', require('./routes/import'));
 
 // ---------------------------------------------------------------------------
 // Static SPA (no build step — vanilla files in server/public)
@@ -129,6 +130,24 @@ async function boot() {
 
   app.listen(PORT, () => {
     console.log(`Kith listening on :${PORT} (${process.env.NODE_ENV || 'development'})`);
+  });
+
+  startImportWorker();
+}
+
+// ---------------------------------------------------------------------------
+// Import worker — in-process worker_thread (§3.2). Restarts on crash.
+// ---------------------------------------------------------------------------
+function startImportWorker() {
+  const { Worker } = require('node:worker_threads');
+  const workerPath = path.join(__dirname, 'import', 'worker.js');
+  const worker = new Worker(workerPath);
+  worker.on('error', (err) => console.error('[import-worker] error:', err.message));
+  worker.on('exit', (code) => {
+    if (code !== 0) {
+      console.error(`[import-worker] exited with code ${code}; restarting in 10s`);
+      setTimeout(startImportWorker, 10000);
+    }
   });
 }
 
