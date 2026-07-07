@@ -258,6 +258,28 @@ router.put('/:id/favorite', requireContactAccess('id'), async (req, res, next) =
   } catch (err) { next(err); }
 });
 
+// ---------------------------------------------------------------- photo
+router.put('/:id/photo', requireContactAccess('id', { edit: true }), async (req, res, next) => {
+  try {
+    const { media_id } = req.body || {};
+    if (!media_id) {
+      await query('UPDATE contacts SET photo_url = NULL WHERE id = ?', [req.contact.id]);
+      return res.json({ ok: true });
+    }
+    const rows = await query(
+      'SELECT * FROM media_assets WHERE id = ? AND deleted_at IS NULL AND type = ? AND is_profile_eligible = 1',
+      [Number(media_id), 'photo']
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Photo not found' });
+    const m = rows[0];
+    if (m.owner_user_id !== req.user.id && !isAdmin(req.user)) return res.status(404).json({ error: 'Photo not found' });
+    // photo_url points at the authenticated media route — never a raw fs path
+    await query('UPDATE contacts SET photo_url = ? WHERE id = ?', [`/api/media/${m.id}/file`, req.contact.id]);
+    auditWrite(req.user.id, req.contact.id, 'update', 'contact', req.contact.id, null, { photo_media_id: m.id }, 'Set profile photo');
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // ---------------------------------------------------------------- changelog
 router.get('/:id/changelog', requireContactAccess('id'), async (req, res, next) => {
   try {

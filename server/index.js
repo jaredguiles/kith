@@ -86,6 +86,7 @@ app.use('/api/timeline', timelineRouter);
 app.use('/api/notes', notesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/messages', messagesRouter);
+app.use('/api/media', require('./routes/media'));
 
 // ---------------------------------------------------------------------------
 // Static SPA (no build step — vanilla files in server/public)
