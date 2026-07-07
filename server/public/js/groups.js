@@ -6,7 +6,7 @@ import { esc, initials, debounce } from './utils.js';
 import { icon } from './icons.js';
 import {
   emptyState, modalShell, formGroup, textInput, selectInput, textarea,
-  toast, openModal, confirmModal, readForm,
+  toast, openModal, confirmModal, readForm, recNo,
 } from './components.js';
 import { pageRenderers } from './pages.js';
 import { state, navigate, refreshSidebarLists } from './app.js';
@@ -26,10 +26,14 @@ async function renderGroups(el) {
 
   el.innerHTML = `
   <div class="page-inner">
-    <div class="page-header">
-      <div><h1 class="page-title">Groups</h1><div class="page-subtitle">${groups.length} groups</div></div>
-      <div class="page-actions"><button class="btn btn-primary" data-action="new-group">${icon('plus')} New group</button></div>
+    <div class="rec-toolbar">
+      <span class="rec-crumb"><span>Groups</span></span>
+      <span class="rec-actions">
+        <button class="rec-act rec-act-primary" data-action="new-group">+ New group</button>
+      </span>
     </div>
+    <div class="rec-rule-strong"></div>
+    <div class="rec-count-serif">${groups.length} ${groups.length === 1 ? 'group' : 'groups'}</div>
     <div class="grid-2" id="groups-grid">
       ${groups.map((g) => groupCard(g)).join('') || ''}
     </div>
@@ -43,17 +47,14 @@ async function renderGroups(el) {
 
 function groupCard(g) {
   return `
-  <div class="card" data-group-card="${g.id}">
+  <div class="card rec-group-card" data-group-card="${g.id}">
     <div class="card-header clickable" data-expand>
-      <div class="flex items-center gap-3">
-        <span class="feed-icon" style="color:${esc(g.color || 'var(--accent)')}">${icon(g.icon || 'users')}</span>
-        <div>
-          <div class="card-title">${esc(g.name)} ${g.is_system ? '<span class="badge neutral">System</span>' : ''}</div>
-          ${g.description ? `<div class="text-sm text-muted">${esc(g.description)}</div>` : ''}
-        </div>
+      <div>
+        <div class="rec-group-name">${esc(g.name)} ${g.is_system ? '<span class="badge neutral">System</span>' : ''}</div>
+        ${g.description ? `<div class="rec-mono mt-1">${esc(g.description)}</div>` : ''}
       </div>
       <div class="flex items-center gap-2">
-        <span class="text-sm text-muted" data-member-count>${Number(g.member_count) || 0} members</span>
+        <span class="rec-mono" data-member-count>${Number(g.member_count) || 0} members</span>
         <span class="av-stack" data-avatars></span>
         ${icon('chevron-down', 'chev')}
       </div>
@@ -61,9 +62,9 @@ function groupCard(g) {
     <div class="group-members hidden" data-members>
       <div class="text-sm text-muted p-2">Loading…</div>
     </div>
-    <div class="flex gap-2 mt-2">
-      <button class="btn btn-ghost btn-sm" data-action="edit-group">${icon('edit')} Edit</button>
-      ${!g.is_system ? `<button class="btn btn-ghost btn-sm" data-action="delete-group">${icon('trash')} Delete</button>` : ''}
+    <div class="flex gap-3 mt-2">
+      <button class="rec-act" data-action="edit-group">Edit</button>
+      ${!g.is_system ? `<button class="rec-act rec-act-danger" data-action="delete-group">Delete</button>` : ''}
     </div>
   </div>`;
 }
@@ -88,11 +89,11 @@ function bindGroupCard(card, pageEl) {
     if (countEl) countEl.textContent = `${members.length} members`;
     membersEl.innerHTML = `
       ${members.map((m) => `
-        <div class="flex-between" style="padding:6px 0;border-bottom:1px solid var(--border)">
-          <a class="flex items-center gap-2 text-sm" href="#/contacts/${m.id}" style="color:inherit;text-decoration:none">
-            <span class="av sm">${esc(initials(m.display_name))}</span>
-            <span class="font-medium">${esc(m.display_name)}</span>
-            ${m.location ? `<span class="text-muted text-xs">${esc(m.location)}</span>` : ''}
+        <div class="flex-between" style="padding:6px 0;border-bottom:1px solid var(--rule)">
+          <a class="flex items-center gap-2" href="#/contacts/${m.id}" style="color:inherit;text-decoration:none">
+            <span class="rec-mono">${recNo(m.id)}</span>
+            <span class="rec-serif">${esc(m.display_name)}</span>
+            ${m.location ? `<span class="rec-mono">· ${esc(m.location)}</span>` : ''}
           </a>
           <button class="btn btn-icon" data-remove-member="${m.id}" aria-label="Remove from group">${icon('x')}</button>
         </div>`).join('') || '<div class="text-sm text-muted" style="padding:8px 0">No members yet.</div>'}

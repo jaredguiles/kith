@@ -1,14 +1,45 @@
 // Home dashboard + Notifications page.
 
 import { api } from './api.js';
-import { esc, fmtDate, fmtDateTime, timeAgo, initials, daysUntilBirthday } from './utils.js';
+import { esc, fmtDate, fmtDateTime, timeAgo, parseDate } from './utils.js';
 import { icon } from './icons.js';
-import { emptyState, feedItem, toast } from './components.js';
+import { emptyState, toast, sectionHeader, leaderRow } from './components.js';
 import { pageRenderers } from './pages.js';
 import { state, refreshNotifCount } from './app.js';
 import { openReminderForm, recurBadge } from './events.js';
 
 // ---------------------------------------------------------------- home
+function daypart() {
+  const h = new Date().getHours();
+  return h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
+}
+
+/** Mock-style dateline: 'MONDAY · JULY 7 · 2026' (CSS uppercases). */
+function datelineToday() {
+  const d = new Date();
+  const weekday = d.toLocaleDateString(undefined, { weekday: 'long' });
+  const month = d.toLocaleDateString(undefined, { month: 'long' });
+  return `${weekday} · ${month} ${d.getDate()} · ${d.getFullYear()}`;
+}
+
+/** 'Sat, Jul 11' for a birthday N days out. */
+function bdayDate(daysUntil) {
+  const d = new Date(Date.now() + Number(daysUntil) * 86400000);
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+/** Mono due tag for a reminder: OVERDUE · 2D / DUE TODAY / TOMORROW / date. */
+function dueTag(dueAt) {
+  const due = parseDate(dueAt);
+  if (!due) return { label: '', overdue: false };
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((startOfDay(due) - startOfDay(new Date())) / 86400000);
+  if (diffDays < 0) return { label: `Overdue · ${Math.abs(diffDays)}d`, overdue: true };
+  if (diffDays === 0) return { label: 'Due today', overdue: false };
+  if (diffDays === 1) return { label: 'Tomorrow', overdue: false };
+  return { label: fmtDate(due), overdue: false };
+}
+
 async function renderHome(el) {
   let data;
   try {
@@ -21,97 +52,105 @@ async function renderHome(el) {
   const outOfTouch = data.out_of_touch || [];
   const upcomingDates = data.upcoming_dates || [];
   const firstName = (state.user.display_name || state.user.username).split(' ')[0];
+  const relTag = (n) => n === 0 ? 'today' : n === 1 ? 'tomorrow' : `in ${n} days`;
+
+  // 01 UPCOMING BIRTHDAYS — dotted-leader rows, accent 'in N days'
+  const bdayRows = birthdays.length ? birthdays.map((b) => leaderRow(
+    `<span class="rec-bday-name">${esc(b.display_name)}</span>`,
+    `<span class="rec-bday-date">${esc(bdayDate(b.days_until))}</span><span class="rec-bday-rel">${esc(relTag(b.days_until))}</span>`,
+    { tag: 'a', attrs: `href="#/contacts/${Number(b.id)}"` }
+  )).join('') : '<div class="text-sm text-muted" style="padding:6px 0">No birthdays in the next 30 days.</div>';
+
+  // 02 REMINDERS — hollow-square complete button + serif text + mono due tag
+  const remindRows = reminders.length ? reminders.map((r) => {
+    const due = dueTag(r.due_at);
+    return `
+      <div class="rec-remind-row">
+        <button class="rec-check" data-complete-reminder="${Number(r.id)}" aria-label="Complete ${esc(r.title)}" title="Complete"></button>
+        <span class="rec-remind-t">${esc(r.title)}${r.contact_name ? ` <span class="rec-mono">· ${esc(r.contact_name)}</span>` : ''}</span>
+        ${recurBadge(r)}
+        <span class="rec-remind-due ${due.overdue ? 'overdue' : ''}">${esc(due.label)}</span>
+      </div>`;
+  }).join('') : '<div class="text-sm text-muted" style="padding:6px 0">Nothing due. Nice.</div>';
+
+  // 03 NEXT UP — mono day/hour block + serif title + mono location
+  const eventRows = events.length ? events.map((e) => {
+    const d = parseDate(e.starts_at);
+    const day = d ? d.toLocaleDateString(undefined, { weekday: 'short' }) : '';
+    const hour = d ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
+    return `
+      <div class="rec-ev-row">
+        <div class="rec-ev-when"><div class="rec-ev-day">${esc(day)}</div><div class="rec-ev-hour">${esc(hour)}</div></div>
+        <div class="rec-ev-body"><div class="rec-ev-title">${esc(e.title)}</div>${e.location ? `<div class="rec-ev-where">${esc(e.location)}</div>` : ''}</div>
+      </div>`;
+  }).join('') : '<div class="text-sm text-muted" style="padding:6px 0">Nothing planned yet.</div>';
+
+  // 04 RECENT ACTIVITY — mono timestamp + serif-italic name + muted action
+  const activityRows = activity.length ? activity.map((a) => `
+    <a class="rec-log-row" href="#/contacts/${Number(a.contact_id)}">
+      <span class="rec-log-when">${esc(timeAgo(a.created_at))}</span>
+      <span class="rec-log-body"><span class="rec-log-who">${esc(a.contact_name)}</span> <span class="rec-log-what">— ${esc(a.title || (a.type === 'note' ? 'note added' : a.type))}</span></span>
+    </a>`).join('') : '<div class="text-sm text-muted" style="padding:6px 0">No activity yet.</div>';
+
+  // 05 OUT OF TOUCH — leader rows, mono cadence
+  const ootRows = outOfTouch.map((c) => leaderRow(
+    `<span class="rec-serif-lg">${esc(c.display_name)}</span>`,
+    `<span class="rec-mono">${c.last_contacted_at ? `last ${esc(timeAgo(c.last_contacted_at))}` : 'no contact recorded'} · every ${Number(c.keep_in_touch_days)}d</span>`,
+    { tag: 'a', attrs: `href="#/contacts/${Number(c.id)}"` }
+  )).join('');
+
+  // 06 COMING UP — important dates, accent countdown
+  const upRows = upcomingDates.map((d) => leaderRow(
+    `<span class="rec-serif">${esc(d.label)}</span> <span class="rec-mono">· ${esc(d.contact_name)}</span>`,
+    `<span class="rec-bday-rel">${esc(relTag(d.days_until))}</span>`,
+    { tag: 'a', attrs: `href="#/contacts/${Number(d.contact_id)}"` }
+  )).join('');
 
   el.innerHTML = `
   <div class="page-inner">
-    <div class="page-header">
-      <div>
-        <h1 class="page-title">Home</h1>
-        <div class="page-subtitle">Welcome back, ${esc(firstName)}</div>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-secondary" data-action="new-reminder">${icon('bell')} Reminder</button>
-      </div>
+    <div class="rec-dateline">
+      <span>${esc(datelineToday())}</span>
+      <span>${Number(reminders.length)} reminder${reminders.length === 1 ? '' : 's'} pending</span>
+    </div>
+    <h1 class="rec-greeting">Good ${esc(daypart())}, ${esc(firstName)}.</h1>
+
+    <div class="rec-stats">
+      <div class="rec-stat"><div class="rec-stat-v">${Number(stats.total_contacts) || 0}</div><div class="rec-stat-l">People</div></div>
+      <div class="rec-stat"><div class="rec-stat-v">${Number(stats.contacts_this_month) || 0}</div><div class="rec-stat-l">Added · month</div></div>
+      <div class="rec-stat"><div class="rec-stat-v">${Number(stats.events_this_month) || 0}</div><div class="rec-stat-l">Events · month</div></div>
+      <div class="rec-stat"><div class="rec-stat-v">${Number(stats.overdue_reminders) || 0}</div><div class="rec-stat-l">Overdue</div></div>
     </div>
 
-    <div class="grid-4 mb-4">
-      ${statCard('users', stats.total_contacts, 'People')}
-      ${statCard('plus', stats.contacts_this_month, 'Added this month')}
-      ${statCard('calendar', stats.events_this_month, 'Events this month')}
-      ${statCard('clock', stats.overdue_reminders, 'Overdue reminders', stats.overdue_reminders > 0 ? 'var(--amber)' : null)}
-    </div>
-
-    <div class="grid-2">
-      <div class="card">
-        <div class="card-header"><span class="card-title">Due reminders</span></div>
-        ${reminders.length ? reminders.map((r) => `
-          <div class="flex-between" style="padding:7px 0;border-bottom:1px solid var(--border)">
-            <div>
-              <div class="text-sm font-medium">${esc(r.title)} ${recurBadge(r)}</div>
-              <div class="text-xs text-muted">${esc(fmtDateTime(r.due_at))}${r.contact_name ? ` · ${esc(r.contact_name)}` : ''}</div>
-            </div>
-            <button class="btn btn-icon" data-complete-reminder="${r.id}" aria-label="Complete">${icon('check')}</button>
-          </div>`).join('') : '<div class="text-sm text-muted">Nothing due. Nice.</div>'}
+    <div class="rec-cols">
+      <div class="rec-col">
+        <div class="rec-section">
+          ${sectionHeader('01', 'Upcoming birthdays')}
+          ${bdayRows}
+        </div>
+        <div class="rec-section">
+          ${sectionHeader('02', 'Reminders', `<button class="rec-head-action" data-action="new-reminder">+ New</button>`)}
+          ${remindRows}
+        </div>
+        ${outOfTouch.length ? `
+        <div class="rec-section">
+          ${sectionHeader('05', 'Out of touch')}
+          ${ootRows}
+        </div>` : ''}
       </div>
-
-      <div class="card">
-        <div class="card-header"><span class="card-title">Upcoming birthdays</span></div>
-        ${birthdays.length ? birthdays.map((b) => `
-          <a class="flex-between" style="padding:7px 0;border-bottom:1px solid var(--border);text-decoration:none;color:inherit" href="#/contacts/${b.id}">
-            <span class="flex items-center gap-2">
-              <span class="av sm">${esc(initials(b.display_name))}${b.photo_url ? `<img src="${esc(b.photo_url)}" alt="">` : ''}</span>
-              <span class="text-sm font-medium">${esc(b.display_name)}</span>
-            </span>
-            <span class="badge ${b.days_until <= 7 ? 'amber' : 'neutral'}">${b.days_until === 0 ? 'Today' : b.days_until === 1 ? 'Tomorrow' : `${b.days_until}d`}</span>
-          </a>`).join('') : '<div class="text-sm text-muted">No birthdays in the next 30 days.</div>'}
-      </div>
-
-      <div class="card">
-        <div class="card-header"><span class="card-title">Next events</span><a class="btn btn-ghost btn-sm" href="#/events">All events</a></div>
-        ${events.length ? events.map((e) => `
-          <div style="padding:7px 0;border-bottom:1px solid var(--border)">
-            <div class="text-sm font-medium">${esc(e.title)}</div>
-            <div class="text-xs text-muted">${esc(fmtDateTime(e.starts_at))}${e.location ? ` · ${esc(e.location)}` : ''}</div>
-          </div>`).join('') : '<div class="text-sm text-muted">Nothing planned yet.</div>'}
-      </div>
-
-      ${outOfTouch.length ? `
-      <div class="card">
-        <div class="card-header"><span class="card-title">Out of touch</span></div>
-        ${outOfTouch.map((c) => `
-          <a class="flex-between" style="padding:7px 0;border-bottom:1px solid var(--border);text-decoration:none;color:inherit" href="#/contacts/${c.id}">
-            <span class="flex items-center gap-2">
-              <span class="av sm">${esc(initials(c.display_name))}${c.photo_url ? `<img src="${esc(c.photo_url)}" alt="">` : ''}</span>
-              <span>
-                <span class="text-sm font-medium" style="display:block">${esc(c.display_name)}</span>
-                <span class="text-xs text-muted">${c.last_contacted_at ? `last contact ${esc(timeAgo(c.last_contacted_at))}` : 'no contact recorded'} · every ${Number(c.keep_in_touch_days)}d</span>
-              </span>
-            </span>
-            <span class="badge amber">${icon('clock')}</span>
-          </a>`).join('')}
-      </div>` : ''}
-
-      ${upcomingDates.length ? `
-      <div class="card">
-        <div class="card-header"><span class="card-title">Coming up</span></div>
-        ${upcomingDates.map((d) => `
-          <a class="flex-between" style="padding:7px 0;border-bottom:1px solid var(--border);text-decoration:none;color:inherit" href="#/contacts/${d.contact_id}">
-            <span class="flex items-center gap-2 text-sm">
-              ${icon('gift')}
-              <span><span class="font-medium">${esc(d.label)}</span> · <span class="text-secondary">${esc(d.contact_name)}</span></span>
-            </span>
-            <span class="badge ${d.days_until <= 7 ? 'amber' : 'neutral'}">${d.days_until === 0 ? 'Today' : d.days_until === 1 ? 'Tomorrow' : `in ${d.days_until}d`}</span>
-          </a>`).join('')}
-      </div>` : ''}
-
-      <div class="card">
-        <div class="card-header"><span class="card-title">Recent activity</span></div>
-        ${activity.length ? activity.map((a) => `
-          <a class="flex items-center gap-2" style="padding:6px 0;border-bottom:1px solid var(--border);text-decoration:none;color:inherit" href="#/contacts/${a.contact_id}">
-            <span class="feed-icon" style="width:26px;height:26px">${icon(a.type === 'note' ? 'sticky-note' : 'clock')}</span>
-            <span class="text-sm flex-1 truncate">${esc(a.title || (a.type === 'note' ? 'Note added' : a.type))} · <span class="text-secondary">${esc(a.contact_name)}</span></span>
-            <span class="text-micro text-muted">${esc(timeAgo(a.created_at))}</span>
-          </a>`).join('') : '<div class="text-sm text-muted">No activity yet.</div>'}
+      <div class="rec-col">
+        <div class="rec-section">
+          ${sectionHeader('03', 'Next up', `<a class="rec-head-action" href="#/events">All events</a>`)}
+          ${eventRows}
+        </div>
+        <div class="rec-section">
+          ${sectionHeader('04', 'Recent activity')}
+          ${activityRows}
+        </div>
+        ${upcomingDates.length ? `
+        <div class="rec-section">
+          ${sectionHeader('06', 'Coming up')}
+          ${upRows}
+        </div>` : ''}
       </div>
     </div>
   </div>`;
@@ -126,17 +165,6 @@ async function renderHome(el) {
         refreshNotifCount();
       } catch (err) { toast(err.message, 'error'); }
     }));
-}
-
-function statCard(iconName, value, label, color = null) {
-  return `
-  <div class="card card-compact flex items-center gap-3">
-    <span class="feed-icon" ${color ? `style="color:${color}"` : ''}>${icon(iconName)}</span>
-    <div>
-      <div style="font-size:20px;font-weight:700" class="tabular">${Number(value) || 0}</div>
-      <div class="text-xs text-muted">${esc(label)}</div>
-    </div>
-  </div>`;
 }
 
 // ---------------------------------------------------------- notifications

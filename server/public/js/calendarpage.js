@@ -103,18 +103,17 @@ async function renderCalendarPage(el) {
 
   el.innerHTML = `
   <div class="page-inner cal-page">
-    <div class="page-header">
-      <div>
-        <h1 class="page-title">Calendar</h1>
-        <div class="page-subtitle">${esc(MONTHS[month])} ${year}</div>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-icon" data-cal="prev" aria-label="Previous month">${icon('chevron-left')}</button>
-        <button class="btn btn-secondary btn-sm" data-cal="today">Today</button>
-        <button class="btn btn-icon" data-cal="next" aria-label="Next month">${icon('chevron-right')}</button>
-      </div>
+    <div class="rec-toolbar">
+      <span class="rec-crumb"><span>Calendar</span></span>
+      <span class="rec-actions">
+        <button class="rec-act" data-cal="prev" aria-label="Previous month">← Prev</button>
+        <button class="rec-act rec-act-primary" data-cal="today">Today</button>
+        <button class="rec-act" data-cal="next" aria-label="Next month">Next →</button>
+      </span>
     </div>
-    <div class="card" id="cal-body" style="padding:0">
+    <div class="rec-rule-strong"></div>
+    <h1 class="rec-cal-month">${esc(MONTHS[month])} <span class="rec-cal-year">${year}</span></h1>
+    <div id="cal-body">
       ${emptyState('clock', 'Loading…', 'Fetching this month.')}
     </div>
   </div>`;

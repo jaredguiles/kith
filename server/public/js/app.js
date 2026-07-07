@@ -3,7 +3,7 @@
 import { api, qs, setToken } from './api.js';
 import { esc, initials, debounce, fmtDateTime } from './utils.js';
 import { icon } from './icons.js';
-import { toast, openModal, modalShell, toggleSwitch, emptyState, confirmModal, logoMark } from './components.js';
+import { toast, openModal, modalShell, toggleSwitch, emptyState, confirmModal, logoMark, recNo } from './components.js';
 import { renderPage, pageTitles } from './pages.js';
 
 // ---------------------------------------------------------------- state
@@ -199,7 +199,7 @@ export function applyTheme(pref) {
   const resolved = pref === 'system' ? (systemThemeMedia.matches ? 'light' : 'dark') : pref;
   document.documentElement.setAttribute('data-theme', resolved);
   document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', resolved);
-  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', resolved === 'light' ? '#f7f7fa' : '#000000');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', resolved === 'light' ? '#f2eee4' : '#15130d');
   const btn = document.getElementById('theme-toggle');
   if (btn) {
     btn.innerHTML = icon(themeIcon(pref));
@@ -234,36 +234,39 @@ function logoHtml() {
 function shellHtml() {
   const u = state.user;
   const isAdmin = u.role === 'main_admin' || u.role === 'admin';
+  const roleLabel = u.role === 'user' ? 'Member' : 'Keeper';
+  // The Record numbered index nav — labels changed (People/Notices), hashes unchanged.
+  const navItem = (num, page, label) => `
+        <a class="nav-item" data-nav="${page}" href="#/${page}"><span class="nav-num">${num}</span><span class="nav-label">${esc(label)}</span><span class="nav-marker"></span></a>`;
   return `
   <div id="app">
     <div class="sidebar-backdrop hidden" id="sidebar-backdrop"></div>
     <aside class="sidebar" id="sidebar" aria-label="Main navigation">
       <div class="sidebar-header">
-        <a href="#/home" class="sidebar-logo" style="text-decoration:none">
-          <span class="logo-mark">${logoHtml()}</span>
+        <a href="#/home" class="sidebar-logo">
           <span class="wordmark">${esc(state.settings.app_name || 'Kith')}</span>
+          <span class="sidebar-tag">Personal record</span>
         </a>
-        ${state.spicyEnabled ? `<button class="btn-flame ${state.spicyActive ? 'active' : ''}" id="flame-toggle" aria-label="Toggle spicy mode" aria-pressed="${state.spicyActive}">${icon('flame')}</button>` : ''}
       </div>
       <div class="sidebar-search">
         <div class="search-input-wrap">
           ${icon('search')}
-          <input class="form-input" id="sidebar-search" placeholder="Search" autocomplete="off">
+          <input class="form-input" id="sidebar-search" placeholder="Search records" autocomplete="off">
           <span class="kbd">⌘K</span>
         </div>
       </div>
       <div class="sidebar-new">
-        <button class="btn btn-primary btn-block" data-action="new-contact">${icon('plus')} New person</button>
+        <button class="btn" data-action="new-contact"><span>New record</span><span class="plus">+</span></button>
       </div>
       <nav class="sidebar-nav" aria-label="Pages">
-        <a class="nav-item" data-nav="home" href="#/home">${icon('home')} Home</a>
-        <a class="nav-item" data-nav="contacts" href="#/contacts">${icon('users')} Contacts</a>
-        <a class="nav-item" data-nav="events" href="#/events">${icon('calendar')} Events</a>
-        <a class="nav-item" data-nav="calendar" href="#/calendar">${icon('calendar')} Calendar</a>
-        <a class="nav-item" data-nav="map" href="#/map">${icon('map')} Map</a>
-        <a class="nav-item" data-nav="journal" href="#/journal">${icon('book-open')} Journal</a>
-        <a class="nav-item" data-nav="notifications" href="#/notifications">${icon('bell')} Notifications <span class="nav-count" id="notif-count"></span></a>
-        ${isAdmin ? `<a class="nav-item" data-nav="settings" href="#/settings">${icon('settings')} Settings</a>` : ''}
+        ${navItem('01', 'home', 'Home')}
+        ${navItem('02', 'contacts', 'People')}
+        ${navItem('03', 'calendar', 'Calendar')}
+        ${navItem('04', 'map', 'Map')}
+        ${navItem('05', 'events', 'Events')}
+        <a class="nav-item" data-nav="notifications" href="#/notifications"><span class="nav-num">06</span><span class="nav-label">Notices</span><span class="nav-count" id="notif-count"></span></a>
+        ${isAdmin ? navItem('07', 'settings', 'Settings') : ''}
+        ${navItem(isAdmin ? '08' : '07', 'journal', 'Journal')}
       </nav>
       <div class="sidebar-scroll">
         <button class="sidebar-section-label" data-collapse="favorites" aria-expanded="true">
@@ -278,19 +281,25 @@ function shellHtml() {
         </div>
         <div id="sidebar-groups"></div>
       </div>
-      <div class="sidebar-footer">
-        <span class="popover-wrap" id="user-menu-wrap" style="flex:1;min-width:0;display:flex">
-          <button class="sidebar-user-chip" id="user-chip" aria-haspopup="true" aria-expanded="false" title="Account menu">
-            <span class="av sm">${esc(initials(u.display_name || u.username))}</span>
-            <div class="user-meta">
-              <div class="user-name" id="sidebar-user-name">${esc(u.display_name || u.username)}</div>
-              <div class="user-role">${esc(u.role.replace('_', ' '))}</div>
-            </div>
-          </button>
-        </span>
-        <button class="btn btn-icon" id="theme-toggle" aria-label="Switch theme" title="Theme">${icon(themeIcon(getThemePref()))}</button>
-        <a class="btn btn-icon" href="#/trash" aria-label="Trash" title="Trash">${icon('trash')}</a>
-        <button class="btn btn-icon" data-action="logout" aria-label="Log out">${icon('log-out')}</button>
+      <div class="sidebar-bottom">
+        <div class="sidebar-quiet-row">
+          ${state.spicyEnabled ? `<button class="btn-flame ${state.spicyActive ? 'active' : ''}" id="flame-toggle" title="Confidential layer" aria-label="Toggle confidential layer" aria-pressed="${state.spicyActive}">${icon('lock')}<span class="conf-label">confidential</span><span class="conf-dot"></span></button>` : ''}
+          <span class="flex-1"></span>
+          <button class="btn btn-icon" id="theme-toggle" aria-label="Switch theme" title="Theme">${icon(themeIcon(getThemePref()))}</button>
+          <a class="btn btn-icon" href="#/trash" aria-label="Trash" title="Trash">${icon('trash')}</a>
+        </div>
+        <div class="sidebar-footer">
+          <span class="popover-wrap" id="user-menu-wrap" style="flex:1;min-width:0;display:flex">
+            <button class="sidebar-user-chip" id="user-chip" aria-haspopup="true" aria-expanded="false" title="Account menu">
+              <span class="av sm">${esc(initials(u.display_name || u.username))}</span>
+              <div class="user-meta">
+                <div class="user-name" id="sidebar-user-name">${esc(u.display_name || u.username)}</div>
+                <div class="user-role">${esc(roleLabel)}</div>
+              </div>
+            </button>
+          </span>
+          <button class="btn btn-icon" data-action="logout" aria-label="Log out">${icon('log-out')}</button>
+        </div>
       </div>
     </aside>
     <main class="main">
@@ -323,17 +332,17 @@ export async function refreshSidebarLists() {
     favEl.innerHTML = state.favorites.length
       ? state.favorites.map((c) => `
         <a class="sidebar-mini-item" href="#/contacts/${c.id}">
-          <span class="av sm" style="width:20px;height:20px;font-size:9px">${esc(initials(c.display_name))}</span>
-          <span class="truncate">${esc(c.display_name)}</span>
+          <span class="fav-num">${esc(recNo(c.id))}</span>
+          <span class="fav-name truncate">${esc(c.display_name)}</span>
         </a>`).join('')
       : `<div class="sidebar-mini-item" style="cursor:default;color:var(--text-muted)">No favorites yet</div>`;
   }
   if (grpEl) {
     grpEl.innerHTML = state.groups.map((g) => `
       <a class="sidebar-mini-item" href="#/contacts?group=${g.id}">
-        <span class="dot" style="background:${esc(g.color || '#7c5bf5')}"></span>
         <span class="truncate">${esc(g.name)}</span>
-        <span class="mini-count">${Number(g.member_count) || 0}</span>
+        <span class="leader-dots"></span>
+        <span class="mini-count">${esc(String(Number(g.member_count) || 0).padStart(2, '0'))}</span>
       </a>`).join('');
   }
 }
@@ -505,7 +514,7 @@ export function openCommandPalette() {
     ...(state.user && (state.user.role !== 'user')
       ? [{ label: 'Go to settings', icon: 'settings', run: () => navigate('/settings') }] : []),
     ...(state.spicyEnabled
-      ? [{ label: state.spicyActive ? 'Turn spicy mode off' : 'Turn spicy mode on', icon: 'flame', run: () => setSpicyActive(!state.spicyActive) }] : []),
+      ? [{ label: state.spicyActive ? 'Conceal confidential layer' : 'Reveal confidential layer', icon: 'lock', run: () => setSpicyActive(!state.spicyActive) }] : []),
   ];
 
   const close = () => {

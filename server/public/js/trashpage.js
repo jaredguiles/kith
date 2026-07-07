@@ -3,32 +3,31 @@
 
 import { api } from './api.js';
 import { esc, timeAgo, fmtDateTime } from './utils.js';
-import { icon } from './icons.js';
-import { emptyState, confirmModal, toast } from './components.js';
+import { emptyState, confirmModal, toast, sectionHeader } from './components.js';
 import { pageRenderers } from './pages.js';
 
 const TYPE_LABEL = { contact: 'person', event: 'event', media: 'media item' };
 
-function rowHtml(type, id, iconName, title, sub, deletedAt) {
+function rowHtml(type, id, title, sub, deletedAt) {
   return `
-  <div class="feed-item">
-    <div class="feed-icon">${icon(iconName)}</div>
-    <div class="feed-body">
-      <div class="feed-title">${esc(title)}</div>
-      ${sub ? `<div class="feed-desc">${esc(sub)}</div>` : ''}
-      <div class="feed-meta">Deleted ${esc(timeAgo(deletedAt))}</div>
-    </div>
-    <div class="feed-actions">
-      <button class="btn btn-secondary btn-sm" data-restore="${esc(type)}" data-id="${esc(String(id))}">${icon('rotate-ccw')} Restore</button>
-      <button class="btn btn-danger btn-sm" data-purge="${esc(type)}" data-id="${esc(String(id))}" data-title="${esc(title)}">${icon('trash')} Delete forever</button>
-    </div>
+  <div class="rec-leader rec-trash-row">
+    <span class="rec-leader-left">
+      <span class="rec-serif">${esc(title)}</span>
+      ${sub ? ` <span class="rec-mono">· ${esc(sub)}</span>` : ''}
+    </span>
+    <span class="rec-dots"></span>
+    <span class="rec-leader-right">
+      <span class="rec-mono">deleted ${esc(timeAgo(deletedAt))}</span>
+      <button class="rec-act" data-restore="${esc(type)}" data-id="${esc(String(id))}">Restore</button>
+      <button class="rec-act rec-act-danger" data-purge="${esc(type)}" data-id="${esc(String(id))}" data-title="${esc(title)}">Delete forever</button>
+    </span>
   </div>`;
 }
 
-function sectionHtml(title, rows) {
+function sectionHtml(index, title, rows) {
   return `
-  <div class="card mb-4" style="padding:4px 16px">
-    <div class="card-header" style="margin:12px 0 0"><span class="card-title">${esc(title)}</span></div>
+  <div class="rec-section">
+    ${sectionHeader(index, title)}
     ${rows.join('')}
   </div>`;
 }
@@ -36,12 +35,11 @@ function sectionHtml(title, rows) {
 async function renderTrashPage(el) {
   el.innerHTML = `
   <div class="page-inner" style="max-width:720px">
-    <div class="page-header">
-      <div>
-        <h1 class="page-title">Trash</h1>
-        <div class="page-subtitle">Deleted items can be restored or removed for good</div>
-      </div>
+    <div class="rec-toolbar">
+      <span class="rec-crumb"><span>Trash</span></span>
     </div>
+    <div class="rec-rule-strong"></div>
+    <div class="rec-count-serif">Deleted items can be restored or removed for good.</div>
     <div id="trash-body">${emptyState('clock', 'Loading…', 'Fetching deleted items.')}</div>
   </div>`;
 
@@ -65,16 +63,16 @@ async function renderTrashPage(el) {
 
   let html = '';
   if (contacts.length) {
-    html += sectionHtml('People', contacts.map((c) =>
-      rowHtml('contact', c.id, 'user', c.display_name, '', c.deleted_at)));
+    html += sectionHtml('01', 'People', contacts.map((c) =>
+      rowHtml('contact', c.id, c.display_name, '', c.deleted_at)));
   }
   if (events.length) {
-    html += sectionHtml('Events', events.map((e) =>
-      rowHtml('event', e.id, 'calendar', e.title, e.starts_at ? fmtDateTime(e.starts_at) : '', e.deleted_at)));
+    html += sectionHtml('02', 'Events', events.map((e) =>
+      rowHtml('event', e.id, e.title, e.starts_at ? fmtDateTime(e.starts_at) : '', e.deleted_at)));
   }
   if (media.length) {
-    html += sectionHtml('Media', media.map((m) =>
-      rowHtml('media', m.id, m.type === 'video' ? 'video' : 'image', m.caption || `Untitled ${m.type || 'media'}`, '', m.deleted_at)));
+    html += sectionHtml('03', 'Media', media.map((m) =>
+      rowHtml('media', m.id, m.caption || `Untitled ${m.type || 'media'}`, '', m.deleted_at)));
   }
   body.innerHTML = html;
 

@@ -11,7 +11,7 @@ import { icon } from './icons.js';
 import {
   avatar, tagPill, groupBadge, starRating, emptyState, modalShell, formGroup,
   textInput, selectInput, textarea, toast, openModal, confirmModal, readForm,
-  filterPills, feedItem,
+  filterPills, feedItem, sectionHeader, leaderRow, recNo,
 } from './components.js';
 import { formatPhoneSafe, attachPhoneInput, formatAddress, isUSCountry } from './phonefmt.js';
 import {
@@ -71,19 +71,18 @@ async function renderContacts(el, params) {
 
   el.innerHTML = `
   <div class="page-inner">
-    <div class="page-header">
-      <div>
-        <h1 class="page-title">Contacts</h1>
-        <div class="page-subtitle" id="contacts-count"></div>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-secondary" data-action="toggle-select">${icon('check')} Select</button>
+    <div class="rec-toolbar">
+      <span class="rec-crumb"><span>People</span></span>
+      <span class="rec-actions">
+        <button class="rec-act" data-action="toggle-select">Select</button>
         <span class="popover-wrap" id="contacts-overflow-wrap">
-          <button class="btn btn-icon lg" data-action="contacts-overflow" aria-label="More actions">${icon('more-horizontal')}</button>
+          <button class="rec-act" data-action="contacts-overflow" aria-label="More actions">More</button>
         </span>
-        <button class="btn btn-primary" data-action="new-contact-page">${icon('plus')} New person</button>
-      </div>
+        <button class="rec-act rec-act-primary" data-action="new-contact-page">+ New person</button>
+      </span>
     </div>
+    <div class="rec-rule-strong"></div>
+    <div class="rec-count-serif" id="contacts-count"></div>
     <div class="toolbar">
       <div class="search-input-wrap" style="width:260px">
         ${icon('search')}
@@ -93,7 +92,7 @@ async function renderContacts(el, params) {
       <span class="popover-wrap" id="tag-filter-wrap"></span>
       <span class="spacer"></span>
     </div>
-    <div class="card" style="padding:0;overflow-x:auto">
+    <div style="overflow-x:auto">
       <div id="contacts-table"></div>
     </div>
     <div class="flex-between mt-3" id="contacts-pager"></div>
@@ -105,7 +104,7 @@ async function renderContacts(el, params) {
   selectBtn.addEventListener('click', () => {
     listState.selectMode = !listState.selectMode;
     listState.selected.clear();
-    selectBtn.innerHTML = listState.selectMode ? `${icon('x')} Done` : `${icon('check')} Select`;
+    selectBtn.textContent = listState.selectMode ? 'Done' : 'Select';
     loadTable(el);
   });
   bindContactsOverflow(el);
@@ -231,7 +230,7 @@ async function loadTable(el) {
     return;
   }
 
-  countEl.textContent = `${data.total} ${data.total === 1 ? 'person' : 'people'}`;
+  countEl.textContent = `${data.total} ${data.total === 1 ? 'record' : 'records'}`;
 
   if (!data.contacts.length) {
     tableEl.innerHTML = emptyState('users', 'No contacts yet', 'Add someone you care about.',
@@ -264,6 +263,7 @@ async function loadTable(el) {
         ${listState.selectMode ? `<td>${c.is_shared_in ? '' : `<input type="checkbox" class="bulk-check" data-select-row="${c.id}" data-select-name="${esc(c.display_name)}" ${sel.has(c.id) ? 'checked' : ''} aria-label="Select ${esc(c.display_name)}">`}</td>` : ''}
         <td>
           <div class="flex items-center gap-3">
+            <span class="rec-tbl-no">${recNo(c.id)}</span>
             ${avatar(c, 'sm')}
             <div>
               <div class="font-medium">${esc(c.display_name)} ${c.is_shared_in ? '<span class="badge neutral">Shared</span>' : ''} ${c.out_of_touch ? '<span class="badge amber">Out of touch</span>' : ''}</div>
@@ -563,206 +563,204 @@ export async function renderContactDetail(el, id) {
   };
   const canInline = canEdit && !isBasic;
 
-  // Info card row: inline-editable when allowed; hidden entirely when empty
-  // and not in edit mode (edit mode shows every row with a '+ add' prompt).
+  // Particulars row (dotted leader): inline-editable when allowed; hidden
+  // entirely when empty and not in edit mode (edit mode shows every row
+  // with a '+ add' prompt).
   const infoRow = (label, value) => value
-    ? `<div class="info-grid-row"><span class="text-sm text-secondary info-label">${esc(label)}</span><span class="text-sm info-value" style="text-align:right">${esc(value)}</span></div>`
+    ? `<div class="rec-leader"><span class="rec-part-key">${esc(label)}</span><span class="rec-dots"></span><span class="rec-part-val">${esc(value)}</span></div>`
     : '';
   const ieRow = (label, field, displayValue) => {
     const has = displayValue !== null && displayValue !== undefined && displayValue !== '';
     if (!canInline) return infoRow(label, displayValue);
-    return `<div class="info-grid-row ${has || editMode ? '' : 'ie-hidden'}">
-      <span class="text-sm text-secondary info-label">${esc(label)}</span>
-      <span class="text-sm" style="flex:1;display:flex;justify-content:flex-end;min-width:0">${ieSpan(field, ieDefs[field], displayValue, editMode)}</span>
+    return `<div class="rec-leader ${has || editMode ? '' : 'ie-hidden'}">
+      <span class="rec-part-key">${esc(label)}</span>
+      <span class="rec-dots"></span>
+      <span class="rec-part-val" style="display:flex;justify-content:flex-end;min-width:0">${ieSpan(field, ieDefs[field], displayValue, editMode)}</span>
     </div>`;
   };
 
+  // dossier meta line: pronouns · zodiac · location · b. date · orientation
+  const metaLine = [
+    c.pronouns,
+    c.zodiac_sign || zodiacFromBirthday(c.birthday),
+    c.location,
+    c.birthday ? `b. ${fmtDate(c.birthday)}${age != null ? ` (${age})` : ''}` : '',
+    c.orientation,
+  ].filter(Boolean).map(esc).join(' · ');
+
+  // mono contact key/value row (satellite rows keep data-sat/data-sat-id)
+  const kvRow = (key, valueHtml, { attrs = '', actionsHtml = '' } = {}) => `
+    <div class="rec-kv" ${attrs}>
+      <span class="rec-kv-key">${esc(key)}</span>
+      <span class="rec-kv-val">${valueHtml}</span>
+      ${actionsHtml ? `<span class="rec-kv-actions">${actionsHtml}</span>` : ''}
+    </div>`;
+  const satActions = (withEdit) => `
+    ${withEdit && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
+    ${withEdit ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}`;
+  const primaryDot = '<span class="rec-primary-dot" title="Primary"></span>';
+  const canSat = canEdit && !isBasic;
+
+  const contactRows = `
+    ${c.email && !emails.some((e) => e.email === c.email) ? kvRow('Email', `${esc(c.email)}${primaryDot}`) : ''}
+    ${c.phone && !phones.some((p) => p.phone === c.phone) ? kvRow('Mobile', `${esc(formatPhoneSafe(c.phone))}${primaryDot}`) : ''}
+    ${emails.map((e) => kvRow(e.label || 'Email', `${esc(e.email)}${e.is_primary ? primaryDot : ''}`, {
+      attrs: `data-sat="emails" data-sat-id="${Number(e.id)}"`, actionsHtml: satActions(canSat),
+    })).join('')}
+    ${phones.map((p) => kvRow(p.label || 'Phone', `${esc(formatPhoneSafe(p.phone))}${p.is_primary ? primaryDot : ''}`, {
+      attrs: `data-sat="phones" data-sat-id="${Number(p.id)}"`, actionsHtml: satActions(canSat),
+    })).join('')}
+    ${(addresses || []).map((a) => kvRow(a.label || 'Address', esc(formatAddress(a)), {
+      attrs: `data-sat="addresses" data-sat-id="${Number(a.id)}"`,
+      actionsHtml: `${satActions(canSat)}
+        ${canSat ? `<button class="btn btn-icon" data-locate-addr="${Number(a.id)}" aria-label="Locate on map" title="Locate on map">${icon('map-pin')}</button>` : ''}`,
+    })).join('')}
+    ${!c.email && !c.phone && !emails.length && !phones.length && !(addresses || []).length ? '<div class="text-sm text-muted" style="padding:6px 0">No contact details yet.</div>' : ''}`;
+
+  const socialRows = (socials || []).length ? (socials || []).map((s) => `
+    <div class="rec-leader" data-sat="socials" data-sat-id="${Number(s.id)}">
+      <span class="rec-part-key">${esc(s.platform || 'Link')}</span>
+      <span class="rec-dots"></span>
+      <span class="rec-part-val">${s.username ? `@${esc(s.username)}` : ''}${s.url ? ` <a href="${escUrl(s.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open link">${icon('external-link')}</a>` : ''}</span>
+      ${canEdit && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
+      ${canEdit ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}
+    </div>`).join('') : '<div class="text-sm text-muted" style="padding:6px 0">No social links yet.</div>';
+
   el.innerHTML = `
-  <div class="page-inner ${editMode ? 'detail-edit-mode' : ''}" style="max-width:860px">
-    <div class="mb-3"><a class="btn btn-ghost btn-sm" href="#/contacts">${icon('arrow-left')} Contacts</a></div>
-    <div class="card shine mb-4 ${c.is_spicy ? 'contact-row has-spicy-data' : ''}">
-      <div class="flex items-center gap-4">
+  <div class="page-inner ${editMode ? 'detail-edit-mode' : ''}">
+    <div class="rec-toolbar">
+      <span class="rec-crumb"><a href="#/contacts">People</a> <span>/</span> <span>${esc(c.display_name)}</span></span>
+      <span class="rec-actions">
+        ${access !== 'shared' ? `<button class="rec-act ${c.is_favorite ? 'active' : ''}" data-action="fav" aria-label="Toggle favorite" aria-pressed="${c.is_favorite ? 'true' : 'false'}">${c.is_favorite ? 'Favorited' : 'Favorite'}</button>` : ''}
+        ${canInline ? `<button class="rec-act rec-act-primary" data-action="edit" aria-pressed="${editMode}" aria-label="${editMode ? 'Finish editing' : 'Edit'}">${editMode ? 'Done' : 'Edit'}</button>` : ''}
+        ${access !== 'shared' ? `<button class="rec-act" data-action="merge" aria-label="Merge">Merge</button>` : ''}
+        ${access !== 'shared' ? `<button class="rec-act" data-action="share" aria-label="Share">Share</button>` : ''}
+        ${access !== 'shared' ? `<button class="rec-act rec-act-danger" data-action="delete" aria-label="Delete">Delete</button>` : ''}
+      </span>
+    </div>
+    <div class="rec-rule-strong"></div>
+
+    <div class="rec-dossier ${c.is_spicy ? 'has-spicy-data' : ''}">
+      <div class="rec-portrait">
+        ${avatar(c, 'lg')}
+        ${c.photo_url ? '' : '<span class="rec-portrait-cap">Portrait</span>'}
         ${canEdit ? `
-        <span class="av-edit-wrap">
-          ${avatar(c, 'lg')}
           <button class="av-edit-btn" data-action="change-photo" aria-label="Change profile photo" title="Change profile photo">${icon('camera')}</button>
-          <input type="file" id="profile-photo-file" accept="image/jpeg,image/png,image/gif,image/webp" class="hidden">
-        </span>` : avatar(c, 'lg')}
-        <div class="flex-1">
-          <div class="flex items-center gap-2">
-            ${canInline && editMode
-              ? `<span class="ie-field ie-on" data-ie="name" role="button" tabindex="0" aria-label="Edit name"><h1 class="page-title ie-val">${esc(c.display_name)}</h1></span>`
-              : `<h1 class="page-title">${esc(c.display_name)}</h1>`}
-            ${state.user?.self_contact_id && Number(c.id) === Number(state.user.self_contact_id) ? '<span class="badge blue">This is you</span>' : ''}
-            ${c.is_shared_in || access === 'shared' ? '<span class="badge neutral">Shared</span>' : ''}
-            ${c.relationship_type && !canInline ? `<span class="badge">${esc(c.relationship_type)}</span>` : ''}
-            ${isSpicyOn() && c.is_spicy ? `<span class="badge">${icon('flame')}</span>` : ''}
-          </div>
-          ${canInline ? `<div class="text-sm text-secondary mt-1">${ieSpan('nickname', ieDefs.nickname, c.nickname ? `“${c.nickname}”` : '', editMode)}</div>`
-            : c.nickname ? `<div class="text-sm text-secondary mt-1">“${esc(c.nickname)}”</div>` : ''}
-          <div class="text-sm text-secondary mt-1">
-            ${[c.location, c.occupation && c.company ? `${c.occupation} at ${c.company}` : c.occupation || c.company].filter(Boolean).map(esc).join(' · ')}
-          </div>
-          ${kitBadge ? `<div class="mt-1">${kitBadge}</div>` : ''}
+          <input type="file" id="profile-photo-file" accept="image/jpeg,image/png,image/gif,image/webp" class="hidden">` : ''}
+      </div>
+      <div class="rec-dossier-main">
+        <div class="rec-recno">Record № ${esc(recNo(c.id))}
+          ${state.user?.self_contact_id && Number(c.id) === Number(state.user.self_contact_id) ? '<span class="badge blue">This is you</span>' : ''}
+          ${c.is_shared_in || access === 'shared' ? '<span class="badge neutral">Shared</span>' : ''}
         </div>
-        <div class="flex gap-1">
-          ${access !== 'shared' ? `
-          <button class="btn btn-icon lg" data-action="fav" aria-label="Toggle favorite">
-            <span class="star-rating"><span class="star ${c.is_favorite ? 'filled' : ''}">${icon('star')}</span></span>
-          </button>` : ''}
-          ${canInline ? `<button class="btn ${editMode ? 'btn-primary' : 'btn-secondary'} btn-sm" data-action="edit" aria-pressed="${editMode}" aria-label="${editMode ? 'Finish editing' : 'Edit'}">${editMode ? `${icon('check')} Done` : `${icon('edit')} Edit`}</button>` : ''}
-          ${access !== 'shared' ? `<button class="btn btn-icon lg" data-action="merge" aria-label="Merge">${icon('merge')}</button>` : ''}
-          ${access !== 'shared' ? `<button class="btn btn-icon lg" data-action="share" aria-label="Share">${icon('share')}</button>` : ''}
-          ${access !== 'shared' ? `<button class="btn btn-icon lg" data-action="delete" aria-label="Delete">${icon('trash')}</button>` : ''}
+        ${canInline && editMode
+          ? `<span class="ie-field ie-on" data-ie="name" role="button" tabindex="0" aria-label="Edit name"><h1 class="rec-name ie-val">${esc(c.display_name)}</h1></span>`
+          : `<h1 class="rec-name">${esc(c.display_name)}</h1>`}
+        ${canInline ? `<div class="rec-nick">${ieSpan('nickname', ieDefs.nickname, c.nickname ? `“${c.nickname}”` : '', editMode)}</div>`
+          : c.nickname ? `<div class="rec-nick">“${esc(c.nickname)}”</div>` : ''}
+        ${metaLine ? `<div class="rec-meta-line">${metaLine}</div>` : ''}
+        ${kitBadge ? `<div class="rec-meta-line">${kitBadge}</div>` : ''}
+        <div class="rec-status-row">
+          ${c.relationship_status || (canInline && editMode) ? `
+          <div class="rec-status"><span class="rec-status-l">Status</span><span class="rec-status-v">${
+            canInline ? ieSpan('relationship_status', ieDefs.relationship_status, c.relationship_status, editMode) : esc(c.relationship_status || '')
+          }</span></div>` : ''}
+          ${canInline
+            ? `<div class="rec-squares ie-stars ${editMode ? 'ie-on' : ''} ${!c.rating && !editMode ? 'ie-hidden' : ''}" id="detail-stars" aria-label="Rating" ${!c.rating && !editMode ? 'style="display:none"' : ''}>${starRating(c.rating || 0, { interactive: true, name: 'detail-rating' })}</div>`
+            : c.rating ? `<div class="rec-squares">${starRating(c.rating)}</div>` : ''}
+          ${!isBasic ? `
+          <div class="rec-tags" id="detail-tags">
+            ${(tags || []).map((t) => tagPill(t, { removable: canEdit })).join('')}
+            ${(groups || []).map((g) => groupBadge(g)).join('')}
+            ${canEdit ? `<button class="rec-act" data-action="add-tag">+ Tag</button>` : ''}
+          </div>` : ''}
         </div>
       </div>
-      ${canInline
-        ? `<div class="mt-3 ie-stars ${editMode ? 'ie-on' : ''} ${!c.rating && !editMode ? 'ie-hidden' : ''}" id="detail-stars" aria-label="Rating" ${!c.rating && !editMode ? 'style="display:none"' : ''}>${starRating(c.rating || 0, { interactive: true, name: 'detail-rating' })}</div>`
-        : c.rating ? `<div class="mt-3">${starRating(c.rating)}</div>` : ''}
     </div>
 
-    <div class="grid-2">
-      <div class="card">
-        <div class="card-header"><span class="card-title">Info</span></div>
-        ${infoRow('Full name', [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' '))}
-        ${ieRow('Middle name', 'middle_name', c.middle_name)}
-        ${ieRow('Birthday', 'birthday', c.birthday ? `${fmtDate(c.birthday)}${age != null ? ` (${age})` : ''}` : '')}
-        ${ieRow('Pronouns', 'pronouns', c.pronouns)}
-        ${ieRow('Sex', 'sex', c.sex)}
-        ${ieRow('Orientation', 'orientation', c.orientation)}
-        ${ieRow('Relationship status', 'relationship_status', c.relationship_status)}
-        ${ieRow('Relationship type', 'relationship_type', c.relationship_type)}
-        ${ieRow('Location', 'location', c.location)}
-        ${ieRow('Occupation', 'occupation', c.occupation)}
-        ${ieRow('Company', 'company', c.company)}
-        ${canInline && editMode
-          ? `<div class="info-grid-row">
-              <span class="text-sm text-secondary info-label">Website</span>
-              <span class="text-sm" style="flex:1;display:flex;justify-content:flex-end;min-width:0">${ieSpan('website', ieDefs.website, c.website, editMode)}</span>
-            </div>`
-          : c.website ? `<div class="info-grid-row"><span class="text-sm text-secondary info-label">Website</span><a class="text-sm" href="${escUrl(c.website)}" target="_blank" rel="noopener noreferrer">${esc(c.website)}</a></div>` : ''}
-        ${ieRow('Languages', 'languages', c.languages)}
-        ${ieRow('Ethnicity', 'ethnicity', c.ethnicity)}
-        ${infoRow('Zodiac', c.zodiac_sign || zodiacFromBirthday(c.birthday))}
-        ${ieRow('How we met', 'how_we_met', c.how_we_met)}
-        ${ieRow('Met', 'met_date', c.met_date ? fmtDate(c.met_date) : '')}
-        ${ieRow('Keep in touch (days)', 'keep_in_touch_days', c.keep_in_touch_days ?? '')}
-        ${canInline
-          ? `<div class="mt-2 ${c.bio || editMode ? '' : 'ie-hidden'}"><div class="uppercase-label mb-1">Bio</div><div class="text-sm">${ieSpan('bio', ieDefs.bio, c.bio, editMode)}</div></div>`
-          : c.bio ? `<div class="mt-2"><div class="uppercase-label mb-1">Bio</div><div class="text-sm">${esc(c.bio)}</div></div>` : ''}
-        ${canInline
-          ? `<div class="mt-2 ${c.notes_text || editMode ? '' : 'ie-hidden'}"><div class="uppercase-label mb-1">Notes</div><div class="text-sm">${ieSpan('notes_text', ieDefs.notes_text, c.notes_text, editMode)}</div></div>`
-          : c.notes_text ? `<div class="mt-2"><div class="uppercase-label mb-1">Notes</div><div class="text-sm">${esc(c.notes_text)}</div></div>` : ''}
-      </div>
+    <div class="rec-cols">
+      <div class="rec-col">
+        <div class="rec-section">
+          ${sectionHeader('01', 'Particulars')}
+          ${infoRow('Full name', [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' '))}
+          ${ieRow('Middle name', 'middle_name', c.middle_name)}
+          ${ieRow('Birthday', 'birthday', c.birthday ? `${fmtDate(c.birthday)}${age != null ? ` (${age})` : ''}` : '')}
+          ${ieRow('Pronouns', 'pronouns', c.pronouns)}
+          ${ieRow('Sex', 'sex', c.sex)}
+          ${ieRow('Orientation', 'orientation', c.orientation)}
+          ${ieRow('Relation', 'relationship_type', c.relationship_type)}
+          ${ieRow('Location', 'location', c.location)}
+          ${ieRow('Occupation', 'occupation', c.occupation)}
+          ${ieRow('Company', 'company', c.company)}
+          ${canInline && editMode
+            ? `<div class="rec-leader">
+                <span class="rec-part-key">Website</span>
+                <span class="rec-dots"></span>
+                <span class="rec-part-val" style="display:flex;justify-content:flex-end;min-width:0">${ieSpan('website', ieDefs.website, c.website, editMode)}</span>
+              </div>`
+            : c.website ? `<div class="rec-leader"><span class="rec-part-key">Website</span><span class="rec-dots"></span><span class="rec-part-val"><a href="${escUrl(c.website)}" target="_blank" rel="noopener noreferrer">${esc(c.website)}</a></span></div>` : ''}
+          ${ieRow('Languages', 'languages', c.languages)}
+          ${ieRow('Ethnicity', 'ethnicity', c.ethnicity)}
+          ${ieRow('How we met', 'how_we_met', c.how_we_met)}
+          ${ieRow('Met', 'met_date', c.met_date ? fmtDate(c.met_date) : '')}
+          ${ieRow('Keep in touch', 'keep_in_touch_days', c.keep_in_touch_days ?? '')}
+          ${canInline
+            ? `<div class="mt-2 ${c.bio || editMode ? '' : 'ie-hidden'}"><div class="rec-part-key mb-1">Bio</div><div class="rec-prose">${ieSpan('bio', ieDefs.bio, c.bio, editMode)}</div></div>`
+            : c.bio ? `<div class="mt-2"><div class="rec-part-key mb-1">Bio</div><div class="rec-prose">${esc(c.bio)}</div></div>` : ''}
+          ${canInline
+            ? `<div class="mt-2 ${c.notes_text || editMode ? '' : 'ie-hidden'}"><div class="rec-part-key mb-1">Notes</div><div class="rec-prose">${ieSpan('notes_text', ieDefs.notes_text, c.notes_text, editMode)}</div></div>`
+            : c.notes_text ? `<div class="mt-2"><div class="rec-part-key mb-1">Notes</div><div class="rec-prose">${esc(c.notes_text)}</div></div>` : ''}
+        </div>
 
-      <div class="flex-col gap-4" style="display:flex">
-        <div class="card">
-          <div class="card-header"><span class="card-title">Contact</span>
-            ${canEdit && !isBasic ? `<button class="btn ${editMode ? 'btn-secondary' : 'btn-ghost'} btn-sm" data-action="add-contact-method">${icon('plus')} Add</button>` : ''}
-          </div>
-          <div id="contact-methods">
-            ${c.email && !emails.some((e) => e.email === c.email) ? `
-              <div class="flex-between" style="padding:5px 0">
-                <span class="flex items-center gap-2 text-sm">${icon('mail', 'sat-icon')} ${esc(c.email)} <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span></span>
-                <span class="text-micro text-muted">primary</span>
-              </div>` : ''}
-            ${c.phone && !phones.some((p) => p.phone === c.phone) ? `
-              <div class="flex-between" style="padding:5px 0">
-                <span class="flex items-center gap-2 text-sm">${icon('phone', 'sat-icon')} ${esc(formatPhoneSafe(c.phone))} <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span></span>
-                <span class="text-micro text-muted">primary</span>
-              </div>` : ''}
-            ${emails.map((e) => `
-              <div class="flex-between" style="padding:5px 0" data-sat="emails" data-sat-id="${e.id}">
-                <span class="flex items-center gap-2 text-sm">${icon('mail', 'sat-icon')} ${esc(e.email)} ${e.is_primary ? '<span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>' : ''}</span>
-                <span class="flex items-center gap-2"><span class="text-micro text-muted">${esc(e.label || '')}</span>
-                ${canEdit && !isBasic && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
-                ${canEdit && !isBasic ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}</span>
-              </div>`).join('')}
-            ${phones.map((p) => `
-              <div class="flex-between" style="padding:5px 0" data-sat="phones" data-sat-id="${p.id}">
-                <span class="flex items-center gap-2 text-sm">${icon('phone', 'sat-icon')} ${esc(formatPhoneSafe(p.phone))} ${p.is_primary ? '<span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>' : ''}</span>
-                <span class="flex items-center gap-2"><span class="text-micro text-muted">${esc(p.label || '')}</span>
-                ${canEdit && !isBasic && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
-                ${canEdit && !isBasic ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}</span>
-              </div>`).join('')}
-            ${(addresses || []).map((a) => `
-              <div class="flex-between" style="padding:5px 0" data-sat="addresses" data-sat-id="${a.id}">
-                <span class="flex items-center gap-2 text-sm">${icon('map-pin', 'sat-icon')} ${esc(formatAddress(a))}</span>
-                <span class="flex items-center gap-2"><span class="text-micro text-muted">${esc(a.label || '')}</span>
-                ${canEdit && !isBasic && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
-                ${canEdit && !isBasic ? `<button class="btn btn-icon" data-locate-addr="${a.id}" aria-label="Locate on map" title="Locate on map">${icon('map-pin')}</button>` : ''}
-                ${canEdit && !isBasic ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}</span>
-              </div>`).join('')}
-            ${!c.email && !c.phone && !emails.length && !phones.length && !(addresses || []).length ? '<div class="text-sm text-muted" style="padding:6px 0">No contact details yet.</div>' : ''}
-          </div>
+        <div class="rec-section">
+          ${sectionHeader('02', 'Contact', canSat ? `<button class="rec-head-action" data-action="add-contact-method">+ Add</button>` : '')}
+          <div id="contact-methods">${contactRows}</div>
           <div id="contact-minimap-host"></div>
         </div>
 
         ${!isBasic ? `
-        <div class="card">
-          <div class="card-header"><span class="card-title">Social links</span>
-            ${canEdit ? `<button class="btn ${editMode ? 'btn-secondary' : 'btn-ghost'} btn-sm" data-action="add-social">${icon('plus')} Add</button>` : ''}
-          </div>
-          ${(socials || []).length ? (socials || []).map((s) => `
-            <div class="flex-between" style="padding:5px 0" data-sat="socials" data-sat-id="${s.id}">
-              <span class="flex items-center gap-2 text-sm">${icon('link', 'sat-icon')}
-                <span class="font-medium">${esc(s.platform || '')}</span>
-                ${s.username ? `<span class="text-secondary">@${esc(s.username)}</span>` : ''}
-                ${s.url ? `<a href="${escUrl(s.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open link">${icon('external-link')}</a>` : ''}
-              </span>
-              <span class="flex items-center gap-1">
-              ${canEdit && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
-              ${canEdit ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}
-              </span>
-            </div>`).join('') : '<div class="text-sm text-muted" style="padding:6px 0">No social links yet.</div>'}
-        </div>
+        <div class="rec-section">
+          ${sectionHeader('03', 'Correspondence', canEdit ? `<button class="rec-head-action" data-action="add-social">+ Add</button>` : '')}
+          ${socialRows}
+        </div>` : ''}
+      </div>
 
-        <div class="card">
-          <div class="card-header"><span class="card-title">Tags & groups</span></div>
-          <div class="flex gap-1 flex-wrap" id="detail-tags">
-            ${(tags || []).map((t) => tagPill(t, { removable: canEdit })).join('') || '<span class="text-sm text-muted">No tags.</span>'}
-            ${canEdit ? `<button class="btn btn-ghost btn-sm" data-action="add-tag">${icon('plus')} Tag</button>` : ''}
-          </div>
-          <div class="flex gap-1 flex-wrap mt-2" id="detail-groups">
-            ${(groups || []).map((g) => groupBadge(g)).join('') || '<span class="text-sm text-muted">No groups.</span>'}
-          </div>
+      <div class="rec-col">
+        ${!isBasic ? `
+        <div class="rec-section" id="timeline-card">
+          ${sectionHeader('04', 'Timeline')}
+          <div id="contact-timeline"><div class="text-sm text-muted">Loading…</div></div>
+        </div>
+        <div class="rec-section" id="media-card">
+          ${sectionHeader('05', 'Media · Contact sheet')}
+          <div id="contact-media"><div class="text-sm text-muted">Loading…</div></div>
         </div>` : ''}
       </div>
     </div>
 
     ${!isBasic ? `
-    <div class="card mt-4" id="relationships-card">
-      <div class="card-header"><span class="card-title">Relationships</span>
-        ${canEdit ? `<button class="btn ${editMode ? 'btn-primary' : 'btn-ghost'} btn-sm" data-action="add-relationship">${icon('plus')} Add</button>` : ''}
-      </div>
+    <div class="rec-section mt-6" id="relationships-card">
+      ${sectionHeader('07', 'Relationships', canEdit ? `<button class="rec-head-action" data-action="add-relationship">+ Add</button>` : '')}
       <div id="contact-relationships"><div class="text-sm text-muted">Loading…</div></div>
       ${canEdit ? '<div class="text-xs text-muted mt-2">Linking here updates both people’s profiles.</div>' : ''}
     </div>
-    <div class="grid-2 mt-4">
-      <div class="card" id="dates-card">
-        <div class="card-header"><span class="card-title">Important dates</span>
-          ${canEdit ? `<button class="btn btn-ghost btn-sm" data-action="add-date">${icon('plus')} Add</button>` : ''}
+    <div class="rec-cols" style="margin-top:30px">
+      <div class="rec-col">
+        <div class="rec-section" id="dates-card">
+          ${sectionHeader('08', 'Important dates', canEdit ? `<button class="rec-head-action" data-action="add-date">+ Add</button>` : '')}
+          <div id="contact-dates"><div class="text-sm text-muted">Loading…</div></div>
         </div>
-        <div id="contact-dates"><div class="text-sm text-muted">Loading…</div></div>
       </div>
-      <div class="card" id="gifts-card">
-        <div class="card-header"><span class="card-title">Gift ideas</span>
-          ${canEdit ? `<button class="btn btn-ghost btn-sm" data-action="add-gift">${icon('plus')} Add</button>` : ''}
+      <div class="rec-col">
+        <div class="rec-section" id="gifts-card">
+          ${sectionHeader('09', 'Gift ideas', canEdit ? `<button class="rec-head-action" data-action="add-gift">+ Add</button>` : '')}
+          <div id="contact-gifts"><div class="text-sm text-muted">Loading…</div></div>
         </div>
-        <div id="contact-gifts"><div class="text-sm text-muted">Loading…</div></div>
       </div>
     </div>
-    <div class="card mt-4" id="timeline-card">
-      <div class="card-header"><span class="card-title">Timeline</span></div>
-      <div id="contact-timeline"><div class="text-sm text-muted">Timeline arrives in Phase 6.</div></div>
-    </div>
-    <div class="card mt-4" id="media-card">
-      <div class="card-header"><span class="card-title">Media</span></div>
-      <div id="contact-media"><div class="text-sm text-muted">Media gallery arrives in Phase 7.</div></div>
-    </div>
-    <div class="mt-4 mb-6 flex gap-3">
-      <button class="btn btn-ghost btn-sm" data-action="view-history">${icon('history')} View history</button>
-      <button class="btn btn-ghost btn-sm" data-action="view-changelog">${icon('file-text')} Change log</button>
+    <div class="mt-6 mb-6 rec-actions">
+      <button class="rec-act" data-action="view-history">View history</button>
+      <button class="rec-act" data-action="view-changelog">Change log</button>
     </div>` : ''}
   </div>`;
 

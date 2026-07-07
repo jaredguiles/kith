@@ -33,7 +33,7 @@ async function renderContactMedia(container, contact, canEdit, refresh, typeFilt
     <div class="flex gap-2 mb-3 flex-wrap">
       <input type="file" id="media-file" accept="${UPLOAD_ACCEPT}" multiple class="hidden">
       <button class="btn btn-secondary" id="upload-media">${icon('upload')} Upload</button>
-      ${isSpicyOn() ? `<button type="button" class="btn-flame" id="media-spicy" aria-label="Mark upload spicy" aria-pressed="false">${icon('flame')}</button>` : ''}
+      ${isSpicyOn() ? `<button type="button" class="btn-flame" id="media-spicy" aria-label="Mark upload spicy" aria-pressed="false">${icon('lock')}<span class="conf-label">private</span></button>` : ''}
       <span class="text-xs text-muted flex items-center" id="upload-status"></span>
     </div>` : ''}
     <div class="mb-2" id="media-type-filter">${filterPills(MEDIA_FILTERS, typeFilter, 'media-type')}</div>
@@ -110,18 +110,19 @@ function mediaTileHtml(m) {
         ? `<span class="media-tile-placeholder">${icon('video')}</span>`
         : `<img src="/api/media/${m.id}/${m.type === 'video' ? 'thumbnail' : 'file'}" alt="${esc(m.caption || '')}" loading="lazy">`}
       ${m.type === 'video' ? `<span class="media-type">${icon('video')}</span>` : ''}
+      <span class="media-tile-cap">${esc(m.caption || `Plate ${String(Number(m.id) || 0).padStart(3, '0')}`)}</span>
     </button>`;
 }
 
 function openLightbox(m, contact, canEdit, reload, refreshDetail) {
   const body = `
-    <div class="text-center mb-3">
+    <div class="text-center mb-3 rec-lightbox-frame">
       ${m.type === 'video'
-        ? `<video src="/api/media/${m.id}/file" controls style="max-width:100%;max-height:60vh;border-radius:var(--radius-md)"></video>`
-        : `<img src="/api/media/${m.id}/file" alt="${esc(m.caption || '')}" style="max-width:100%;max-height:60vh;border-radius:var(--radius-md)">`}
+        ? `<video src="/api/media/${m.id}/file" controls style="max-width:100%;max-height:60vh"></video>`
+        : `<img src="/api/media/${m.id}/file" alt="${esc(m.caption || '')}" style="max-width:100%;max-height:60vh">`}
     </div>
-    ${canEdit ? formGroup('Caption', `<input class="form-input" name="caption" value="${esc(m.caption || '')}">`) : (m.caption ? `<p class="text-sm">${esc(m.caption)}</p>` : '')}
-    <div class="text-xs text-muted">${esc(m.type)} · ${esc(fmtDate(m.created_at))} ${m.is_spicy ? '· spicy' : ''}</div>`;
+    ${canEdit ? formGroup('Caption', `<input class="form-input" name="caption" value="${esc(m.caption || '')}">`) : (m.caption ? `<p class="rec-serif" style="font-style:italic">${esc(m.caption)}</p>` : '')}
+    <div class="rec-mono mt-1">${esc(m.type)} · ${esc(fmtDate(m.created_at))} ${m.is_spicy ? '· private' : ''}</div>`;
 
   const footer = canEdit ? `
     <button class="btn btn-danger" data-action="delete-media">Delete</button>

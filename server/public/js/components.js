@@ -40,6 +40,26 @@ export function emptyState(iconName, title, desc, actionHtml = '') {
   return `<div class="empty-state">${icon(iconName)}<h3>${esc(title)}</h3><p>${esc(desc)}</p>${actionHtml}</div>`;
 }
 
+// ----------------------------------------------- The Record patterns
+/** Indexed section header: mono accent index + mono uppercase label +
+ * hairline fill. `index` like '01'. `actionsHtml` (optional, pre-escaped)
+ * renders right-aligned after the fill (use .rec-head-action buttons). */
+export function sectionHeader(index, label, actionsHtml = '') {
+  return `<div class="rec-section-head"><span class="rec-idx">${esc(index)}</span><span class="rec-label">${esc(label)}</span><span class="rec-fill"></span>${actionsHtml}</div>`;
+}
+
+/** Dotted-leader row: left html … right html. Pass PRE-ESCAPED html.
+ * `attrs` adds attributes to the row element (e.g. data-*), `tag` defaults
+ * to div ('a' for links — include href in attrs). */
+export function leaderRow(leftHtml, rightHtml, { tag = 'div', attrs = '', cls = '' } = {}) {
+  return `<${tag} class="rec-leader ${cls}" ${attrs}><span class="rec-leader-left">${leftHtml}</span><span class="rec-dots"></span><span class="rec-leader-right">${rightHtml}</span></${tag}>`;
+}
+
+/** Zero-padded 4-digit record number, e.g. 247 → '0247'. */
+export function recNo(id) {
+  return String(Number(id) || 0).padStart(4, '0');
+}
+
 /** Inline Kith logo SVG (mirrors assets/logo.svg) so currentColor works — an
  * <img> can't inherit color, which rendered the mark black/invisible in dark
  * mode. Returns the bare <svg>; put it inside a .logo-mark span (which sizes

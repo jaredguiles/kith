@@ -3,7 +3,7 @@
 // network pass-through.
 //
 // Deploys MUST bump VERSION so old caches are purged on activate.
-const VERSION = 'v4';
+const VERSION = 'v6';
 const CACHE = `kith-${VERSION}`;
 
 const SHELL = [
@@ -37,8 +37,23 @@ const SHELL = [
   '/vendor/leaflet/images/marker-shadow.png',
   '/vendor/leaflet/images/layers.png',
   '/vendor/leaflet/images/layers-2x.png',
-  '/fonts/InterVariable.woff2',
-  '/fonts/InterVariable-Italic.woff2',
+  '/fonts/record-fonts.css',
+  '/fonts/newsreader-normal-400-700-latin.woff2',
+  '/fonts/newsreader-normal-400-700-latin-ext.woff2',
+  '/fonts/newsreader-italic-400-700-latin.woff2',
+  '/fonts/newsreader-italic-400-700-latin-ext.woff2',
+  '/fonts/plexsans-normal-400-latin.woff2',
+  '/fonts/plexsans-normal-400-latin-ext.woff2',
+  '/fonts/plexsans-normal-500-latin.woff2',
+  '/fonts/plexsans-normal-500-latin-ext.woff2',
+  '/fonts/plexsans-normal-600-latin.woff2',
+  '/fonts/plexsans-normal-600-latin-ext.woff2',
+  '/fonts/plexmono-normal-400-latin.woff2',
+  '/fonts/plexmono-normal-400-latin-ext.woff2',
+  '/fonts/plexmono-normal-500-latin.woff2',
+  '/fonts/plexmono-normal-500-latin-ext.woff2',
+  '/fonts/plexmono-normal-600-latin.woff2',
+  '/fonts/plexmono-normal-600-latin-ext.woff2',
   '/assets/logo.svg',
   '/assets/logo.png',
   '/assets/icons/icon-192.png',

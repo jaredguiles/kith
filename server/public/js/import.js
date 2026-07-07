@@ -181,13 +181,14 @@ async function renderReview(el, params) {
 
   el.innerHTML = `
   <div class="page-inner" style="max-width:900px">
-    <div class="page-header">
-      <div><h1 class="page-title">Import review</h1>
-        <div class="page-subtitle">${records.filter((r) => r.review_status !== 'error').length} records pending</div></div>
-      <div class="page-actions">
-        <button class="btn btn-secondary" data-action="new-import">${icon('upload')} New import</button>
-      </div>
+    <div class="rec-toolbar">
+      <span class="rec-crumb"><span>Import review</span></span>
+      <span class="rec-actions">
+        <button class="rec-act rec-act-primary" data-action="new-import">+ New import</button>
+      </span>
     </div>
+    <div class="rec-rule-strong"></div>
+    <div class="rec-count-serif">${records.filter((r) => r.review_status !== 'error').length} records pending</div>
     ${byJob.size === 0 ? emptyState('import', 'Nothing to review', 'Uploaded imports appear here once processed.',
       `<button class="btn btn-primary" data-action="empty-import">${icon('upload')} Import contacts</button>`) : ''}
     ${[...byJob.entries()].map(([jobId, rows]) => {
@@ -195,18 +196,15 @@ async function renderReview(el, params) {
       const errRows = rows.filter((r) => r.review_status === 'error');
       const dataRows = rows.filter((r) => r.review_status !== 'error');
       return `
-      <div class="card mb-4" data-job-block="${jobId}">
-        <div class="card-header">
-          <div>
-            <span class="card-title">${esc(PLATFORM_LABELS[job.source_platform] || 'Import')} · ${esc(fmtDate(job.created_at))}</span>
-            <div class="text-sm text-muted">${dataRows.length} profiles${job.is_spicy_source ? ' · spicy import' : ''}${errRows.length ? ` · ${errRows.length} file issues` : ''}</div>
-          </div>
-          <div class="flex gap-2">
-            <button class="btn btn-secondary btn-sm" data-bulk-approve="${jobId}">Approve all suggested</button>
-            <button class="btn btn-secondary btn-sm" data-bulk-skip="${jobId}">Skip all pending</button>
-            <button class="btn btn-primary btn-sm" data-finalize="${jobId}">Finalize</button>
-          </div>
+      <div class="rec-section" data-job-block="${jobId}">
+        <div class="rec-section-head">
+          <span class="rec-label">${esc(PLATFORM_LABELS[job.source_platform] || 'Import')} · ${esc(fmtDate(job.created_at))}</span>
+          <span class="rec-fill"></span>
+          <button class="rec-head-action" data-bulk-approve="${jobId}">Approve suggested</button>
+          <button class="rec-head-action" data-bulk-skip="${jobId}">Skip pending</button>
+          <button class="rec-head-action rec-act-primary" data-finalize="${jobId}">Finalize</button>
         </div>
+        <div class="rec-mono mb-2">${dataRows.length} profiles${job.is_spicy_source ? ' · private import' : ''}${errRows.length ? ` · ${errRows.length} file issues` : ''}</div>
         ${errRows.length ? `<div class="badge amber mb-2">${errRows.length} parse issue(s)</div>
           <div class="text-xs text-muted mb-3">${errRows.slice(0, 3).map((r) => esc(r.error_message || '')).join('<br>')}</div>` : ''}
         <div data-job-rows>
@@ -282,11 +280,10 @@ function reviewRow(r) {
   const decision = r.review_status !== 'pending' ? r.review_status : (preselect ? 'approved_merge' : null);
 
   return `
-  <div class="feed-item" data-staging-row="${r.id}" data-suggested="${r.suggested_match_contact_id || ''}">
-    <span class="av">${esc(initials(d.display_name))}</span>
+  <div class="feed-item rec-review-row" data-staging-row="${r.id}" data-suggested="${r.suggested_match_contact_id || ''}">
     <div class="feed-body">
-      <div class="feed-title">${esc(d.display_name || 'Unnamed')}</div>
-      <div class="feed-desc">
+      <div class="rec-serif-lg">${esc(d.display_name || 'Unnamed')}</div>
+      <div class="rec-mono mt-1">
         ${[d.emails?.[0]?.email, d.phones?.[0]?.phone, d.location,
            d.social_links?.[0] ? `@${d.social_links[0].username || d.social_links[0].platform}` : null,
            d.messages?.length ? `${d.messages.length} messages` : null]

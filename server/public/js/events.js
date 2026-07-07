@@ -2,7 +2,7 @@
 // via the kith:contact-detail-rendered event.
 
 import { api, qs } from './api.js';
-import { esc, fmtDate, fmtDateTime, timeAgo, initials, toLocalInput, fromLocalInput, debounce } from './utils.js';
+import { esc, fmtDate, fmtDateTime, timeAgo, initials, parseDate, toLocalInput, fromLocalInput, debounce } from './utils.js';
 import { icon } from './icons.js';
 import {
   emptyState, modalShell, formGroup, textInput, selectInput, textarea, starRating,
@@ -23,10 +23,14 @@ const evState = { filter: 'upcoming', type: '' };
 async function renderEvents(el) {
   el.innerHTML = `
   <div class="page-inner">
-    <div class="page-header">
-      <div><h1 class="page-title">Events</h1><div class="page-subtitle" id="events-count"></div></div>
-      <div class="page-actions"><button class="btn btn-primary" data-action="new-event">${icon('plus')} New event</button></div>
+    <div class="rec-toolbar">
+      <span class="rec-crumb"><span>Events</span></span>
+      <span class="rec-actions">
+        <button class="rec-act rec-act-primary" data-action="new-event">+ New event</button>
+      </span>
     </div>
+    <div class="rec-rule-strong"></div>
+    <div class="rec-count-serif" id="events-count"></div>
     <div class="toolbar">
       <span id="events-pills"></span>
       <span class="popover-wrap" id="type-filter-wrap"></span>
@@ -97,31 +101,33 @@ async function loadEvents(el) {
     return;
   }
 
-  listEl.innerHTML = `<div class="grid-2">${events.map((ev) => eventCard(ev)).join('')}</div>`;
+  listEl.innerHTML = `<div class="rec-ev-list">${events.map((ev) => eventCard(ev)).join('')}</div>`;
   listEl.querySelectorAll('[data-event-id]').forEach((card) =>
     card.addEventListener('click', () => openEventDetail(Number(card.dataset.eventId), () => loadEvents(el)))
   );
 }
 
 function eventCard(ev) {
-  const statusBadge = ev.status === 'completed'
+  const statusTag = ev.status === 'completed'
     ? '<span class="badge green">Completed</span>'
     : ev.status === 'cancelled'
       ? '<span class="badge neutral">Cancelled</span>'
       : '<span class="badge blue">Upcoming</span>';
+  const d = parseDate(ev.starts_at);
+  const day = d ? d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }) : '';
+  const year = d ? String(d.getFullYear()) : '';
+  const hour = d ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
   return `
-  <div class="card clickable ${ev.is_spicy && isSpicyOn() ? 'contact-row has-spicy-data' : ''}" data-event-id="${ev.id}">
-    <div class="flex items-center gap-3">
-      <span class="feed-icon">${icon(TYPE_ICONS[ev.type] || 'calendar')}</span>
-      <div class="flex-1">
-        <div class="font-medium">${esc(ev.title)}</div>
-        <div class="text-sm text-secondary">${esc(fmtDateTime(ev.starts_at))}${ev.location ? ` · ${esc(ev.location)}` : ''}</div>
-      </div>
-      ${statusBadge}
+  <div class="rec-ev-row rec-ev-row-page clickable ${ev.is_spicy && isSpicyOn() ? 'contact-row has-spicy-data' : ''}" data-event-id="${ev.id}">
+    <div class="rec-ev-when"><div class="rec-ev-day">${esc(day)} · ${esc(year)}</div><div class="rec-ev-hour">${esc(hour)}</div></div>
+    <div class="rec-ev-body">
+      <div class="rec-ev-title">${esc(ev.title)}</div>
+      <div class="rec-ev-where">${esc(ev.type || 'event')}${ev.location ? ` · ${esc(ev.location)}` : ''}</div>
+      ${(ev.contacts || []).length ? `<div class="rec-ev-with">${(ev.contacts || []).slice(0, 5).map((c) => esc(c.display_name)).join(' · ')}</div>` : ''}
     </div>
-    <div class="flex-between mt-2">
-      <span class="av-stack">${(ev.contacts || []).slice(0, 5).map((c) => `<span class="av sm" title="${esc(c.display_name)}">${esc(initials(c.display_name))}</span>`).join('')}</span>
-      ${ev.rating ? starRating(ev.rating) : ''}
+    <div class="rec-ev-side">
+      ${statusTag}
+      ${ev.rating ? `<span class="rec-squares">${starRating(ev.rating)}</span>` : ''}
     </div>
   </div>`;
 }
@@ -330,19 +336,25 @@ async function renderContactTimeline(container, contact, canEdit, refresh) {
     ${canEdit ? `
     <div class="flex gap-2 mb-3">
       <input class="form-input flex-1" id="quick-note" placeholder="Add a note" autocomplete="off">
-      ${isSpicyOn() ? `<button type="button" class="btn-flame" id="note-spicy" aria-label="Spicy note" aria-pressed="false">${icon('flame')}</button>` : ''}
+      ${isSpicyOn() ? `<button type="button" class="btn-flame" id="note-spicy" aria-label="Spicy note" aria-pressed="false">${icon('lock')}<span class="conf-label">private</span></button>` : ''}
       <button class="btn btn-secondary" id="add-note">Add</button>
       <button class="btn btn-secondary" id="add-event-here">${icon('calendar')} Event</button>
     </div>` : ''}
     <div id="tl-items">
-      ${items.length ? items.map((it) => feedItem(
-        TL_ICONS[it.kind === 'timeline' ? it.type : it.kind] || TL_ICONS[it.type] || 'clock',
-        esc(it.title || (it.kind === 'note' ? 'Note' : it.type || 'Entry')) + (it.is_spicy && isSpicyOn() ? ` ${icon('flame', 'w-3')}` : ''),
-        esc(it.description || ''),
-        esc(fmtDate(it.at)),
-        (canEdit && (it.kind === 'timeline' || it.kind === 'note'))
-          ? `<button class="btn btn-icon" data-del-tl="${it.kind}:${it.id}" aria-label="Delete">${icon('x')}</button>` : ''
-      )).join('') : '<div class="text-sm text-muted">Nothing here yet. Notes and events will appear in time order.</div>'}
+      ${items.length ? items.map((it) => {
+        const kind = String(it.kind === 'timeline' ? (it.type || 'entry') : it.kind);
+        return `
+        <div class="rec-log-row">
+          <span class="rec-log-when">${esc(fmtDate(it.at))}</span>
+          <span class="rec-log-body">
+            <span class="rec-log-kind">${esc(kind)}${it.is_spicy && isSpicyOn() ? ' · private' : ''}</span>
+            <div class="rec-log-entry">${esc(it.title || (it.kind === 'note' ? 'Note' : it.type || 'Entry'))}</div>
+            ${it.description ? `<div class="rec-log-what">${esc(it.description)}</div>` : ''}
+          </span>
+          ${(canEdit && (it.kind === 'timeline' || it.kind === 'note'))
+            ? `<button class="btn btn-icon" data-del-tl="${esc(it.kind)}:${Number(it.id)}" aria-label="Delete">${icon('x')}</button>` : ''}
+        </div>`;
+      }).join('') : '<div class="text-sm text-muted">Nothing here yet. Notes and events will appear in time order.</div>'}
     </div>`;
 
   if (canEdit) {

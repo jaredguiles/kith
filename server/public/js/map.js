@@ -158,15 +158,13 @@ async function renderMapPage(el) {
   el.innerHTML = `
   <div class="map-page">
     <div class="map-toolbar">
-      <div>
-        <h1 class="page-title">Map</h1>
-      </div>
+      <span class="rec-crumb"><span>Map</span></span>
       <form class="search-input-wrap map-search" id="map-search-form">
         ${icon('search')}
         <input class="form-input" id="map-search-input" placeholder="Find a place…" autocomplete="off" aria-label="Search for a place">
       </form>
     </div>
-    <div class="map-canvas-wrap card" style="padding:0">
+    <div class="map-canvas-wrap" style="padding:0">
       <div id="map-canvas" class="map-canvas">
         <div class="empty-state">${icon('map')}<h3>Loading map…</h3><p>Fetching pins and tiles.</p></div>
       </div>

@@ -40,20 +40,28 @@ async function renderSpicySection(el, contact, canEdit, refresh) {
 
   const p = profile || {};
   const row = (label, value) => value
-    ? `<div class="flex-between" style="padding:5px 0"><span class="text-sm text-secondary">${esc(label)}</span><span class="text-sm" style="text-align:right;max-width:60%">${esc(value)}</span></div>`
+    ? `<div class="flex-between" style="padding:5px 0"><span class="text-sm text-secondary">${esc(label)}</span><span class="rec-conf-val" style="text-align:right;max-width:60%">${esc(value)}</span></div>`
     : '';
   const kinks = Array.isArray(p.kinks) ? p.kinks : (p.kinks ? [p.kinks] : []);
 
+  // bordered health strip: STATUS / PrEP / TESTED (only non-empty cells)
+  const healthCells = [
+    p.hiv_status ? `<span><span class="text-secondary">Status</span> ${esc(p.hiv_status)}</span>` : '',
+    p.on_prep === '1' ? `<span><span class="text-secondary">PrEP</span> ${p.prep_since ? `since ${esc(fmtDate(p.prep_since))}` : 'yes'}</span>`
+      : p.on_prep === '0' ? `<span><span class="text-secondary">PrEP</span> no</span>` : '',
+    p.last_tested_date ? `<span><span class="text-secondary">Tested</span> ${esc(fmtDate(p.last_tested_date))}</span>` : '',
+  ].filter(Boolean);
+
   card.innerHTML = `
     <div class="card-header">
-      <span class="card-title flex items-center gap-2">${icon('flame')} Spicy profile</span>
+      <span class="card-title flex items-center gap-2">Spicy layer</span>
       ${canEdit ? `<button class="btn btn-ghost btn-sm" data-action="edit-spicy">${icon('edit')} ${profile ? 'Edit' : 'Add'}</button>` : ''}
     </div>
     ${profile ? `
     <div class="grid-2">
       <div>
-        ${row('Type', p.spicy_type)}
-        ${row('Role', p.role_preference)}
+        ${row('Relationship', p.spicy_type)}
+        ${row('Role / position', p.role_preference)}
         ${row('Positions', p.positions)}
         ${kinks.length ? `<div style="padding:5px 0"><span class="text-sm text-secondary">Kinks</span><div class="flex gap-1 flex-wrap mt-1">${kinks.map((k) => `<span class="tag-pill">${esc(k)}</span>`).join('')}</div></div>` : ''}
         ${row('Turn-ons', p.turn_ons)}
@@ -63,22 +71,20 @@ async function renderSpicySection(el, contact, canEdit, refresh) {
       </div>
       <div>
         ${row('Protection', p.protection_preference)}
-        ${row('HIV status', p.hiv_status)}
-        ${row('On PrEP', p.on_prep === '1' ? `Yes${p.prep_since ? ` (since ${fmtDate(p.prep_since)})` : ''}` : p.on_prep === '0' ? 'No' : null)}
-        ${row('Last tested', p.last_tested_date ? fmtDate(p.last_tested_date) : null)}
         ${row('STI notes', p.sti_notes)}
         ${row('Body', [p.body_type, p.body_notes].filter(Boolean).join(' — '))}
         ${row('Endowment', p.endowment)}
         ${row('Grooming', p.grooming)}
-        ${p.spicy_rating ? `<div class="flex-between" style="padding:5px 0"><span class="text-sm text-secondary">Spicy rating</span>${starRating(Number(p.spicy_rating))}</div>` : ''}
-        ${p.chemistry_rating ? `<div class="flex-between" style="padding:5px 0"><span class="text-sm text-secondary">Chemistry</span>${starRating(Number(p.chemistry_rating))}</div>` : ''}
+        ${p.spicy_rating ? `<div class="flex-between" style="padding:5px 0"><span class="text-sm text-secondary">Spicy rating</span><span class="rec-squares">${starRating(Number(p.spicy_rating))}</span></div>` : ''}
+        ${p.chemistry_rating ? `<div class="flex-between" style="padding:5px 0"><span class="text-sm text-secondary">Chemistry</span><span class="rec-squares">${starRating(Number(p.chemistry_rating))}</span></div>` : ''}
         ${row('Would repeat', p.would_repeat === '1' ? 'Yes' : p.would_repeat === '0' ? 'No' : null)}
         ${row('Last encounter', p.last_encounter ? fmtDate(p.last_encounter) : null)}
         ${row('Encounters', p.encounter_count)}
       </div>
     </div>
-    ${p.spicy_notes ? `<div class="mt-2"><div class="uppercase-label mb-1">Notes</div><div class="text-sm">${esc(p.spicy_notes)}</div></div>` : ''}
-    ` : `<div class="text-sm text-muted">No spicy profile yet.${canEdit ? ' Add one to keep the details here.' : ''}</div>`}`;
+    ${healthCells.length ? `<div class="rec-health">${healthCells.join('')}</div>` : ''}
+    ${p.spicy_notes ? `<div class="mt-2 rec-conf-notes"><div class="uppercase-label mb-1">Private notes</div><div class="rec-conf-notes-text">${esc(p.spicy_notes)}</div></div>` : ''}
+    ` : `<div class="text-sm text-muted" style="padding:14px 16px">No spicy profile yet.${canEdit ? ' Add one to keep the details here.' : ''}</div>`}`;
 
   card.querySelector('[data-action="edit-spicy"]')?.addEventListener('click', () =>
     openSpicyForm(contact, p, () => renderSpicySection(el, contact, canEdit, refresh)));

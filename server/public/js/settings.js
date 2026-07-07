@@ -6,7 +6,7 @@ import { esc, fmtBytes, fmtDate, timeAgo, debounce, initials } from './utils.js'
 import { icon } from './icons.js';
 import {
   emptyState, modalShell, formGroup, textInput, selectInput,
-  toast, openModal, confirmModal, toggleSwitch,
+  toast, openModal, confirmModal, toggleSwitch, sectionHeader,
 } from './components.js';
 import { pageRenderers } from './pages.js';
 import { state, refreshSidebarLists, setThemePref, getThemePref, refreshUser } from './app.js';
@@ -20,8 +20,9 @@ async function renderSettings(el) {
     // Non-admins get their personal Account & security page here.
     el.innerHTML = `
     <div class="page-inner" style="max-width:760px">
-      <div class="page-header"><div><h1 class="page-title">Account & security</h1></div></div>
-      <div class="card mb-4" id="account-section"><div class="text-sm text-muted">Loading…</div></div>
+      <div class="rec-toolbar"><span class="rec-crumb"><span>Account & Security</span></span></div>
+      <div class="rec-rule-strong mb-4"></div>
+      <div class="rec-section" id="account-section"><div class="text-sm text-muted">Loading…</div></div>
       <div class="mb-6"></div>
     </div>`;
     renderAccountSection(el.querySelector('#account-section'));
@@ -46,19 +47,20 @@ async function renderSettings(el) {
 
   el.innerHTML = `
   <div class="page-inner" style="max-width:760px">
-    <div class="page-header"><div><h1 class="page-title">Settings</h1></div></div>
+    <div class="rec-toolbar"><span class="rec-crumb"><span>Settings</span></span></div>
+    <div class="rec-rule-strong mb-4"></div>
 
-    <div class="card mb-4" id="account-section"><div class="text-sm text-muted">Loading account…</div></div>
+    <div class="rec-section" id="account-section"><div class="text-sm text-muted">Loading account…</div></div>
 
-    <div class="card mb-4">
-      <div class="card-header"><span class="card-title">General</span></div>
+    <div class="rec-section">
+      ${sectionHeader('02', 'General')}
       ${formGroup('App name', textInput('app_name', settings.app_name, 'data-setting="app_name"'))}
       ${formGroup('Relationship types (comma-separated)', textInput('relationship_types', (settings.relationship_types || []).join(', '), 'data-setting="relationship_types"'))}
       <button class="btn btn-secondary btn-sm" data-save-general>Save general</button>
     </div>
 
-    <div class="card mb-4">
-      <div class="card-header"><span class="card-title">Appearance</span></div>
+    <div class="rec-section">
+      ${sectionHeader('03', 'Appearance')}
       ${formGroup('Theme', selectInput('theme_pref', THEME_OPTIONS, getThemePref(), 'data-theme-select'), 'Applies to your account on every device.')}
       <div class="form-row">
         ${formGroup('Accent color', `<input class="form-input" type="color" value="${esc(settings.accent_color || '#7c5bf5')}" data-setting-color="accent_color" style="height:38px;padding:4px">`)}
@@ -68,10 +70,10 @@ async function renderSettings(el) {
       <button class="btn btn-secondary btn-sm mt-2" data-save-appearance>Save appearance</button>
     </div>
 
-    <div class="card mb-4">
-      <div class="card-header"><span class="card-title flex items-center gap-2">${icon('flame')} Spicy</span></div>
+    <div class="rec-section">
+      ${sectionHeader('04', 'Confidential layer')}
       <div class="toggle-row">
-        <div><div class="toggle-label">Enable spicy features</div><div class="toggle-desc">When off, the flame and all spicy content disappear everywhere.</div></div>
+        <div><div class="toggle-label">Enable spicy features</div><div class="toggle-desc">When off, the confidential toggle and all spicy content disappear everywhere.</div></div>
         ${toggleSwitch(Boolean(settings.spicy_enabled), 'data-toggle-setting="spicy_enabled"')}
       </div>
       <div class="toggle-row">
@@ -91,25 +93,22 @@ async function renderSettings(el) {
       </div>
     </div>
 
-    <div class="card mb-4">
-      <div class="card-header"><span class="card-title">Media</span></div>
+    <div class="rec-section">
+      ${sectionHeader('05', 'Media')}
       ${formGroup('Media storage path', textInput('media_path', settings.media_path, 'data-setting="media_path" disabled'), )}
       <div class="form-hint mb-2">Set via the MEDIA_PATH environment variable; shown for reference.</div>
       ${formGroup('Max upload size', `<input class="form-input" value="${esc(fmtBytes(settings.max_upload_size))}" disabled>`)}
     </div>
 
-    <div class="card mb-4">
-      <div class="card-header">
-        <span class="card-title">Users</span>
-        <button class="btn btn-secondary btn-sm" data-new-user>${icon('plus')} New user</button>
-      </div>
+    <div class="rec-section">
+      ${sectionHeader('06', 'Users', `<button class="rec-head-action" data-new-user>+ New user</button>`)}
       <table class="data-table">
         <thead><tr><th>User</th><th>Role</th><th>Status</th><th></th></tr></thead>
         <tbody>
           ${users.map((u) => `
           <tr style="cursor:default">
             <td><div class="font-medium">${esc(u.display_name || u.username)}</div><div class="td-muted">${esc(u.email)}</div></td>
-            <td class="td-secondary capitalize">${esc(u.role.replace('_', ' '))}</td>
+            <td class="td-muted capitalize">${esc(u.role.replace('_', ' '))}</td>
             <td>${u.is_active ? '<span class="badge green">Active</span>' : '<span class="badge neutral">Inactive</span>'}</td>
             <td>
               ${u.role !== 'main_admin' ? `
@@ -124,8 +123,8 @@ async function renderSettings(el) {
       </table>
     </div>
 
-    <div class="card mb-4">
-      <div class="card-header"><span class="card-title">Data</span></div>
+    <div class="rec-section">
+      ${sectionHeader('07', 'Data')}
       <div class="flex gap-2 flex-wrap">
         <a class="btn btn-secondary" href="#/settings?import=1" data-open-import>${icon('import')} Import</a>
         <button class="btn btn-secondary" data-export>${icon('download')} Full backup (JSON)</button>
@@ -142,7 +141,7 @@ async function renderSettings(el) {
       <div class="flex gap-1 flex-wrap">
         ${groups.filter((g) => g.is_system).map((g) => `<span class="group-badge" style="color:${esc(g.color || 'inherit')}">${icon(g.icon || 'users')}${esc(g.name)}</span>`).join('')}
       </div>
-      <div class="form-hint mt-2">Manage groups on the <a href="#/groups">Groups page</a>; tags from any contact.</div>
+      <div class="form-hint mt-2">Manage groups on the <a href="#/groups">Groups page</a>; tags from any contact. Deleted items live in the <a href="#/trash">Trash</a>.</div>
     </div>
     <div class="mb-6"></div>
   </div>`;
@@ -314,7 +313,7 @@ window.addEventListener('kith:shell-ready', () => {
   a.className = 'nav-item';
   a.dataset.nav = 'settings';
   a.href = '#/settings';
-  a.innerHTML = `${icon('shield')} Account`;
+  a.innerHTML = `<span class="nav-num">08</span><span class="nav-label">Account</span><span class="nav-marker"></span>`;
   nav.appendChild(a);
 });
 
@@ -357,7 +356,7 @@ async function renderAccountSection(container) {
   const active = tokens.filter((t) => !t.revoked_at);
 
   container.innerHTML = `
-    <div class="card-header"><span class="card-title flex items-center gap-2">${icon('shield')} Account & security</span></div>
+    ${sectionHeader('01', 'Account & Security')}
     <div class="form-row">
       ${formGroup('Display name', textInput('account_display_name', me.display_name || '', 'autocomplete="name"'))}
       ${formGroup('Email', textInput('account_email', me.email || '', 'type="email" autocomplete="email"'))}

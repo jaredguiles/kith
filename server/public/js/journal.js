@@ -35,21 +35,17 @@ function entryHtml(e) {
   const c = e.contact || {};
   const spicy = e.is_spicy && isSpicyOn();
   const snippet = (e.content || '').length > 240 ? `${e.content.slice(0, 240)}…` : (e.content || '');
+  const d = parseDate(e.occurred_at);
+  const when = d ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : timeAgo(e.occurred_at);
   return `
-  <div class="card card-compact journal-entry mb-2 ${spicy ? 'contact-row has-spicy-data' : ''}">
-    <div class="flex items-start gap-3">
-      <span class="av sm">${esc(initials(c.display_name))}${c.photo_url ? `<img src="${esc(c.photo_url)}" alt="">` : ''}</span>
-      <div class="flex-1">
-        <div class="flex items-center gap-2 flex-wrap">
-          ${c.id ? `<a class="text-sm font-medium" href="#/contacts/${encodeURIComponent(c.id)}">${esc(c.display_name)}</a>` : `<span class="text-sm font-medium">${esc(c.display_name || 'Someone')}</span>`}
-          <span class="badge ${meta.badge}">${icon(meta.icon)}${esc(e.type || meta.label)}</span>
-          ${spicy ? `<span class="badge">${icon('flame')}</span>` : ''}
-          <span class="text-micro text-muted" style="margin-left:auto">${esc(timeAgo(e.occurred_at))}</span>
-        </div>
-        ${e.title ? `<div class="text-sm font-medium mt-1">${esc(e.title)}</div>` : ''}
-        ${snippet ? `<div class="text-sm text-secondary mt-1" style="overflow-wrap:anywhere">${esc(snippet)}</div>` : ''}
-      </div>
-    </div>
+  <div class="rec-log-row journal-entry ${spicy ? 'has-spicy-data' : ''}">
+    <span class="rec-log-when" title="${esc(timeAgo(e.occurred_at))}">${esc(when)}</span>
+    <span class="rec-log-body">
+      <span class="rec-log-kind">${esc(e.type || meta.label)}${spicy ? ' · private' : ''}</span>
+      ${c.id ? ` <a class="rec-log-who" href="#/contacts/${encodeURIComponent(c.id)}">${esc(c.display_name)}</a>` : ` <span class="rec-log-who">${esc(c.display_name || 'Someone')}</span>`}
+      ${e.title ? `<div class="rec-log-entry">${esc(e.title)}</div>` : ''}
+      ${snippet ? `<div class="rec-log-what">${esc(snippet)}</div>` : ''}
+    </span>
   </div>`;
 }
 
@@ -59,7 +55,7 @@ function groupedHtml(entries) {
   for (const e of entries) {
     const label = dayLabel(e.occurred_at);
     if (label !== lastLabel) {
-      out += `<div class="journal-day-label uppercase-label" style="padding:14px 2px 8px">${esc(label)}</div>`;
+      out += `<div class="rec-section-head rec-journal-day"><span class="rec-label journal-day-label">${esc(label)}</span><span class="rec-fill"></span></div>`;
       lastLabel = label;
     }
     out += entryHtml(e);
@@ -155,15 +151,14 @@ function openJournalEntryModal(onSaved) {
 async function renderJournalPage(el) {
   el.innerHTML = `
   <div class="page-inner" style="max-width:720px">
-    <div class="page-header">
-      <div>
-        <h1 class="page-title">Journal</h1>
-        <div class="page-subtitle">Your relationship diary — notes, timeline moments and completed events across everyone, newest first.</div>
-      </div>
-      <div class="page-actions">
-        <button class="btn btn-primary" data-action="new-entry">${icon('plus')} New entry</button>
-      </div>
+    <div class="rec-toolbar">
+      <span class="rec-crumb"><span>Journal</span></span>
+      <span class="rec-actions">
+        <button class="rec-act rec-act-primary" data-action="new-entry">+ New entry</button>
+      </span>
     </div>
+    <div class="rec-rule-strong"></div>
+    <div class="rec-count-serif">A ledger of notes, moments and completed events — newest first.</div>
     <div id="journal-feed">${emptyState('clock', 'Loading…', 'Fetching your journal.')}</div>
     <div id="journal-footer" class="text-center mt-3"></div>
   </div>`;
