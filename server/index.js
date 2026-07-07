@@ -63,6 +63,12 @@ app.get('/api/health', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// API routes
+// ---------------------------------------------------------------------------
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));
+
+// ---------------------------------------------------------------------------
 // Static SPA (no build step — vanilla files in server/public)
 // ---------------------------------------------------------------------------
 const publicDir = path.join(__dirname, 'public');
