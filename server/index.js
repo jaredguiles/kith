@@ -72,6 +72,10 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/preferences', require('./routes/preferences'));
+app.use('/api/contacts', require('./routes/contacts'));
+const { contactSatellites, satelliteItems } = require('./routes/satellites');
+app.use('/api/contacts/:id', contactSatellites);
+app.use('/api', satelliteItems);
 
 // ---------------------------------------------------------------------------
 // Static SPA (no build step — vanilla files in server/public)
