@@ -80,6 +80,12 @@ const { tagsRouter, contactTags } = require('./routes/tags');
 app.use('/api/tags', tagsRouter);
 app.use('/api/contacts/:id/tags', contactTags);
 app.use('/api/groups', require('./routes/groups'));
+app.use('/api/events', require('./routes/events'));
+const { timelineRouter, notesRouter, remindersRouter, messagesRouter } = require('./routes/timeline');
+app.use('/api/timeline', timelineRouter);
+app.use('/api/notes', notesRouter);
+app.use('/api/reminders', remindersRouter);
+app.use('/api/messages', messagesRouter);
 
 // ---------------------------------------------------------------------------
 // Static SPA (no build step — vanilla files in server/public)
