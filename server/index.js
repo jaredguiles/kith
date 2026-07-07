@@ -87,6 +87,14 @@ app.use('/api/notes', notesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/messages', messagesRouter);
 app.use('/api/media', require('./routes/media'));
+app.use('/api/contacts/:id/spicy', require('./routes/spicy'));
+const { shareRouter, mergeRouter, auditRouter, changelogRouter } = require('./routes/sharing');
+app.use('/api/contacts/:id/share', shareRouter);
+app.use('/api/contacts/:id/merge', mergeRouter);
+app.use('/api/audit-log', auditRouter);
+app.use('/api/changelog', changelogRouter);
+app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api', require('./routes/dashboard'));
 
 // ---------------------------------------------------------------------------
 // Static SPA (no build step — vanilla files in server/public)
