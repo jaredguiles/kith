@@ -37,8 +37,11 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'"],
-        styleSrc: ["'self'"],
+        scriptSrc: ["'self'"], // strict: no unsafe-inline scripts (§7.12)
+        // 'unsafe-inline' for STYLE only: the design system sets dynamic colors
+        // (tag dots, pride-flag gradients, accent overrides) via style attributes.
+        // Script injection remains fully blocked, which is the CSP's XSS backstop.
+        styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", 'data:', 'blob:'],
         fontSrc: ["'self'"],
         mediaSrc: ["'self'", 'blob:'],
@@ -67,6 +70,8 @@ app.get('/api/health', (req, res) => {
 // ---------------------------------------------------------------------------
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
+app.use('/api/settings', require('./routes/settings'));
+app.use('/api/preferences', require('./routes/preferences'));
 
 // ---------------------------------------------------------------------------
 // Static SPA (no build step — vanilla files in server/public)
