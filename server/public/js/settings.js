@@ -1,18 +1,30 @@
-// Settings page (admin only) + per-user preferences.
+// Settings page (admin sections) + per-user preferences + Account & security
+// (2FA, API tokens, password, theme — visible to ALL users).
 
-import { api } from './api.js';
-import { esc, fmtBytes } from './utils.js';
+import { api, setToken } from './api.js';
+import { esc, fmtBytes, fmtDate, timeAgo } from './utils.js';
 import { icon } from './icons.js';
 import {
   emptyState, modalShell, formGroup, textInput, selectInput,
   toast, openModal, confirmModal, toggleSwitch,
 } from './components.js';
 import { pageRenderers } from './pages.js';
-import { state, refreshSidebarLists } from './app.js';
+import { state, refreshSidebarLists, setThemePref, getThemePref } from './app.js';
+
+const THEME_OPTIONS = [
+  { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }, { value: 'system', label: 'System' },
+];
 
 async function renderSettings(el) {
   if (state.user.role === 'user') {
-    el.innerHTML = `<div class="page-inner">${emptyState('shield', 'Admins only', 'Settings are managed by an admin.')}</div>`;
+    // Non-admins get their personal Account & security page here.
+    el.innerHTML = `
+    <div class="page-inner" style="max-width:760px">
+      <div class="page-header"><div><h1 class="page-title">Account & security</h1></div></div>
+      <div class="card mb-4" id="account-section"><div class="text-sm text-muted">Loading…</div></div>
+      <div class="mb-6"></div>
+    </div>`;
+    renderAccountSection(el.querySelector('#account-section'));
     return;
   }
 
@@ -36,6 +48,8 @@ async function renderSettings(el) {
   <div class="page-inner" style="max-width:760px">
     <div class="page-header"><div><h1 class="page-title">Settings</h1></div></div>
 
+    <div class="card mb-4" id="account-section"><div class="text-sm text-muted">Loading account…</div></div>
+
     <div class="card mb-4">
       <div class="card-header"><span class="card-title">General</span></div>
       ${formGroup('App name', textInput('app_name', settings.app_name, 'data-setting="app_name"'))}
@@ -45,6 +59,7 @@ async function renderSettings(el) {
 
     <div class="card mb-4">
       <div class="card-header"><span class="card-title">Appearance</span></div>
+      ${formGroup('Theme', selectInput('theme_pref', THEME_OPTIONS, getThemePref(), 'data-theme-select'), 'Applies to your account on every device.')}
       <div class="form-row">
         ${formGroup('Accent color', `<input class="form-input" type="color" value="${esc(settings.accent_color || '#7c5bf5')}" data-setting-color="accent_color" style="height:38px;padding:4px">`)}
         ${formGroup('Spicy accent color', `<input class="form-input" type="color" value="${esc(settings.spicy_accent_color || '#c2394f')}" data-setting-color="spicy_accent_color" style="height:38px;padding:4px">`)}
@@ -113,7 +128,9 @@ async function renderSettings(el) {
       <div class="card-header"><span class="card-title">Data</span></div>
       <div class="flex gap-2 flex-wrap">
         <a class="btn btn-secondary" href="#/settings?import=1" data-open-import>${icon('import')} Import</a>
-        <button class="btn btn-secondary" data-export>${icon('download')} Export / backup</button>
+        <button class="btn btn-secondary" data-export>${icon('download')} Full backup (JSON)</button>
+        <button class="btn btn-secondary" data-export-vcf>${icon('download')} Export all (vCard)</button>
+        <button class="btn btn-secondary" data-export-csv>${icon('download')} Export all (CSV)</button>
       </div>
       <div class="divider"></div>
       <div class="uppercase-label mb-2">System tags</div>
@@ -129,6 +146,12 @@ async function renderSettings(el) {
     </div>
     <div class="mb-6"></div>
   </div>`;
+
+  // ---- account & security (all users; admins see it atop settings)
+  renderAccountSection(el.querySelector('#account-section'));
+
+  // ---- theme (per-user preference)
+  el.querySelector('[data-theme-select]')?.addEventListener('change', (e) => setThemePref(e.target.value));
 
   // ---- general
   el.querySelector('[data-save-general]').addEventListener('click', async () => {
@@ -226,7 +249,7 @@ async function renderSettings(el) {
   // ---- export
   el.querySelector('[data-export]').addEventListener('click', async () => {
     try {
-      const res = await fetch('/api/export', { credentials: 'same-origin' });
+      const res = await fetch('/api/export/backup', { credentials: 'same-origin' });
       if (!res.ok) throw new Error('Export failed');
       const blob = await res.blob();
       const a = document.createElement('a');
@@ -237,6 +260,8 @@ async function renderSettings(el) {
       toast('Export downloaded.');
     } catch (err) { toast(err.message, 'error'); }
   });
+  el.querySelector('[data-export-vcf]').addEventListener('click', () => downloadUrl('/api/export/vcf?all=1'));
+  el.querySelector('[data-export-csv]').addEventListener('click', () => downloadUrl('/api/export/csv?all=1'));
 
   // ---- import entry (Phase 9 fills this in)
   el.querySelector('[data-open-import]').addEventListener('click', (e) => {
@@ -277,3 +302,290 @@ function openUserForm(existing, onSaved, isMainAdmin) {
 }
 
 pageRenderers.settings = renderSettings;
+
+// Non-admins have no Settings link in the sidebar (app.js renders it for
+// admins only, and we must not touch app.js). Inject an "Account" nav item
+// pointing at #/settings, which renders the Account & security page for them.
+window.addEventListener('kith:shell-ready', () => {
+  if (state.user?.role !== 'user') return;
+  const nav = document.querySelector('.sidebar-nav');
+  if (!nav || nav.querySelector('[data-nav="settings"]')) return;
+  const a = document.createElement('a');
+  a.className = 'nav-item';
+  a.dataset.nav = 'settings';
+  a.href = '#/settings';
+  a.innerHTML = `${icon('shield')} Account`;
+  nav.appendChild(a);
+});
+
+// ---------------------------------------------------------------------------
+// Account & security — per-user: password, 2FA, API tokens, theme (for
+// non-admins who don't see the admin Appearance card).
+// ---------------------------------------------------------------------------
+
+function downloadUrl(url) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+async function renderAccountSection(container) {
+  if (!container) return;
+  let me = null;
+  let tokens = [];
+  let tokensErr = null;
+  try {
+    [me, tokens] = await Promise.all([
+      api.get('/api/auth/me').then((d) => d.user),
+      api.get('/api/tokens').then((d) => d.tokens || []).catch((e) => { tokensErr = e; return []; }),
+    ]);
+  } catch (err) {
+    container.innerHTML = `<div class="text-sm text-muted">${esc(err?.message || "Couldn't load your account.")}</div>`;
+    return;
+  }
+  const isAdminPage = state.user.role !== 'user';
+  const active = tokens.filter((t) => !t.revoked_at);
+
+  container.innerHTML = `
+    <div class="card-header"><span class="card-title flex items-center gap-2">${icon('shield')} Account & security</span></div>
+    <div class="toggle-row">
+      <div><div class="toggle-label">Password</div><div class="toggle-desc">Change your Kith password.</div></div>
+      <button class="btn btn-secondary btn-sm" data-change-password>Change password</button>
+    </div>
+    <div class="toggle-row">
+      <div><div class="toggle-label">Two-factor authentication</div>
+        <div class="toggle-desc">${me.totp_enabled ? 'On — a 6-digit code is required at login.' : 'Off — add an authenticator app for extra protection.'}</div></div>
+      ${me.totp_enabled
+        ? `<button class="btn btn-secondary btn-sm" data-totp-disable>Disable 2FA</button>`
+        : `<button class="btn btn-primary btn-sm" data-totp-enable>${icon('key')} Enable 2FA</button>`}
+    </div>
+    ${!isAdminPage ? `
+    <div class="toggle-row">
+      <div><div class="toggle-label">Theme</div><div class="toggle-desc">Applies to your account on every device.</div></div>
+      <div style="width:140px">${selectInput('theme_pref', THEME_OPTIONS, getThemePref(), 'data-account-theme')}</div>
+    </div>` : ''}
+    <div class="divider"></div>
+    <div class="flex-between mb-2">
+      <div class="uppercase-label">API tokens</div>
+      <button class="btn btn-secondary btn-sm" data-new-token>${icon('plus')} New token</button>
+    </div>
+    ${tokensErr ? `<div class="text-sm text-muted">${esc(tokensErr.message)}</div>` : active.length ? `
+    <div style="overflow-x:auto">
+    <table class="data-table">
+      <thead><tr><th>Name</th><th>Prefix</th><th>Scope</th><th>Last used</th><th>Expires</th><th></th></tr></thead>
+      <tbody>
+        ${active.map((t) => `
+        <tr style="cursor:default">
+          <td class="font-medium">${esc(t.name)}</td>
+          <td class="td-muted"><code>${esc(t.prefix)}…</code></td>
+          <td class="td-secondary">${esc(t.scopes === 'read_write' ? 'read + write' : 'read')}</td>
+          <td class="td-muted">${t.last_used_at ? esc(timeAgo(t.last_used_at)) : 'never'}</td>
+          <td class="td-muted">${t.expires_at ? esc(fmtDate(t.expires_at)) : 'never'}</td>
+          <td><button class="btn btn-icon" data-revoke-token="${t.id}" aria-label="Revoke token">${icon('x')}</button></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+    </div>` : '<div class="text-sm text-muted">No API tokens yet. Create one for scripts or the calendar feed.</div>'}
+    <div class="form-hint mt-2">Calendar feed: subscribe to <code>${esc(location.origin)}/api/ics/calendar.ics?token=&lt;your token&gt;</code> with a read token.</div>`;
+
+  container.querySelector('[data-change-password]').addEventListener('click', openChangePasswordModal);
+  container.querySelector('[data-totp-enable]')?.addEventListener('click', () => openTotpEnableModal(() => renderAccountSection(container)));
+  container.querySelector('[data-totp-disable]')?.addEventListener('click', () => openTotpDisableModal(() => renderAccountSection(container)));
+  container.querySelector('[data-account-theme]')?.addEventListener('change', (e) => setThemePref(e.target.value));
+  container.querySelector('[data-new-token]').addEventListener('click', () => openTokenCreateModal(() => renderAccountSection(container)));
+  container.querySelectorAll('[data-revoke-token]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const ok = await confirmModal('Revoke token', 'Revoke this token? Anything using it stops working immediately.', { confirmLabel: 'Revoke' });
+      if (!ok) return;
+      try {
+        await api.del(`/api/tokens/${b.dataset.revokeToken}`);
+        toast('Token revoked.');
+        renderAccountSection(container);
+      } catch (err) { toast(err.message, 'error'); }
+    }));
+}
+
+// ------------------------------------------------------------ password
+function openChangePasswordModal() {
+  const content = `
+    ${formGroup('Current password', `<input class="form-input" name="current_password" type="password" autocomplete="current-password">`)}
+    ${formGroup('New password', `<input class="form-input" name="new_password" type="password" autocomplete="new-password" minlength="8">`, 'At least 8 characters.')}`;
+  openModal(modalShell('change-pw', 'Change password', content,
+    `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+     <button class="btn btn-primary" data-action="save">Change password</button>`), {
+    onMount: (overlay, close) => {
+      overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
+        try {
+          const res = await api.put('/api/auth/password', {
+            current_password: overlay.querySelector('[name="current_password"]').value,
+            new_password: overlay.querySelector('[name="new_password"]').value,
+          });
+          if (res?.token) setToken(res.token);
+          toast('Password changed.');
+          close();
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    },
+  });
+}
+
+// ---------------------------------------------------------------- 2FA
+function openTotpEnableModal(onDone) {
+  openModal(modalShell('totp-setup', 'Enable two-factor authentication',
+    `<div class="text-sm text-muted">Preparing your secret…</div>`, ''), {
+    onMount: async (overlay, close) => {
+      let setup;
+      try {
+        setup = await api.post('/api/auth/totp/setup');
+      } catch (err) {
+        toast(err.message, 'error');
+        close();
+        return;
+      }
+      overlay.querySelector('.modal-content').innerHTML = `
+        <p class="text-sm text-secondary mb-3">Add Kith to your authenticator app (1Password, Aegis, Google Authenticator…). Most apps let you enter a setup key manually.</p>
+        <div class="form-group">
+          <label class="form-label">Setup key (base32)</label>
+          <div class="flex gap-2">
+            <code class="totp-secret flex-1">${esc(setup.secret_base32)}</code>
+            <button class="btn btn-secondary btn-sm" data-copy="${esc(setup.secret_base32)}">Copy</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Or the full otpauth URL</label>
+          <div class="flex gap-2">
+            <code class="totp-secret flex-1" style="font-size:11px">${esc(setup.otpauth_url)}</code>
+            <button class="btn btn-secondary btn-sm" data-copy="${esc(setup.otpauth_url)}">Copy</button>
+          </div>
+        </div>
+        <div class="divider"></div>
+        ${formGroup('Enter the 6-digit code from your app to confirm', `<input class="form-input totp-input" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="••••••">`)}
+        <div class="form-error hidden" data-totp-error></div>`;
+      const footer = document.createElement('div');
+      footer.className = 'modal-footer';
+      footer.innerHTML = `
+        <button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+        <button class="btn btn-primary" data-action="verify">Verify & enable</button>`;
+      overlay.querySelector('.modal').appendChild(footer);
+
+      bindCopyButtons(overlay);
+      const codeInput = overlay.querySelector('[name="code"]');
+      codeInput.addEventListener('input', () => {
+        codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6);
+      });
+      footer.querySelector('[data-action="verify"]').addEventListener('click', async () => {
+        const errEl = overlay.querySelector('[data-totp-error]');
+        errEl.classList.add('hidden');
+        const code = codeInput.value;
+        if (code.length !== 6) { errEl.textContent = 'Enter the 6-digit code.'; errEl.classList.remove('hidden'); return; }
+        try {
+          await api.post('/api/auth/totp/enable', { code });
+          toast('Two-factor authentication enabled.');
+          close();
+          onDone?.();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.classList.remove('hidden');
+          codeInput.select();
+        }
+      });
+    },
+  });
+}
+
+function openTotpDisableModal(onDone) {
+  const content = `
+    <p class="text-sm text-secondary mb-3">Enter a current code from your authenticator app to turn 2FA off.</p>
+    ${formGroup('6-digit code', `<input class="form-input totp-input" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="••••••">`)}`;
+  openModal(modalShell('totp-disable', 'Disable two-factor authentication', content,
+    `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+     <button class="btn btn-danger" data-action="disable">Disable 2FA</button>`), {
+    onMount: (overlay, close) => {
+      const codeInput = overlay.querySelector('[name="code"]');
+      codeInput.addEventListener('input', () => {
+        codeInput.value = codeInput.value.replace(/\D/g, '').slice(0, 6);
+      });
+      overlay.querySelector('[data-action="disable"]').addEventListener('click', async () => {
+        try {
+          await api.post('/api/auth/totp/disable', { code: codeInput.value });
+          toast('Two-factor authentication disabled.');
+          close();
+          onDone?.();
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    },
+  });
+}
+
+// ---------------------------------------------------------- API tokens
+function openTokenCreateModal(onDone) {
+  const content = `
+    ${formGroup('Name', textInput('name', '', 'placeholder="e.g. Calendar feed"'))}
+    ${formGroup('Scope', selectInput('scopes', [
+      { value: 'read', label: 'Read only' }, { value: 'read_write', label: 'Read + write' },
+    ], 'read'))}
+    ${formGroup('Expires', selectInput('expires_days', [
+      { value: '30', label: 'In 30 days' }, { value: '90', label: 'In 90 days' },
+      { value: '365', label: 'In 1 year' }, { value: '', label: 'Never' },
+    ], '90'))}`;
+  openModal(modalShell('token-form', 'New API token', content,
+    `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+     <button class="btn btn-primary" data-action="save">Create token</button>`), {
+    onMount: (overlay, close) => {
+      overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
+        const name = overlay.querySelector('[name="name"]').value.trim();
+        if (!name) { toast('Give the token a name.', 'error'); return; }
+        const expires = overlay.querySelector('[name="expires_days"]').value;
+        try {
+          const res = await api.post('/api/tokens', {
+            name,
+            scopes: overlay.querySelector('[name="scopes"]').value,
+            expires_days: expires ? Number(expires) : null,
+          });
+          close();
+          openTokenShowOnceModal(res);
+          onDone?.();
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    },
+  });
+}
+
+function openTokenShowOnceModal(res) {
+  const icsUrl = `${location.origin}/api/ics/calendar.ics?token=${res.token}`;
+  const content = `
+    <div class="form-error mb-3" style="display:block">This token is shown ONCE. Copy it now — you won't see it again.</div>
+    <div class="form-group">
+      <label class="form-label">${esc(res.name)}</label>
+      <div class="flex gap-2">
+        <code class="totp-secret flex-1">${esc(res.token)}</code>
+        <button class="btn btn-secondary btn-sm" data-copy="${esc(res.token)}">Copy</button>
+      </div>
+    </div>
+    ${res.scopes === 'read' ? `
+    <div class="form-group">
+      <label class="form-label">Calendar feed URL</label>
+      <div class="flex gap-2">
+        <code class="totp-secret flex-1" style="font-size:11px">${esc(icsUrl)}</code>
+        <button class="btn btn-secondary btn-sm" data-copy="${esc(icsUrl)}">Copy</button>
+      </div>
+      <div class="form-hint">Subscribe to this URL in your calendar app for Kith events, birthdays, and reminders.</div>
+    </div>` : ''}`;
+  openModal(modalShell('token-once', 'Token created', content,
+    `<button class="btn btn-primary" data-action="close-modal">Done</button>`), {
+    onMount: (overlay) => bindCopyButtons(overlay),
+  });
+}
+
+function bindCopyButtons(scope) {
+  scope.querySelectorAll('[data-copy]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(b.dataset.copy);
+        toast('Copied.');
+      } catch { toast("Couldn't copy — select and copy manually.", 'error'); }
+    }));
+}

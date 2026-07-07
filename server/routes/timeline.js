@@ -11,7 +11,12 @@ const { requireAuth, requireContactAccess, contactAccess, isAdmin } = require('.
 const { auditWrite } = require('../lib/audit');
 const { spicyVisible } = require('./contacts');
 const { encryptField, decryptField } = require('../lib/crypto');
-const { rebuildSearchIndexAsync, isValidDate } = require('../lib/contacts');
+const contactsLib = require('../lib/contacts');
+const { rebuildSearchIndexAsync, isValidDate } = contactsLib;
+
+// touchContact is exported by lib/contacts (concurrent work) — resolve lazily
+// and stub-guard so this module never crashes if the export lands later.
+const touchContact = (...args) => (contactsLib.touchContact || (() => {}))(...args);
 
 // ------------------------------------------------------------- timeline
 const timelineRouter = express.Router();
@@ -86,6 +91,7 @@ timelineRouter.post('/', async (req, res, next) => {
       [found.contact.id, type || 'note', storedTitle, storedDescription, spicyFlag, occurred_at || null]
     );
     auditWrite(req.user.id, found.contact.id, 'create', 'timeline_event', result.insertId, null, { type, is_spicy: spicyFlag }, 'Added timeline entry');
+    touchContact(found.contact.id, occurred_at || undefined);
     res.status(201).json({ id: result.insertId });
   } catch (err) { next(err); }
 });
@@ -148,6 +154,7 @@ notesRouter.post('/', async (req, res, next) => {
     );
     auditWrite(req.user.id, found.contact.id, 'create', 'note', result.insertId, null, { is_spicy: spicyFlag }, 'Added note');
     rebuildSearchIndexAsync(found.contact.id);
+    touchContact(found.contact.id);
     res.status(201).json({ id: result.insertId });
   } catch (err) { next(err); }
 });
@@ -192,6 +199,41 @@ notesRouter.delete('/:id', loadNote, async (req, res, next) => {
 const remindersRouter = express.Router();
 remindersRouter.use(requireAuth);
 
+const RECUR_RULES = ['daily', 'weekly', 'monthly', 'yearly'];
+
+/**
+ * Advance a due_at ('YYYY-MM-DD HH:MM:SS' or ISO-ish) by a recur rule.
+ * Monthly/yearly preserve the day-of-month, clamped to the target month's
+ * length (Jan 31 + monthly → Feb 28/29). Returns 'YYYY-MM-DD HH:MM:SS'.
+ */
+function advanceDueAt(dueAt, rule) {
+  const m = String(dueAt).match(/^(\d{4})-(\d{2})-(\d{2})[T ]?(\d{2})?:?(\d{2})?:?(\d{2})?/);
+  if (!m) return null;
+  let [, y, mo, d, hh, mi, ss] = m;
+  y = Number(y); mo = Number(mo); d = Number(d);
+  hh = Number(hh || 0); mi = Number(mi || 0); ss = Number(ss || 0);
+
+  if (rule === 'daily' || rule === 'weekly') {
+    const dt = new Date(Date.UTC(y, mo - 1, d, hh, mi, ss));
+    dt.setUTCDate(dt.getUTCDate() + (rule === 'daily' ? 1 : 7));
+    y = dt.getUTCFullYear(); mo = dt.getUTCMonth() + 1; d = dt.getUTCDate();
+  } else if (rule === 'monthly' || rule === 'yearly') {
+    if (rule === 'monthly') {
+      mo += 1;
+      if (mo > 12) { mo = 1; y += 1; }
+    } else {
+      y += 1;
+    }
+    // clamp day-of-month (day 0 of next month = last day of target month)
+    const daysInMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+    if (d > daysInMonth) d = daysInMonth;
+  } else {
+    return null;
+  }
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${y}-${pad(mo)}-${pad(d)} ${pad(hh)}:${pad(mi)}:${pad(ss)}`;
+}
+
 // GET /api/reminders/due — due/upcoming (next 30d + overdue), plus all open
 remindersRouter.get('/due', async (req, res, next) => {
   try {
@@ -209,18 +251,25 @@ remindersRouter.get('/due', async (req, res, next) => {
 // POST /api/reminders
 remindersRouter.post('/', async (req, res, next) => {
   try {
-    const { title, description, due_at, contact_id } = req.body || {};
+    const { title, description, due_at, contact_id, recur_rule, recur_until } = req.body || {};
     if (!title || !String(title).trim()) return res.status(400).json({ error: 'Title is required' });
     if (!due_at) return res.status(400).json({ error: 'Due date is required' });
     if (!isValidDate(due_at)) return res.status(400).json({ error: 'Invalid due date' });
+    if (recur_rule != null && recur_rule !== '' && !RECUR_RULES.includes(recur_rule)) {
+      return res.status(400).json({ error: `recur_rule must be one of: ${RECUR_RULES.join(', ')}` });
+    }
+    if (recur_until != null && recur_until !== '' && !isValidDate(recur_until)) {
+      return res.status(400).json({ error: 'Invalid recur_until date' });
+    }
     let cid = null;
     if (contact_id) {
       const found = await contactAccess(req.user, Number(contact_id));
       if (found) cid = found.contact.id;
     }
     const result = await query(
-      'INSERT INTO reminders (owner_user_id, contact_id, title, description, due_at) VALUES (?, ?, ?, ?, ?)',
-      [req.user.id, cid, String(title).trim(), description || null, due_at]
+      'INSERT INTO reminders (owner_user_id, contact_id, title, description, due_at, recur_rule, recur_until) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [req.user.id, cid, String(title).trim(), description || null, due_at,
+       RECUR_RULES.includes(recur_rule) ? recur_rule : null, recur_until || null]
     );
     res.status(201).json({ id: result.insertId });
   } catch (err) { next(err); }
@@ -239,7 +288,7 @@ async function loadReminder(req, res, next) {
 // PUT /api/reminders/:id
 remindersRouter.put('/:id', loadReminder, async (req, res, next) => {
   try {
-    const { title, description, due_at, contact_id } = req.body || {};
+    const { title, description, due_at, contact_id, recur_rule, recur_until } = req.body || {};
     const updates = [];
     const params = [];
     if (title && String(title).trim()) { updates.push('title = ?'); params.push(String(title).trim()); }
@@ -247,6 +296,18 @@ remindersRouter.put('/:id', loadReminder, async (req, res, next) => {
     if (due_at) {
       if (!isValidDate(due_at)) return res.status(400).json({ error: 'Invalid due date' });
       updates.push('due_at = ?'); params.push(due_at);
+    }
+    if (recur_rule !== undefined) {
+      if (recur_rule !== null && recur_rule !== '' && !RECUR_RULES.includes(recur_rule)) {
+        return res.status(400).json({ error: `recur_rule must be one of: ${RECUR_RULES.join(', ')}` });
+      }
+      updates.push('recur_rule = ?'); params.push(RECUR_RULES.includes(recur_rule) ? recur_rule : null);
+    }
+    if (recur_until !== undefined) {
+      if (recur_until !== null && recur_until !== '' && !isValidDate(recur_until)) {
+        return res.status(400).json({ error: 'Invalid recur_until date' });
+      }
+      updates.push('recur_until = ?'); params.push(recur_until || null);
     }
     if (contact_id !== undefined) {
       let cid = null;
@@ -263,11 +324,27 @@ remindersRouter.put('/:id', loadReminder, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/reminders/:id/complete
+// POST /api/reminders/:id/complete — recurring reminders spawn the next one
 remindersRouter.post('/:id/complete', loadReminder, async (req, res, next) => {
   try {
     await query('UPDATE reminders SET completed_at = NOW() WHERE id = ?', [req.reminder.id]);
-    res.json({ ok: true });
+
+    let nextDueAt = null;
+    if (req.reminder.recur_rule && RECUR_RULES.includes(req.reminder.recur_rule)) {
+      const candidate = advanceDueAt(req.reminder.due_at, req.reminder.recur_rule);
+      const withinUntil = !req.reminder.recur_until ||
+        (candidate && candidate.slice(0, 10) <= String(req.reminder.recur_until).slice(0, 10));
+      if (candidate && withinUntil) {
+        await query(
+          `INSERT INTO reminders (owner_user_id, contact_id, title, description, due_at, recur_rule, recur_until)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [req.reminder.owner_user_id, req.reminder.contact_id, req.reminder.title,
+           req.reminder.description, candidate, req.reminder.recur_rule, req.reminder.recur_until]
+        );
+        nextDueAt = candidate;
+      }
+    }
+    res.json(nextDueAt ? { ok: true, next_due_at: nextDueAt } : { ok: true });
   } catch (err) { next(err); }
 });
 
@@ -322,6 +399,7 @@ messagesRouter.post('/', async (req, res, next) => {
       'INSERT INTO messages (contact_id, platform, direction, content, is_spicy, sent_at) VALUES (?, ?, ?, ?, ?, COALESCE(?, NOW()))',
       [found.contact.id, platform || null, direction === 'out' ? 'out' : 'in', stored, spicyFlag, sent_at || null]
     );
+    touchContact(found.contact.id, sent_at || undefined);
     res.status(201).json({ id: result.insertId });
   } catch (err) { next(err); }
 });

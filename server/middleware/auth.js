@@ -3,17 +3,32 @@
 // Auth middleware: JWT verification (httpOnly cookie preferred, Bearer fallback),
 // role gates, forced-password-change gate, and a basic in-memory login throttle.
 
+const crypto = require('node:crypto');
 const jwt = require('jsonwebtoken');
 const { query } = require('../database/connection');
 
 const COOKIE_NAME = 'kith_token';
 const TOKEN_TTL = '7d'; // O6 default
+const PAT_PREFIX = 'kith_'; // personal access tokens (api_tokens table)
 
 function signToken(user) {
   return jwt.sign(
     { sub: user.id, username: user.username, role: user.role, tv: user.token_version ?? 0 },
     process.env.JWT_SECRET,
     { expiresIn: TOKEN_TTL }
+  );
+}
+
+/**
+ * Short-lived intermediate token issued after a valid password when TOTP is
+ * enabled. requireAuth REJECTS tokens carrying `purpose` — this can only be
+ * exchanged at POST /api/auth/login/totp.
+ */
+function signPendingTotpToken(user) {
+  return jwt.sign(
+    { sub: user.id, purpose: 'totp', tv: user.token_version ?? 0 },
+    process.env.JWT_SECRET,
+    { expiresIn: '5m' }
   );
 }
 
@@ -50,20 +65,86 @@ function extractToken(req) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Personal access tokens (api_tokens): 'kith_' + 40 hex. Stored as sha256 hex.
+// ---------------------------------------------------------------------------
+
+const PAT_LAST_USED_THROTTLE_MS = 60 * 1000;
+const patLastUsedWrites = new Map(); // token id → last write ts (in-memory throttle)
+
+/**
+ * Authenticate a raw 'kith_…' token string against api_tokens.
+ * Returns { user, scopes, tokenRow } or null. Updates last_used_at at most
+ * once per 60s per token (fire-and-forget).
+ */
+async function authenticateApiToken(rawToken) {
+  if (typeof rawToken !== 'string' || !rawToken.startsWith(PAT_PREFIX)) return null;
+  const hash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const rows = await query(
+    `SELECT * FROM api_tokens
+     WHERE token_hash = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())`,
+    [hash]
+  );
+  if (rows.length === 0) return null;
+  const tokenRow = rows[0];
+
+  const users = await query(
+    'SELECT id, username, email, display_name, role, is_active, must_change_password, token_version FROM users WHERE id = ?',
+    [tokenRow.user_id]
+  );
+  if (users.length === 0 || !users[0].is_active) return null;
+
+  // last_used_at update — throttled (once/60s per token), fire-and-forget
+  const now = Date.now();
+  const last = patLastUsedWrites.get(tokenRow.id) || 0;
+  if (now - last > PAT_LAST_USED_THROTTLE_MS) {
+    patLastUsedWrites.set(tokenRow.id, now);
+    query('UPDATE api_tokens SET last_used_at = NOW() WHERE id = ?', [tokenRow.id])
+      .catch((err) => console.error('[pat] last_used_at update failed:', err.message));
+  }
+
+  return { user: users[0], scopes: tokenRow.scopes || 'read', tokenRow };
+}
+
 /**
  * requireAuth — verifies JWT, loads the user fresh from DB (deactivated users
  * rejected immediately §7.6), enforces the forced-password-change gate.
+ * Also accepts personal access tokens (Bearer kith_…) with scope enforcement.
  */
 async function requireAuth(req, res, next) {
   try {
     const token = extractToken(req);
     if (!token) return res.status(401).json({ error: 'Not authenticated' });
 
+    // --- Personal access token path (Bearer kith_…) ---
+    if (token.startsWith(PAT_PREFIX)) {
+      const auth = await authenticateApiToken(token);
+      if (!auth) return res.status(401).json({ error: 'Invalid or expired token' });
+      const fullPath = (req.originalUrl || '').split('?')[0];
+      const isReadMethod = req.method === 'GET' || req.method === 'HEAD';
+      // PATs never operate on the auth surface (password change, TOTP, …)
+      // except reading identity via GET /api/auth/me.
+      if (fullPath.startsWith('/api/auth') && !(isReadMethod && fullPath === '/api/auth/me')) {
+        return res.status(403).json({ error: 'API tokens cannot access auth endpoints' });
+      }
+      if (auth.scopes !== 'read_write' && !isReadMethod) {
+        return res.status(403).json({ error: 'This API token is read-only' });
+      }
+      req.user = auth.user;
+      req.tokenScopes = auth.scopes;
+      req.authMethod = 'api_token';
+      return next();
+    }
+
     let payload;
     try {
       payload = jwt.verify(token, process.env.JWT_SECRET);
     } catch {
       return res.status(401).json({ error: 'Invalid or expired session' });
+    }
+    // Intermediate tokens (TOTP pending etc.) are NOT sessions.
+    if (payload.purpose) {
+      return res.status(401).json({ error: 'Not authenticated' });
     }
 
     const rows = await query(
@@ -209,10 +290,13 @@ module.exports = {
   contactAccess,
   isAdmin,
   signToken,
+  signPendingTotpToken,
   setAuthCookie,
   clearAuthCookie,
   checkThrottle,
   recordFailure,
   recordSuccess,
+  authenticateApiToken,
   COOKIE_NAME,
+  PAT_PREFIX,
 };

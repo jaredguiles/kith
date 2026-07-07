@@ -10,8 +10,13 @@ const { query, withTransaction } = require('../database/connection');
 const { requireAuth, contactAccess, isAdmin } = require('../middleware/auth');
 const { auditWrite } = require('../lib/audit');
 const { spicyVisible } = require('./contacts');
-const { isValidDate } = require('../lib/contacts');
+const contactsLib = require('../lib/contacts');
+const { isValidDate } = contactsLib;
 const { decryptField } = require('../lib/crypto');
+
+// touchContact is exported by lib/contacts (concurrent work) — resolve lazily
+// and stub-guard so this module never crashes if the export lands later.
+const touchContact = (...args) => (contactsLib.touchContact || (() => {}))(...args);
 
 const router = express.Router();
 router.use(requireAuth);
@@ -191,6 +196,27 @@ router.delete('/:id', loadEvent, async (req, res, next) => {
   try {
     await query('UPDATE events SET deleted_at = NOW() WHERE id = ?', [req.event.id]);
     auditWrite(req.user.id, null, 'delete', 'event', req.event.id, { title: req.event.title }, null, `Deleted event ${req.event.title}`);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// POST /api/events/:id/complete — mark completed (optional followup_notes/rating),
+// touch all linked contacts with the event's starts_at (keep-in-touch tracking)
+router.post('/:id/complete', loadEvent, async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const updates = ["status = 'completed'"];
+    const params = [];
+    if ('followup_notes' in b) { updates.push('followup_notes = ?'); params.push(b.followup_notes || null); }
+    if ('rating' in b) { updates.push('rating = ?'); params.push(b.rating == null ? null : Math.max(1, Math.min(5, Number(b.rating) || 1))); }
+    params.push(req.event.id);
+    await query(`UPDATE events SET ${updates.join(', ')} WHERE id = ?`, params);
+
+    const linked = await query('SELECT contact_id FROM event_contacts WHERE event_id = ?', [req.event.id]);
+    for (const row of linked) touchContact(row.contact_id, req.event.starts_at || undefined);
+
+    auditWrite(req.user.id, null, 'update', 'event', req.event.id, { status: req.event.status },
+      { status: 'completed' }, `Completed event ${req.event.title}`);
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

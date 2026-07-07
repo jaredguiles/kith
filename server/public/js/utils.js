@@ -172,3 +172,37 @@ export function debounce(fn, ms = 250) {
 export function pluralize(n, singular, plural) {
   return `${n} ${n === 1 ? singular : (plural || singular + 's')}`;
 }
+
+// ---------------------------------------------------------------- leaflet
+// Leaflet 1.9.4 is vendored (UMD, not an ES module) — inject its <script>
+// once and resolve when window.L exists. CSS is linked in index.html.
+let leafletPromise = null;
+export function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (leafletPromise) return leafletPromise;
+  leafletPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = '/vendor/leaflet/leaflet.js';
+    s.onload = () => {
+      if (window.L) {
+        // Default marker images resolve relative to the vendored path.
+        window.L.Icon.Default.mergeOptions({
+          iconUrl: '/vendor/leaflet/images/marker-icon.png',
+          iconRetinaUrl: '/vendor/leaflet/images/marker-icon-2x.png',
+          shadowUrl: '/vendor/leaflet/images/marker-shadow.png',
+        });
+        resolve(window.L);
+      } else {
+        leafletPromise = null;
+        reject(new Error('Leaflet failed to initialize'));
+      }
+    };
+    s.onerror = () => {
+      leafletPromise = null;
+      s.remove();
+      reject(new Error("Couldn't load the map library"));
+    };
+    document.head.appendChild(s);
+  });
+  return leafletPromise;
+}

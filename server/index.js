@@ -117,6 +117,10 @@ app.get('/api/health', async (req, res) => {
 // API routes
 // ---------------------------------------------------------------------------
 app.use('/api/auth', require('./routes/auth'));
+// ICS feed authenticates via ?token= (calendar apps can't send headers) — must
+// mount BEFORE any bare-'/api' router whose router.use(requireAuth) would
+// intercept /api/ics/* and 401 it.
+app.use('/api/ics', require('./routes/ics'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/preferences', require('./routes/preferences'));
@@ -144,6 +148,19 @@ app.use('/api/changelog', changelogRouter);
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api', require('./routes/dashboard'));
 app.use('/api/import', require('./routes/import'));
+app.use('/api', require('./routes/relationships'));
+app.use('/api', require('./routes/dates'));
+app.use('/api', require('./routes/gifts'));
+app.use('/api/tokens', require('./routes/tokens'));
+app.use('/api/ics', require('./routes/ics'));
+app.use('/api/calendar', require('./routes/calendar'));
+app.use('/api/journal', require('./routes/journal'));
+// Concurrently developed routers (geo/export/trash/search) — mounted here;
+// files are owned by another workstream and land in the same release.
+app.use('/api/geo', require('./routes/geo'));
+app.use('/api/export', require('./routes/export'));
+app.use('/api/trash', require('./routes/trash'));
+app.use('/api/search', require('./routes/search'));
 
 // ---------------------------------------------------------------------------
 // API 404 + global JSON error handler (never leak stack traces)
@@ -204,6 +221,27 @@ async function boot() {
   });
 
   startImportWorker();
+  startTrashPurge();
+}
+
+// ---------------------------------------------------------------------------
+// Trash purge — daily sweep of expired soft-deleted rows (routes/trash.js).
+// One run 60s after boot, then every 24h. Both timers unref'd.
+// ---------------------------------------------------------------------------
+function startTrashPurge() {
+  const runPurge = () => {
+    try {
+      const trash = require('./routes/trash');
+      if (typeof trash.purgeExpiredTrash === 'function') {
+        Promise.resolve(trash.purgeExpiredTrash())
+          .catch((err) => console.error('[trash-purge] failed:', err.message));
+      }
+    } catch (err) {
+      console.error('[trash-purge] unavailable:', err.message);
+    }
+  };
+  setTimeout(runPurge, 60 * 1000).unref();
+  setInterval(runPurge, 24 * 3600 * 1000).unref();
 }
 
 // ---------------------------------------------------------------------------

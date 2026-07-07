@@ -205,8 +205,7 @@ function openCompleteForm(ev, onChanged) {
         }));
       overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
         try {
-          await api.put(`/api/events/${ev.id}`, {
-            status: 'completed',
+          await api.post(`/api/events/${ev.id}/complete`, {
             followup_notes: overlay.querySelector('[name="followup_notes"]').value || null,
             rating: rating || null,
           });
@@ -388,22 +387,48 @@ window.addEventListener('kith:contact-detail-rendered', (e) => {
 });
 
 // ------------------------------------------------------------- reminders
+const RECUR_OPTIONS = [
+  { value: '', label: 'Never' }, { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' }, { value: 'monthly', label: 'Monthly' },
+  { value: 'yearly', label: 'Yearly' },
+];
+
+/** Small "repeats" badge for reminder rows (dashboard + lists). */
+export function recurBadge(reminder) {
+  if (!reminder?.recur_rule) return '';
+  return `<span class="badge neutral" title="Repeats ${esc(reminder.recur_rule)}">${icon('refresh')} ${esc(reminder.recur_rule)}</span>`;
+}
+
 export function openReminderForm(presetContact = null, onSaved = null) {
   const content = `
     ${formGroup('Title', textInput('title'))}
     ${formGroup('Due', `<input class="form-input" name="due_at" type="datetime-local">`)}
+    <div class="form-row">
+      ${formGroup('Repeat', selectInput('recur_rule', RECUR_OPTIONS, '', 'id="reminder-recur"'))}
+      <div class="form-group hidden" id="recur-until-group">
+        <label class="form-label">Until (optional)</label>
+        <input class="form-input" name="recur_until" type="date">
+      </div>
+    </div>
     ${formGroup('Details', textarea('description'))}
     ${presetContact ? `<div class="text-sm text-secondary">Linked to ${esc(presetContact.display_name)}</div>` : ''}`;
   openModal(modalShell('reminder-form', 'New reminder', content,
     `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>
      <button class="btn btn-primary" data-action="save">Create</button>`), {
     onMount: (overlay, close) => {
+      const recurSel = overlay.querySelector('#reminder-recur');
+      const untilGroup = overlay.querySelector('#recur-until-group');
+      recurSel.addEventListener('change', () => {
+        untilGroup.classList.toggle('hidden', !recurSel.value);
+      });
       overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
         try {
           await api.post('/api/reminders', {
             title: overlay.querySelector('[name="title"]').value,
             due_at: fromLocalInput(overlay.querySelector('[name="due_at"]').value),
             description: overlay.querySelector('[name="description"]').value || null,
+            recur_rule: recurSel.value || null,
+            recur_until: (recurSel.value && overlay.querySelector('[name="recur_until"]').value) || null,
             contact_id: presetContact?.id || null,
           });
           toast('Reminder created.');

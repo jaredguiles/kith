@@ -320,3 +320,15 @@ window.addEventListener('kith:contact-detail-rendered', (e) => {
 
 window.addEventListener('kith:share-contact', (e) => openShareModal(e.detail.contact, e.detail.refresh));
 window.addEventListener('kith:merge-contact', (e) => openMergeModal(e.detail.contact, e.detail.refresh));
+// Dedupe flow (contacts.js "Find duplicates") jumps straight to the compare
+// step with the pair pre-populated.
+window.addEventListener('kith:merge-contacts-pair', async (e) => {
+  const { keepId, otherId, refresh } = e.detail;
+  try {
+    const [keep, other] = await Promise.all([
+      api.get(`/api/contacts/${keepId}`).then((d) => d.contact),
+      api.get(`/api/contacts/${otherId}`).then((d) => d.contact),
+    ]);
+    openMergeCompare(keep, other, refresh);
+  } catch (err) { toast(err.message, 'error'); }
+});

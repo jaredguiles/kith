@@ -40,6 +40,24 @@ export function emptyState(iconName, title, desc, actionHtml = '') {
   return `<div class="empty-state">${icon(iconName)}<h3>${esc(title)}</h3><p>${esc(desc)}</p>${actionHtml}</div>`;
 }
 
+/** Card with a title row, body HTML, and optional header actions. */
+export function sectionCard(title, bodyHtml, actionsHtml = '') {
+  return `
+  <div class="card mb-4">
+    <div class="card-header"><span class="card-title">${esc(title)}</span>${actionsHtml ? `<div class="flex items-center gap-2">${actionsHtml}</div>` : ''}</div>
+    ${bodyHtml}
+  </div>`;
+}
+
+/** Small color-coded chip (calendar/journal style). variant: event|birthday|date|reminder|'' */
+export function chip(iconName, label, { variant = 'event', href = '', title = '' } = {}) {
+  const cls = `cal-chip chip-${esc(variant)}`;
+  const inner = `${icon(iconName)}<span class="truncate">${esc(label)}</span>`;
+  return href
+    ? `<a class="${cls}" href="${esc(href)}" title="${esc(title || label)}">${inner}</a>`
+    : `<span class="${cls}" title="${esc(title || label)}">${inner}</span>`;
+}
+
 export function toggleSwitch(on, attrs = '') {
   return `<button type="button" role="switch" aria-checked="${on ? 'true' : 'false'}" class="toggle-switch ${on ? 'on' : ''}" ${attrs}></button>`;
 }

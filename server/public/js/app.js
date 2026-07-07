@@ -1,7 +1,7 @@
 // Kith — main app logic: state, routing, shell, spicy mode, command palette.
 
 import { api, qs, setToken } from './api.js';
-import { esc, initials, debounce } from './utils.js';
+import { esc, initials, debounce, fmtDateTime } from './utils.js';
 import { icon } from './icons.js';
 import { toast, openModal, modalShell, toggleSwitch, emptyState } from './components.js';
 import { renderPage, pageTitles } from './pages.js';
@@ -32,7 +32,7 @@ document.addEventListener('error', (e) => {
 }, true);
 
 // ---------------------------------------------------------------- router
-const ROUTES = ['home', 'contacts', 'events', 'notifications', 'settings', 'review', 'groups'];
+const ROUTES = ['home', 'contacts', 'events', 'calendar', 'map', 'journal', 'notifications', 'settings', 'review', 'groups', 'trash'];
 
 export function navigate(hash, { replace = false } = {}) {
   if (replace) location.replace(`#${hash}`);
@@ -174,6 +174,54 @@ function shade(hex, pct) {
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
 }
 
+// ----------------------------------------------------------------- theme
+const THEME_PREFS = ['dark', 'light', 'system'];
+let systemThemeMedia = null;
+
+export function getThemePref() {
+  const p = state.preferences?.theme;
+  return THEME_PREFS.includes(p) ? p : 'dark';
+}
+
+function themeIcon(pref) {
+  return pref === 'light' ? 'sun' : pref === 'system' ? 'monitor' : 'moon';
+}
+
+/** Apply a theme preference ('dark'|'light'|'system'). System live-updates. */
+export function applyTheme(pref) {
+  if (!THEME_PREFS.includes(pref)) pref = 'dark';
+  if (!systemThemeMedia) {
+    systemThemeMedia = matchMedia('(prefers-color-scheme: light)');
+    systemThemeMedia.addEventListener('change', () => {
+      if (getThemePref() === 'system') applyTheme('system');
+    });
+  }
+  const resolved = pref === 'system' ? (systemThemeMedia.matches ? 'light' : 'dark') : pref;
+  document.documentElement.setAttribute('data-theme', resolved);
+  document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', resolved);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', resolved === 'light' ? '#f7f7fa' : '#000000');
+  const btn = document.getElementById('theme-toggle');
+  if (btn) {
+    btn.innerHTML = icon(themeIcon(pref));
+    btn.title = `Theme: ${pref}`;
+  }
+}
+
+/** Persist + apply a theme preference. Settings/profile controls call this. */
+export async function setThemePref(pref) {
+  if (!THEME_PREFS.includes(pref)) return;
+  const prev = state.preferences.theme;
+  state.preferences.theme = pref;
+  applyTheme(pref);
+  try {
+    await api.put('/api/preferences/theme', { value: pref, type: 'string' });
+  } catch (err) {
+    state.preferences.theme = prev;
+    applyTheme(getThemePref());
+    toast(err.message || "Couldn't save the theme.", 'error');
+  }
+}
+
 // ---------------------------------------------------------------- shell
 function logoHtml() {
   const custom = state.settings.app_logo;
@@ -209,6 +257,9 @@ function shellHtml() {
         <a class="nav-item" data-nav="home" href="#/home">${icon('home')} Home</a>
         <a class="nav-item" data-nav="contacts" href="#/contacts">${icon('users')} Contacts</a>
         <a class="nav-item" data-nav="events" href="#/events">${icon('calendar')} Events</a>
+        <a class="nav-item" data-nav="calendar" href="#/calendar">${icon('calendar')} Calendar</a>
+        <a class="nav-item" data-nav="map" href="#/map">${icon('map')} Map</a>
+        <a class="nav-item" data-nav="journal" href="#/journal">${icon('book-open')} Journal</a>
         <a class="nav-item" data-nav="notifications" href="#/notifications">${icon('bell')} Notifications <span class="nav-count" id="notif-count"></span></a>
         ${isAdmin ? `<a class="nav-item" data-nav="settings" href="#/settings">${icon('settings')} Settings</a>` : ''}
       </nav>
@@ -231,6 +282,8 @@ function shellHtml() {
           <div class="user-name">${esc(u.display_name || u.username)}</div>
           <div class="user-role">${esc(u.role.replace('_', ' '))}</div>
         </div>
+        <button class="btn btn-icon" id="theme-toggle" aria-label="Switch theme" title="Theme">${icon(themeIcon(getThemePref()))}</button>
+        <a class="btn btn-icon" href="#/trash" aria-label="Trash" title="Trash">${icon('trash')}</a>
         <button class="btn btn-icon" data-action="logout" aria-label="Log out">${icon('log-out')}</button>
       </div>
     </aside>
@@ -293,6 +346,12 @@ function bindShell() {
     setSpicyActive(!state.spicyActive);
   });
 
+  // theme toggle: cycles dark → light → system
+  document.getElementById('theme-toggle')?.addEventListener('click', () => {
+    const next = THEME_PREFS[(THEME_PREFS.indexOf(getThemePref()) + 1) % THEME_PREFS.length];
+    setThemePref(next);
+  });
+
   // collapsible sections
   document.querySelectorAll('[data-collapse]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -348,7 +407,7 @@ export function openCommandPalette() {
   overlay.className = 'cmdk-overlay';
   overlay.innerHTML = `
     <div class="cmdk" role="dialog" aria-label="Command palette">
-      <input class="cmdk-input" placeholder="Search contacts or type a command" autocomplete="off">
+      <input class="cmdk-input" placeholder="Search people, events, notes, groups…" autocomplete="off">
       <div class="cmdk-results" id="cmdk-results"></div>
     </div>`;
   document.body.appendChild(overlay);
@@ -362,7 +421,11 @@ export function openCommandPalette() {
     { label: 'Go to home', icon: 'home', run: () => navigate('/home') },
     { label: 'Go to contacts', icon: 'users', run: () => navigate('/contacts') },
     { label: 'Go to events', icon: 'calendar', run: () => navigate('/events') },
+    { label: 'Go to calendar', icon: 'calendar', run: () => navigate('/calendar') },
+    { label: 'Go to map', icon: 'map', run: () => navigate('/map') },
+    { label: 'Go to journal', icon: 'book-open', run: () => navigate('/journal') },
     { label: 'Go to notifications', icon: 'bell', run: () => navigate('/notifications') },
+    { label: 'Go to trash', icon: 'trash', run: () => navigate('/trash') },
     ...(state.user && (state.user.role !== 'user')
       ? [{ label: 'Go to settings', icon: 'settings', run: () => navigate('/settings') }] : []),
     ...(state.spicyEnabled
@@ -375,41 +438,73 @@ export function openCommandPalette() {
     document.removeEventListener('keydown', keyHandler);
   };
 
-  const renderResults = (contacts, q) => {
+  // Sectioned results from /api/search: People / Events / Notes / Groups / Actions.
+  const renderResults = (res, q) => {
     const matchedActions = actions.filter((a) => !q || a.label.toLowerCase().includes(q.toLowerCase()));
-    items = [
-      ...contacts.map((c) => ({ label: c.display_name, sub: c.location, icon: 'user', run: () => navigate(`/contacts/${c.id}`) })),
-      ...matchedActions,
-    ];
+    const people = res?.contacts || [];
+    const events = res?.events || [];
+    const notes = res?.notes || [];
+    const groups = res?.groups || [];
+
+    items = [];
+    const sections = [];
+    const pushSection = (title, list, mapFn) => {
+      if (!list.length) return;
+      const start = items.length;
+      const mapped = list.map(mapFn);
+      items.push(...mapped);
+      sections.push({ title, start, mapped });
+    };
+
+    pushSection('People', people, (c) => ({
+      icon: 'user', label: c.display_name, hint: c.subtitle || '',
+      avatar: c, run: () => navigate(`/contacts/${c.id}`),
+    }));
+    pushSection('Events', events, (e) => ({
+      icon: 'calendar', label: e.title, hint: fmtDateTime(e.starts_at),
+      run: () => navigate('/events'),
+    }));
+    pushSection('Notes', notes, (n) => ({
+      icon: 'sticky-note', label: n.snippet || 'Note', hint: n.contact_name || '',
+      run: () => navigate(`/contacts/${n.contact_id}`),
+    }));
+    pushSection('Groups', groups, (g) => ({
+      icon: 'users', label: g.name, hint: '',
+      run: () => navigate(`/contacts?group=${g.id}`),
+    }));
+    pushSection('Actions', matchedActions, (a) => ({
+      icon: a.icon, label: a.label, hint: '', run: a.run,
+    }));
+
     selected = 0;
-    results.innerHTML = `
-      ${contacts.length ? `<div class="cmdk-section">Contacts</div>` : ''}
-      ${contacts.map((c, i) => `
-        <button class="cmdk-item ${i === 0 ? 'selected' : ''}" data-idx="${i}">
-          ${icon('user')}<span>${esc(c.display_name)}</span>
-          ${c.location ? `<span class="cmdk-hint">${esc(c.location)}</span>` : ''}
-        </button>`).join('')}
-      ${matchedActions.length ? `<div class="cmdk-section">Actions</div>` : ''}
-      ${matchedActions.map((a, i) => `
-        <button class="cmdk-item ${!contacts.length && i === 0 ? 'selected' : ''}" data-idx="${contacts.length + i}">
-          ${icon(a.icon)}<span>${esc(a.label)}</span>
-        </button>`).join('')}
-      ${!items.length ? `<div class="cmdk-section">No results</div>` : ''}`;
+    results.innerHTML = sections.map((s) => `
+      <div class="cmdk-section">${esc(s.title)}</div>
+      ${s.mapped.map((it, i) => {
+        const idx = s.start + i;
+        return `
+        <button class="cmdk-item ${idx === 0 ? 'selected' : ''}" data-idx="${idx}">
+          ${it.avatar
+            ? `<span class="av sm" style="width:20px;height:20px;font-size:9px">${esc(initials(it.avatar.display_name))}${it.avatar.photo_url ? `<img src="${esc(it.avatar.photo_url)}" alt="">` : ''}</span>`
+            : icon(it.icon)}
+          <span class="truncate">${esc(it.label)}</span>
+          ${it.hint ? `<span class="cmdk-hint">${esc(it.hint)}</span>` : ''}
+        </button>`;
+      }).join('')}`).join('')
+      + (!items.length ? `<div class="cmdk-section">No results</div>` : '');
     results.querySelectorAll('.cmdk-item').forEach((el) => {
       el.addEventListener('click', () => { close(); items[Number(el.dataset.idx)]?.run(); });
     });
   };
 
   const doSearch = debounce(async (q) => {
-    let contacts = [];
+    let res = null;
     if (q && q.length >= 1) {
       try {
-        const data = await api.get('/api/contacts' + qs({ search: q, limit: 6 }));
-        contacts = data.contacts || [];
+        res = await api.get('/api/search' + qs({ q }));
       } catch { /* not logged in or error */ }
     }
-    renderResults(contacts, q);
-  }, 150);
+    renderResults(res, q);
+  }, 200);
 
   const keyHandler = (e) => {
     if (e.key === 'Escape') { close(); return; }
@@ -430,7 +525,7 @@ export function openCommandPalette() {
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   input.addEventListener('input', () => doSearch(input.value.trim()));
   input.focus();
-  renderResults([], '');
+  renderResults(null, '');
 }
 
 document.addEventListener('keydown', (e) => {
@@ -473,12 +568,76 @@ function renderLogin(message = '') {
         username: document.getElementById('login-username').value.trim(),
         password: document.getElementById('login-password').value,
       });
+      if (data.totp_required) {
+        renderTotpStep(data.pending_token);
+        return;
+      }
       setToken(data.token);
       state.user = data.user;
       await start();
     } catch (err) {
       errEl.textContent = err.message;
       errEl.classList.remove('hidden');
+    }
+  });
+}
+
+// Second login step: 6-digit TOTP code (paste-friendly numeric input).
+function renderTotpStep(pendingToken) {
+  root.innerHTML = `
+  <div class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">
+        <span class="logo-mark"><img src="/assets/logo.svg" alt=""></span>
+        <span class="wordmark">Kith</span>
+      </div>
+      <h2 class="section-heading text-center">Two-factor code</h2>
+      <p class="text-sm text-secondary text-center mb-4">Enter the 6-digit code from your authenticator app.</p>
+      <form id="totp-form">
+        <div class="form-group">
+          <label class="form-label" for="totp-code">Code</label>
+          <input class="form-input totp-input" id="totp-code" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" placeholder="••••••" required>
+        </div>
+        <div class="form-error hidden" id="totp-error"></div>
+        <button class="btn btn-primary btn-block mt-3" type="submit">Verify</button>
+      </form>
+      <div class="text-center mt-3"><a href="#" id="totp-back" class="text-sm">Back to login</a></div>
+    </div>
+  </div>`;
+
+  const input = document.getElementById('totp-code');
+  input.focus();
+  // keep it digits-only (paste-friendly: strip everything else)
+  input.addEventListener('input', () => {
+    const v = input.value.replace(/\D/g, '').slice(0, 6);
+    if (v !== input.value) input.value = v;
+    if (v.length === 6) document.getElementById('totp-form').requestSubmit();
+  });
+
+  document.getElementById('totp-back').addEventListener('click', (e) => {
+    e.preventDefault();
+    renderLogin();
+  });
+
+  document.getElementById('totp-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = document.getElementById('totp-error');
+    errEl.classList.add('hidden');
+    const code = input.value.replace(/\D/g, '');
+    if (code.length !== 6) {
+      errEl.textContent = 'Enter the 6-digit code.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    try {
+      const data = await api.post('/api/auth/login/totp', { pending_token: pendingToken, code });
+      setToken(data.token);
+      state.user = data.user;
+      await start();
+    } catch (err) {
+      errEl.textContent = err.message;
+      errEl.classList.remove('hidden');
+      input.select();
     }
   });
 }
@@ -558,6 +717,7 @@ async function start() {
   }
   await loadContext();
   applyAccentSettings();
+  applyTheme(getThemePref());
   document.body.classList.toggle('spicy-mode', state.spicyActive);
   root.innerHTML = shellHtml();
   bindShell();
@@ -570,6 +730,13 @@ async function start() {
 }
 
 async function boot() {
+  // PWA service worker — HTTPS only (plain-HTTP dev skips it to avoid cache
+  // hell) and never allowed to break the app.
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    try {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    } catch { /* never fatal */ }
+  }
   try {
     const data = await api.get('/api/auth/me');
     state.user = data.user;

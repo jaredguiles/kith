@@ -4,13 +4,24 @@
 import { api, qs } from './api.js';
 import { esc, fmtDate } from './utils.js';
 import { icon } from './icons.js';
-import { emptyState, modalShell, formGroup, toast, openModal, confirmModal } from './components.js';
+import { emptyState, modalShell, formGroup, toast, openModal, confirmModal, filterPills } from './components.js';
 import { isSpicyOn } from './app.js';
 
-async function renderContactMedia(container, contact, canEdit, refresh) {
+const UPLOAD_ACCEPT = [
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+  'video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska',
+  '.pdf', '.txt', '.md', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.zip',
+].join(',');
+
+const MEDIA_FILTERS = [
+  { value: '', label: 'All' }, { value: 'photo', label: 'Photos' },
+  { value: 'video', label: 'Videos' }, { value: 'document', label: 'Documents' },
+];
+
+async function renderContactMedia(container, contact, canEdit, refresh, typeFilter = '') {
   let data;
   try {
-    data = await api.get('/api/media' + qs({ contact_id: contact.id }));
+    data = await api.get('/api/media' + qs({ contact_id: contact.id, type: typeFilter || undefined }));
   } catch {
     container.innerHTML = '<div class="text-sm text-muted">Media unavailable.</div>';
     return;
@@ -19,22 +30,21 @@ async function renderContactMedia(container, contact, canEdit, refresh) {
 
   container.innerHTML = `
     ${canEdit ? `
-    <div class="flex gap-2 mb-3">
-      <input type="file" id="media-file" accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/quicktime,video/webm,video/x-matroska" multiple class="hidden">
+    <div class="flex gap-2 mb-3 flex-wrap">
+      <input type="file" id="media-file" accept="${UPLOAD_ACCEPT}" multiple class="hidden">
       <button class="btn btn-secondary" id="upload-media">${icon('upload')} Upload</button>
       ${isSpicyOn() ? `<button type="button" class="btn-flame" id="media-spicy" aria-label="Mark upload spicy" aria-pressed="false">${icon('flame')}</button>` : ''}
       <span class="text-xs text-muted flex items-center" id="upload-status"></span>
     </div>` : ''}
+    <div class="mb-2" id="media-type-filter">${filterPills(MEDIA_FILTERS, typeFilter, 'media-type')}</div>
     ${media.length ? `
     <div class="media-grid">
-      ${media.map((m) => `
-        <button class="media-tile ${m.is_spicy ? 'is-spicy' : ''}" data-media-id="${m.id}" data-media-type="${esc(m.type)}" aria-label="View media">
-          ${m.type === 'video' && !m.has_thumbnail
-            ? `<span class="media-tile-placeholder">${icon('video')}</span>`
-            : `<img src="/api/media/${m.id}/${m.type === 'video' ? 'thumbnail' : 'file'}" alt="${esc(m.caption || '')}" loading="lazy">`}
-          ${m.type === 'video' ? `<span class="media-type">${icon('video')}</span>` : ''}
-        </button>`).join('')}
-    </div>` : emptyState('image', 'No media yet', canEdit ? 'Upload photos or videos of this person.' : 'Nothing here.')}`;
+      ${media.map((m) => mediaTileHtml(m)).join('')}
+    </div>` : emptyState('image', typeFilter ? 'Nothing here' : 'No media yet', canEdit ? 'Upload photos, videos, or documents for this person.' : 'Nothing here.')}`;
+
+  container.querySelectorAll('#media-type-filter .filter-pill').forEach((p) =>
+    p.addEventListener('click', () =>
+      renderContactMedia(container, contact, canEdit, refresh, p.dataset.mediaType)));
 
   if (canEdit) {
     const fileInput = container.querySelector('#media-file');
@@ -57,7 +67,7 @@ async function renderContactMedia(container, contact, canEdit, refresh) {
       try {
         await api.post('/api/media', form);
         toast('Media uploaded.');
-        renderContactMedia(container, contact, canEdit, refresh);
+        renderContactMedia(container, contact, canEdit, refresh, typeFilter);
       } catch (err) {
         statusEl.textContent = '';
         toast(err.message, 'error');
@@ -68,9 +78,39 @@ async function renderContactMedia(container, contact, canEdit, refresh) {
   container.querySelectorAll('[data-media-id]').forEach((tile) =>
     tile.addEventListener('click', () => {
       const m = media.find((x) => String(x.id) === tile.dataset.mediaId);
-      openLightbox(m, contact, canEdit, () => renderContactMedia(container, contact, canEdit, refresh), refresh);
+      if (!m) return;
+      if (m.type === 'document') {
+        // documents download (attachment disposition; cookie auth rides along)
+        const a = document.createElement('a');
+        a.href = `/api/media/${m.id}/file`;
+        a.download = m.original_name || '';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        return;
+      }
+      openLightbox(m, contact, canEdit, () => renderContactMedia(container, contact, canEdit, refresh, typeFilter), refresh);
     })
   );
+}
+
+function mediaTileHtml(m) {
+  if (m.type === 'document') {
+    return `
+      <button class="media-tile media-doc-tile ${m.is_spicy ? 'is-spicy' : ''}" data-media-id="${m.id}" data-media-type="document" aria-label="Download ${esc(m.original_name || 'document')}">
+        <span class="media-tile-placeholder media-doc-inner">
+          ${icon('file-text')}
+          <span class="media-doc-name">${esc(m.original_name || 'Document')}</span>
+        </span>
+      </button>`;
+  }
+  return `
+    <button class="media-tile ${m.is_spicy ? 'is-spicy' : ''}" data-media-id="${m.id}" data-media-type="${esc(m.type)}" aria-label="View media">
+      ${m.type === 'video' && !m.has_thumbnail
+        ? `<span class="media-tile-placeholder">${icon('video')}</span>`
+        : `<img src="/api/media/${m.id}/${m.type === 'video' ? 'thumbnail' : 'file'}" alt="${esc(m.caption || '')}" loading="lazy">`}
+      ${m.type === 'video' ? `<span class="media-type">${icon('video')}</span>` : ''}
+    </button>`;
 }
 
 function openLightbox(m, contact, canEdit, reload, refreshDetail) {

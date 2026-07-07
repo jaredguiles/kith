@@ -1,11 +1,11 @@
 'use strict';
 
-// Dashboard aggregates + full data export (Settings → Data → Export/Backup).
-// Export covers DB data + media references, not blobs (O4 default).
+// Dashboard aggregates. (The full data export moved to routes/export.js as
+// GET /api/export/backup.)
 
 const express = require('express');
 const { query } = require('../database/connection');
-const { requireAuth, requireAdmin, isAdmin } = require('../middleware/auth');
+const { requireAuth, isAdmin } = require('../middleware/auth');
 const { spicyVisible } = require('./contacts');
 const { decryptField } = require('../lib/crypto');
 
@@ -19,7 +19,7 @@ router.get('/dashboard', async (req, res, next) => {
     const scope = isAdmin(req.user) ? '' : `AND c.owner_user_id = ${Number(req.user.id)}`;
     const evScope = isAdmin(req.user) ? '' : `AND e.owner_user_id = ${Number(req.user.id)}`;
 
-    const [birthdays, reminders, events, activity, stats] = await Promise.all([
+    const [birthdays, reminders, events, activity, stats, outOfTouch, upcomingDates] = await Promise.all([
       query(
         `SELECT c.id, c.display_name, c.birthday, c.photo_url, c.orientation,
            DATEDIFF(DATE_ADD(c.birthday, INTERVAL YEAR(CURDATE()) - YEAR(c.birthday) + IF(DATE_FORMAT(c.birthday,'%m-%d') < DATE_FORMAT(CURDATE(),'%m-%d'), 1, 0) YEAR), CURDATE()) AS days_until
@@ -55,6 +55,24 @@ router.get('/dashboard', async (req, res, next) => {
           (SELECT COUNT(*) FROM events e WHERE e.deleted_at IS NULL ${evScope} ${showSpicy ? '' : 'AND e.is_spicy = 0'} AND e.starts_at >= DATE_FORMAT(NOW(), '%Y-%m-01') AND e.starts_at < DATE_ADD(DATE_FORMAT(NOW(), '%Y-%m-01'), INTERVAL 1 MONTH)) AS events_this_month,
           (SELECT COUNT(*) FROM reminders r WHERE r.owner_user_id = ${Number(req.user.id)} AND r.deleted_at IS NULL AND r.completed_at IS NULL AND r.due_at < NOW()) AS overdue_reminders`
       ),
+      // out-of-touch: keep_in_touch_days set + overdue (never-contacted counts)
+      query(
+        `SELECT c.id, c.display_name, c.photo_url, c.last_contacted_at, c.keep_in_touch_days FROM contacts c
+         WHERE c.deleted_at IS NULL AND c.keep_in_touch_days IS NOT NULL AND c.keep_in_touch_days > 0 ${scope}
+           AND (c.last_contacted_at IS NULL OR c.last_contacted_at < DATE_SUB(NOW(), INTERVAL c.keep_in_touch_days DAY))
+         ORDER BY c.last_contacted_at IS NOT NULL, c.last_contacted_at ASC LIMIT 10`
+      ),
+      // upcoming important dates ≤30d (recurring → next occurrence; one-off literal)
+      query(
+        `SELECT d.id, d.contact_id, c.display_name AS contact_name, d.label, d.date, d.recurring,
+           CASE WHEN d.recurring = 1 THEN DATEDIFF(
+             DATE_ADD(d.date, INTERVAL YEAR(CURDATE()) - YEAR(d.date) + IF(DATE_FORMAT(d.date,'%m-%d') < DATE_FORMAT(CURDATE(),'%m-%d'), 1, 0) YEAR),
+             CURDATE())
+           ELSE DATEDIFF(d.date, CURDATE()) END AS days_until
+         FROM important_dates d JOIN contacts c ON c.id = d.contact_id
+         WHERE c.deleted_at IS NULL ${scope}
+         HAVING days_until BETWEEN 0 AND 30 ORDER BY days_until LIMIT 10`
+      ),
     ]);
 
     // recent notes as part of activity
@@ -71,39 +89,11 @@ router.get('/dashboard', async (req, res, next) => {
       .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
       .slice(0, 10);
 
-    res.json({ birthdays, reminders, events, activity: combined, stats: stats[0] });
-  } catch (err) { next(err); }
-});
-
-// GET /api/export — admin-only full data export (JSON)
-router.get('/export', requireAdmin, async (req, res, next) => {
-  try {
-    const tables = [
-      'users', 'contacts', 'contact_emails', 'contact_phones', 'contact_addresses',
-      'social_links', 'tags', 'contact_tags', 'groups', 'group_members',
-      'shared_contacts', 'events', 'event_contacts', 'event_media', 'timeline_events',
-      'notes', 'reminders', 'messages', 'media_assets', 'audit_log',
-      'contact_field_changelog', 'import_jobs', 'app_settings',
-      'preferences', 'spicy_profiles',
-      // 'import_staging' intentionally excluded: raw/normalized third-party
-      // dumps (message bodies etc.) don't belong in a backup export
-    ];
-    const dump = { exported_at: new Date().toISOString(), version: 1, tables: {} };
-    for (const t of tables) {
-      let rows = await query(`SELECT * FROM \`${t}\``);
-      if (t === 'users') rows.forEach((r) => { delete r.password_hash; });
-      if (t === 'preferences') {
-        // never export secret hashes (spicy_pin_hash and any future *_hash keys)
-        rows = rows.filter((r) => !/_hash$/.test(String(r.key)));
-      }
-      // belt-and-braces: strip any *_hash column from every table
-      rows.forEach((r) => { for (const k of Object.keys(r)) if (/_hash$/.test(k)) delete r[k]; });
-      dump.tables[t] = rows;
-    }
-    // Note: spicy_profiles + spicy note/message content export as CIPHERTEXT —
-    // restoring requires the same FIELD_ENCRYPTION_KEY. Documented in README.
-    res.setHeader('Content-Disposition', `attachment; filename="kith-export-${new Date().toISOString().slice(0, 10)}.json"`);
-    res.json(dump);
+    res.json({
+      birthdays, reminders, events, activity: combined, stats: stats[0],
+      out_of_touch: outOfTouch,
+      upcoming_dates: upcomingDates.map((d) => ({ ...d, recurring: Boolean(d.recurring) })),
+    });
   } catch (err) { next(err); }
 });
 

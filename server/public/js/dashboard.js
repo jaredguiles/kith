@@ -6,7 +6,7 @@ import { icon } from './icons.js';
 import { emptyState, feedItem, toast } from './components.js';
 import { pageRenderers } from './pages.js';
 import { state, refreshNotifCount } from './app.js';
-import { openReminderForm } from './events.js';
+import { openReminderForm, recurBadge } from './events.js';
 
 // ---------------------------------------------------------------- home
 async function renderHome(el) {
@@ -18,6 +18,8 @@ async function renderHome(el) {
     return;
   }
   const { birthdays, reminders, events, activity, stats } = data;
+  const outOfTouch = data.out_of_touch || [];
+  const upcomingDates = data.upcoming_dates || [];
   const firstName = (state.user.display_name || state.user.username).split(' ')[0];
 
   el.innerHTML = `
@@ -45,7 +47,7 @@ async function renderHome(el) {
         ${reminders.length ? reminders.map((r) => `
           <div class="flex-between" style="padding:7px 0;border-bottom:1px solid var(--border)">
             <div>
-              <div class="text-sm font-medium">${esc(r.title)}</div>
+              <div class="text-sm font-medium">${esc(r.title)} ${recurBadge(r)}</div>
               <div class="text-xs text-muted">${esc(fmtDateTime(r.due_at))}${r.contact_name ? ` · ${esc(r.contact_name)}` : ''}</div>
             </div>
             <button class="btn btn-icon" data-complete-reminder="${r.id}" aria-label="Complete">${icon('check')}</button>
@@ -73,6 +75,35 @@ async function renderHome(el) {
           </div>`).join('') : '<div class="text-sm text-muted">Nothing planned yet.</div>'}
       </div>
 
+      ${outOfTouch.length ? `
+      <div class="card">
+        <div class="card-header"><span class="card-title">Out of touch</span></div>
+        ${outOfTouch.map((c) => `
+          <a class="flex-between" style="padding:7px 0;border-bottom:1px solid var(--border);text-decoration:none;color:inherit" href="#/contacts/${c.id}">
+            <span class="flex items-center gap-2">
+              <span class="av sm">${esc(initials(c.display_name))}${c.photo_url ? `<img src="${esc(c.photo_url)}" alt="">` : ''}</span>
+              <span>
+                <span class="text-sm font-medium" style="display:block">${esc(c.display_name)}</span>
+                <span class="text-xs text-muted">${c.last_contacted_at ? `last contact ${esc(timeAgo(c.last_contacted_at))}` : 'no contact recorded'} · every ${Number(c.keep_in_touch_days)}d</span>
+              </span>
+            </span>
+            <span class="badge amber">${icon('clock')}</span>
+          </a>`).join('')}
+      </div>` : ''}
+
+      ${upcomingDates.length ? `
+      <div class="card">
+        <div class="card-header"><span class="card-title">Coming up</span></div>
+        ${upcomingDates.map((d) => `
+          <a class="flex-between" style="padding:7px 0;border-bottom:1px solid var(--border);text-decoration:none;color:inherit" href="#/contacts/${d.contact_id}">
+            <span class="flex items-center gap-2 text-sm">
+              ${icon('gift')}
+              <span><span class="font-medium">${esc(d.label)}</span> · <span class="text-secondary">${esc(d.contact_name)}</span></span>
+            </span>
+            <span class="badge ${d.days_until <= 7 ? 'amber' : 'neutral'}">${d.days_until === 0 ? 'Today' : d.days_until === 1 ? 'Tomorrow' : `in ${d.days_until}d`}</span>
+          </a>`).join('')}
+      </div>` : ''}
+
       <div class="card">
         <div class="card-header"><span class="card-title">Recent activity</span></div>
         ${activity.length ? activity.map((a) => `
@@ -89,8 +120,8 @@ async function renderHome(el) {
   el.querySelectorAll('[data-complete-reminder]').forEach((b) =>
     b.addEventListener('click', async () => {
       try {
-        await api.post(`/api/reminders/${b.dataset.completeReminder}/complete`);
-        toast('Reminder completed.');
+        const res = await api.post(`/api/reminders/${b.dataset.completeReminder}/complete`);
+        toast(res?.next_due_at ? `Reminder completed. Next: ${fmtDateTime(res.next_due_at)}` : 'Reminder completed.');
         renderHome(el);
         refreshNotifCount();
       } catch (err) { toast(err.message, 'error'); }
@@ -112,6 +143,7 @@ function statCard(iconName, value, label, color = null) {
 const NOTIF_ICONS = {
   share_received: 'share', import_complete: 'import', import_review: 'import',
   reminder_overdue: 'clock', birthday: 'cake', event_upcoming: 'calendar',
+  important_date: 'gift', out_of_touch: 'clock',
 };
 
 async function renderNotifications(el) {

@@ -469,6 +469,75 @@ const TABLES = [
     CONSTRAINT fk_notif_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     INDEX idx_notif_user (user_id, dismissed_at)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
+
+  // contact_relationships — "X is Y's sibling/partner/coworker" links
+  `CREATE TABLE IF NOT EXISTS contact_relationships (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    contact_id INT NOT NULL,
+    related_contact_id INT NOT NULL,
+    relation_type VARCHAR(50) NOT NULL,
+    notes VARCHAR(255) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_crel_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_crel_related FOREIGN KEY (related_contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_crel (contact_id, related_contact_id, relation_type),
+    INDEX idx_crel_related (related_contact_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
+
+  // important_dates — anniversaries and other per-contact recurring dates
+  `CREATE TABLE IF NOT EXISTS important_dates (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    contact_id INT NOT NULL,
+    label VARCHAR(100) NOT NULL,
+    date DATE NOT NULL,
+    recurring BOOLEAN NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_idate_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    INDEX idx_idate_contact (contact_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
+
+  // gift_ideas
+  `CREATE TABLE IF NOT EXISTS gift_ideas (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    contact_id INT NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    notes TEXT NULL,
+    url VARCHAR(500) NULL,
+    occasion VARCHAR(100) NULL,
+    status ENUM('idea','purchased','given') NOT NULL DEFAULT 'idea',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_gift_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    INDEX idx_gift_contact (contact_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
+
+  // api_tokens — personal access tokens (hash stored, never the token)
+  `CREATE TABLE IF NOT EXISTS api_tokens (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    token_hash CHAR(64) NOT NULL UNIQUE,
+    prefix VARCHAR(16) NOT NULL,
+    scopes VARCHAR(100) NOT NULL DEFAULT 'read',
+    last_used_at TIMESTAMP NULL,
+    expires_at TIMESTAMP NULL,
+    revoked_at TIMESTAMP NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_apitok_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    INDEX idx_apitok_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
+
+  // geo_cache — geocode result cache keyed by sha256(normalized query)
+  `CREATE TABLE IF NOT EXISTS geo_cache (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    query_hash CHAR(64) NOT NULL UNIQUE,
+    query VARCHAR(500) NULL,
+    latitude DECIMAL(10,7) NULL,
+    longitude DECIMAL(10,7) NULL,
+    label VARCHAR(255) NULL,
+    source VARCHAR(20) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 ];
 
 // ---------------------------------------------------------------------------
@@ -569,6 +638,27 @@ async function ensureColumn(table, column, definition) {
 async function ensureColumns() {
   // JWT token-version invalidation (logout / password change kills old tokens)
   await ensureColumn('users', 'token_version', 'INT NOT NULL DEFAULT 0');
+
+  // Geocoding results on addresses
+  await ensureColumn('contact_addresses', 'latitude', 'DECIMAL(10,7) NULL');
+  await ensureColumn('contact_addresses', 'longitude', 'DECIMAL(10,7) NULL');
+  await ensureColumn('contact_addresses', 'geocoded_at', 'TIMESTAMP NULL');
+  await ensureColumn('contact_addresses', 'geocode_source', 'VARCHAR(20) NULL');
+
+  // Keep-in-touch cadence
+  await ensureColumn('contacts', 'keep_in_touch_days', 'INT NULL');
+  await ensureColumn('contacts', 'last_contacted_at', 'TIMESTAMP NULL');
+
+  // Recurring reminders
+  await ensureColumn('reminders', 'recur_rule', "ENUM('daily','weekly','monthly','yearly') NULL");
+  await ensureColumn('reminders', 'recur_until', 'DATE NULL');
+
+  // TOTP two-factor
+  await ensureColumn('users', 'totp_secret', 'VARCHAR(255) NULL');
+  await ensureColumn('users', 'totp_enabled', 'BOOLEAN NOT NULL DEFAULT 0');
+
+  // Document attachments keep their original filename
+  await ensureColumn('media_assets', 'original_name', 'VARCHAR(255) NULL');
 }
 
 // ---------------------------------------------------------------------------

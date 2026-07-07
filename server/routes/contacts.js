@@ -12,6 +12,7 @@ const {
   zodiacFromBirthday, buildDisplayName, rebuildSearchIndex, rebuildSearchIndexAsync,
   filterContactByScope, CONTACT_FIELDS, isValidDate,
 } = require('../lib/contacts');
+const { scoreCandidate } = require('../import/matcher');
 const { getSetting } = require('./settings');
 
 const router = express.Router();
@@ -24,6 +25,7 @@ const SORTABLE = {
   rating: 'c.rating',
   location: 'c.location',
   birthday: 'c.birthday',
+  last_contacted_at: 'c.last_contacted_at',
 };
 
 /** Is spicy content visible for this request? Global setting AND session pref. */
@@ -40,6 +42,7 @@ router.get('/', async (req, res, next) => {
   try {
     const {
       tag, group, search, sort = 'name', sortDir = 'asc', favorites,
+      filter, near, radius_km,
       page = 1, limit = 50,
     } = req.query;
 
@@ -56,6 +59,37 @@ router.get('/', async (req, res, next) => {
     }
 
     if (favorites === '1' || favorites === 'true') where.push('c.is_favorite = 1');
+
+    // keep-in-touch: overdue contacts only
+    if (filter === 'out_of_touch') {
+      where.push(`(c.keep_in_touch_days IS NOT NULL AND
+        (c.last_contacted_at IS NULL OR c.last_contacted_at < NOW() - INTERVAL c.keep_in_touch_days DAY))`);
+    }
+
+    // proximity: contacts with a geocoded address within radius_km of near=lat,lng
+    if (near !== undefined) {
+      const m = String(near).match(/^(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)$/);
+      if (!m) return res.status(400).json({ error: 'near must be "lat,lng"' });
+      const nlat = Number(m[1]), nlng = Number(m[2]);
+      if (!Number.isFinite(nlat) || !Number.isFinite(nlng) || Math.abs(nlat) > 90 || Math.abs(nlng) > 180) {
+        return res.status(400).json({ error: 'near coordinates out of range' });
+      }
+      const radius = Number(radius_km ?? 50);
+      if (!Number.isFinite(radius) || radius <= 0 || radius > 20015) {
+        return res.status(400).json({ error: 'radius_km must be a positive number' });
+      }
+      // haversine over geocoded addresses (6371 km earth radius)
+      where.push(`EXISTS (
+        SELECT 1 FROM contact_addresses ca
+        WHERE ca.contact_id = c.id AND ca.latitude IS NOT NULL AND ca.longitude IS NOT NULL
+          AND 6371 * 2 * ASIN(SQRT(
+            POWER(SIN(RADIANS(ca.latitude - ?) / 2), 2) +
+            COS(RADIANS(?)) * COS(RADIANS(ca.latitude)) *
+            POWER(SIN(RADIANS(ca.longitude - ?) / 2), 2)
+          )) <= ?
+      )`);
+      params.push(nlat, nlat, nlng, radius);
+    }
 
     if (tag) {
       where.push('EXISTS (SELECT 1 FROM contact_tags ct WHERE ct.contact_id = c.id AND ct.tag_id = ?)');
@@ -96,7 +130,9 @@ router.get('/', async (req, res, next) => {
 
     const rows = await query(
       `SELECT c.*, sc.share_scope AS shared_scope, sc.permissions AS shared_permissions,
-              (c.owner_user_id != ${Number(req.user.id)}) AS is_shared_in
+              (c.owner_user_id != ${Number(req.user.id)}) AS is_shared_in,
+              (c.keep_in_touch_days IS NOT NULL AND
+               (c.last_contacted_at IS NULL OR c.last_contacted_at < NOW() - INTERVAL c.keep_in_touch_days DAY)) AS out_of_touch
        ${fromWhere}
        ORDER BY ${orderCol} ${dir}, c.id ASC
        LIMIT ${lim} OFFSET ${off}`,
@@ -126,6 +162,7 @@ router.get('/', async (req, res, next) => {
       // spicy signal hidden entirely when not in active spicy mode
       if (!showSpicy) c.is_spicy = 0;
       c.tags = tagsByContact[r.id] || [];
+      c.out_of_touch = Boolean(r.out_of_touch);
       if (r.shared_scope && r.owner_user_id !== req.user.id && !isAdmin(req.user)) {
         const isBasic = r.shared_scope === 'basic';
         // basic scope hides tags in list just like the detail route does
@@ -135,6 +172,134 @@ router.get('/', async (req, res, next) => {
     });
 
     res.json({ contacts, total, page: Number(page) || 1, limit: lim });
+  } catch (err) { next(err); }
+});
+
+// ------------------------------------------------------------- duplicates
+// GET /api/contacts/duplicates — pairwise dedupe scan of the user's OWN
+// non-deleted contacts using the import matcher's scoring. Must be declared
+// before /:id so "duplicates" isn't consumed as a contact id.
+router.get('/duplicates', async (req, res, next) => {
+  try {
+    const contacts = await query(
+      `SELECT id, display_name, email, phone, location FROM contacts
+       WHERE owner_user_id = ? AND deleted_at IS NULL ORDER BY id`,
+      [req.user.id]
+    );
+    if (contacts.length > 500) {
+      return res.status(413).json({ error: `Too many contacts to scan (${contacts.length} > 500) — dedupe scan is capped at 500 contacts` });
+    }
+    if (contacts.length < 2) return res.json({ pairs: [] });
+
+    const ids = contacts.map((c) => c.id);
+    const ph = ids.map(() => '?').join(',');
+    const [emails, phones, socials] = await Promise.all([
+      query(`SELECT contact_id, email FROM contact_emails WHERE contact_id IN (${ph})`, ids),
+      query(`SELECT contact_id, phone FROM contact_phones WHERE contact_id IN (${ph})`, ids),
+      query(`SELECT contact_id, platform, username FROM social_links WHERE contact_id IN (${ph})`, ids),
+    ]);
+    const byId = new Map(contacts.map((c) => [c.id, { contact: c, emails: [], phones: [], socials: [] }]));
+    for (const e of emails) byId.get(e.contact_id)?.emails.push(e);
+    for (const p of phones) byId.get(p.contact_id)?.phones.push(p);
+    for (const s of socials) byId.get(s.contact_id)?.socials.push(s);
+
+    const brief = (c) => ({ id: c.id, display_name: c.display_name, email: c.email, phone: c.phone });
+    const pairs = [];
+    for (let i = 0; i < contacts.length; i++) {
+      const a = byId.get(contacts[i].id);
+      // shape contact A as a matcher "record"
+      const record = {
+        display_name: a.contact.display_name,
+        location: a.contact.location,
+        emails: [...a.emails, ...(a.contact.email ? [{ email: a.contact.email }] : [])],
+        phones: [...a.phones, ...(a.contact.phone ? [{ phone: a.contact.phone }] : [])],
+        social_links: a.socials,
+      };
+      for (let j = i + 1; j < contacts.length; j++) {
+        const b = byId.get(contacts[j].id);
+        const score = scoreCandidate(record, b);
+        if (score >= 0.8) {
+          const reason = score >= 0.95 ? 'matching email or phone'
+            : score >= 0.85 ? 'matching social link'
+            : 'matching name';
+          pairs.push({ a: brief(a.contact), b: brief(b.contact), score, reason });
+        }
+      }
+    }
+    pairs.sort((x, y) => y.score - x.score);
+    res.json({ pairs });
+  } catch (err) { next(err); }
+});
+
+// ------------------------------------------------------------------- bulk
+// POST /api/contacts/bulk — { ids: [int], action, tag_id?, group_id? }
+const BULK_ACTIONS = ['add_tag', 'remove_tag', 'add_group', 'remove_group', 'delete', 'favorite', 'unfavorite'];
+router.post('/bulk', async (req, res, next) => {
+  try {
+    const { ids, action, tag_id, group_id } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'ids array is required' });
+    if (ids.length > 200) return res.status(400).json({ error: 'Too many ids (max 200)' });
+    if (!BULK_ACTIONS.includes(action)) return res.status(400).json({ error: `action must be one of: ${BULK_ACTIONS.join(', ')}` });
+    const cleanIds = [...new Set(ids.map(Number))];
+    if (cleanIds.some((n) => !Number.isInteger(n) || n <= 0)) return res.status(400).json({ error: 'ids must be positive integers' });
+
+    let tagId = null, groupId = null;
+    if (action === 'add_tag' || action === 'remove_tag') {
+      tagId = Number(tag_id);
+      if (!Number.isInteger(tagId) || tagId <= 0) return res.status(400).json({ error: 'tag_id is required for tag actions' });
+      const tags = await query('SELECT id, owner_user_id FROM tags WHERE id = ?', [tagId]);
+      if (!tags.length || (tags[0].owner_user_id !== null && tags[0].owner_user_id !== req.user.id && !isAdmin(req.user))) {
+        return res.status(404).json({ error: 'Tag not found' });
+      }
+    }
+    if (action === 'add_group' || action === 'remove_group') {
+      groupId = Number(group_id);
+      if (!Number.isInteger(groupId) || groupId <= 0) return res.status(400).json({ error: 'group_id is required for group actions' });
+      const groups = await query('SELECT id, owner_user_id, is_system FROM `groups` WHERE id = ?', [groupId]);
+      if (!groups.length || (!groups[0].is_system && groups[0].owner_user_id !== null &&
+          groups[0].owner_user_id !== req.user.id && !isAdmin(req.user))) {
+        return res.status(404).json({ error: 'Group not found' });
+      }
+    }
+
+    // Per-id authz: owner or admin only (shared-in contacts rejected)
+    const ph = cleanIds.map(() => '?').join(',');
+    const rows = await query(`SELECT id, owner_user_id, display_name FROM contacts WHERE id IN (${ph}) AND deleted_at IS NULL`, cleanIds);
+    const allowed = rows.filter((r) => r.owner_user_id === req.user.id || isAdmin(req.user));
+    let done = 0;
+    const skipped = cleanIds.length - allowed.length;
+
+    for (const c of allowed) {
+      switch (action) {
+        case 'add_tag':
+          await query('INSERT IGNORE INTO contact_tags (contact_id, tag_id) VALUES (?, ?)', [c.id, tagId]);
+          break;
+        case 'remove_tag':
+          await query('DELETE FROM contact_tags WHERE contact_id = ? AND tag_id = ?', [c.id, tagId]);
+          break;
+        case 'add_group':
+          await query('INSERT IGNORE INTO group_members (group_id, contact_id) VALUES (?, ?)', [groupId, c.id]);
+          break;
+        case 'remove_group':
+          await query('DELETE FROM group_members WHERE group_id = ? AND contact_id = ?', [groupId, c.id]);
+          break;
+        case 'delete':
+          await query('UPDATE contacts SET deleted_at = NOW() WHERE id = ? AND deleted_at IS NULL', [c.id]);
+          break;
+        case 'favorite':
+          await query('UPDATE contacts SET is_favorite = 1 WHERE id = ?', [c.id]);
+          break;
+        case 'unfavorite':
+          await query('UPDATE contacts SET is_favorite = 0 WHERE id = ?', [c.id]);
+          break;
+      }
+      done++;
+    }
+
+    auditWrite(req.user.id, null, 'bulk', 'contact', null, null,
+      { action, ids: allowed.map((c) => c.id), tag_id: tagId, group_id: groupId },
+      `Bulk ${action} on ${done} contact(s)`);
+    res.json({ done, skipped });
   } catch (err) { next(err); }
 });
 
@@ -190,6 +355,14 @@ router.post('/', async (req, res, next) => {
     }
     if (data.birthday && !data.zodiac_sign) data.zodiac_sign = zodiacFromBirthday(data.birthday);
     if (data.rating != null) data.rating = Math.max(0, Math.min(5, Number(data.rating) || 0));
+    if ('keep_in_touch_days' in data) {
+      if (data.keep_in_touch_days === '' || data.keep_in_touch_days === null) data.keep_in_touch_days = null;
+      else {
+        const kd = Number(data.keep_in_touch_days);
+        if (!Number.isInteger(kd) || kd <= 0) return res.status(400).json({ error: 'keep_in_touch_days must be a positive integer or null' });
+        data.keep_in_touch_days = kd;
+      }
+    }
     for (const b of ['is_favorite', 'is_spicy', 'is_anonymous']) if (b in data) data[b] = data[b] ? 1 : 0;
 
     // spicy flag only settable when spicy visible
@@ -235,6 +408,14 @@ router.put('/:id', requireContactAccess('id', { edit: true }), async (req, res, 
       data.zodiac_sign = zodiacFromBirthday(data.birthday);
     }
     if (data.rating != null) data.rating = Math.max(0, Math.min(5, Number(data.rating) || 0));
+    if ('keep_in_touch_days' in data) {
+      if (data.keep_in_touch_days === '' || data.keep_in_touch_days === null) data.keep_in_touch_days = null;
+      else {
+        const kd = Number(data.keep_in_touch_days);
+        if (!Number.isInteger(kd) || kd <= 0) return res.status(400).json({ error: 'keep_in_touch_days must be a positive integer or null' });
+        data.keep_in_touch_days = kd;
+      }
+    }
     for (const b of ['is_favorite', 'is_spicy', 'is_anonymous']) if (b in data) data[b] = data[b] ? 1 : 0;
     if ('is_spicy' in data && data.is_spicy && !(await spicyVisible(req.user))) delete data.is_spicy;
 

@@ -9,6 +9,7 @@ const { query } = require('../database/connection');
 const { requireAuth, requireContactAccess, contactAccess } = require('../middleware/auth');
 const { auditWrite } = require('../lib/audit');
 const { rebuildSearchIndexAsync } = require('../lib/contacts');
+const { geocode, geocodeRemote } = require('../lib/geo');
 
 // Configuration per satellite kind
 const KINDS = {
@@ -46,6 +47,41 @@ function pickFields(body, kind) {
   return data;
 }
 
+// ---------------------------------------------------------------------------
+// Address geocoding: Photon (self-hosted, street precision) with the full
+// address, falling back to the local geonames index with "city, state, country".
+// ---------------------------------------------------------------------------
+async function geocodeAddressRow(addr) {
+  const full = [addr.street, addr.city, addr.state, addr.zip, addr.country].filter(Boolean).join(', ');
+  const cityLevel = [addr.city, addr.state, addr.country].filter(Boolean).join(', ');
+  if (!full && !cityLevel) return null;
+  let result = full ? await geocodeRemote(full) : null;
+  if (!result && cityLevel) result = await geocode(cityLevel); // cached local (or remote) city-level
+  return result;
+}
+
+/** Geocode an address row and persist lat/lng. Awaitable; never throws. */
+async function geocodeAddress(addressId) {
+  try {
+    const rows = await query('SELECT * FROM contact_addresses WHERE id = ?', [addressId]);
+    if (!rows.length) return null;
+    const result = await geocodeAddressRow(rows[0]);
+    if (!result) return null;
+    await query(
+      'UPDATE contact_addresses SET latitude = ?, longitude = ?, geocoded_at = NOW(), geocode_source = ? WHERE id = ?',
+      [result.lat, result.lng, result.source, addressId]
+    );
+    return result;
+  } catch (err) {
+    console.error('[geocode-address] failed:', err.message);
+    return null;
+  }
+}
+
+function geocodeAddressAsync(addressId) {
+  geocodeAddress(addressId).catch(() => { /* geocodeAddress never throws */ });
+}
+
 // Router mounted at /api/contacts/:id/(emails|phones|addresses|socials)
 const contactSatellites = express.Router({ mergeParams: true });
 contactSatellites.use(requireAuth);
@@ -81,6 +117,7 @@ for (const [name, kind] of Object.entries(KINDS)) {
         [req.contact.id, ...cols.map((k) => data[k] ?? null)]
       );
       rebuildSearchIndexAsync(req.contact.id);
+      if (name === 'addresses') geocodeAddressAsync(result.insertId); // fire-and-forget
       auditWrite(req.user.id, req.contact.id, 'create', kind.entity, result.insertId, null, data, `Added ${kind.entity}`);
       res.status(201).json({ id: result.insertId });
     } catch (err) { next(err); }
@@ -121,6 +158,9 @@ for (const [name, kind] of Object.entries(KINDS)) {
         [...cols.map((k) => data[k] ?? null), req.item.id]
       );
       rebuildSearchIndexAsync(req.item.contact_id);
+      if (name === 'addresses' && cols.some((c) => ['street', 'city', 'state', 'zip', 'country'].includes(c))) {
+        geocodeAddressAsync(req.item.id); // address text changed → re-geocode
+      }
       auditWrite(req.user.id, req.item.contact_id, 'update', kind.entity, req.item.id, req.item, data, `Updated ${kind.entity}`);
       res.json({ ok: true });
     } catch (err) { next(err); }
@@ -136,4 +176,22 @@ for (const [name, kind] of Object.entries(KINDS)) {
   });
 }
 
-module.exports = { contactSatellites, satelliteItems };
+// POST /api/addresses/:itemId/geocode — manual (awaited) re-geocode.
+satelliteItems.post('/addresses/:itemId/geocode', async (req, res, next) => {
+  try {
+    const id = Number(req.params.itemId);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
+    const rows = await query('SELECT * FROM contact_addresses WHERE id = ?', [id]);
+    if (rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    const found = await contactAccess(req.user, rows[0].contact_id);
+    if (!found) return res.status(404).json({ error: 'Not found' });
+    if (found.access === 'shared' && found.share.permissions !== 'edit') {
+      return res.status(403).json({ error: 'Read-only access' });
+    }
+    const result = await geocodeAddress(id);
+    if (!result) return res.status(404).json({ error: 'Could not geocode this address' });
+    res.json({ ok: true, latitude: result.lat, longitude: result.lng, label: result.label, source: result.source });
+  } catch (err) { next(err); }
+});
+
+module.exports = { contactSatellites, satelliteItems, geocodeAddress };

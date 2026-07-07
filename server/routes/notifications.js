@@ -14,7 +14,7 @@ router.use(requireAuth);
 async function derivedNotifications(user) {
   const showSpicy = await spicyVisible(user);
   const scope = isAdmin(user) ? '' : `AND c.owner_user_id = ${Number(user.id)}`;
-  const [overdue, birthdays, events] = await Promise.all([
+  const [overdue, birthdays, events, importantDates, outOfTouch] = await Promise.all([
     query(
       `SELECT r.id, r.title, r.due_at, c.display_name AS contact_name, r.contact_id
        FROM reminders r LEFT JOIN contacts c ON c.id = r.contact_id
@@ -38,6 +38,26 @@ async function derivedNotifications(user) {
        ORDER BY e.starts_at ASC LIMIT 20`,
       [user.id]
     ),
+    // important dates within 7 days (recurring → next occurrence; one-off → literal)
+    query(
+      `SELECT d.id, d.label, d.date, c.id AS contact_id, c.display_name FROM important_dates d
+       JOIN contacts c ON c.id = d.contact_id
+       WHERE c.deleted_at IS NULL ${scope}
+         AND (
+           (d.recurring = 1 AND DATEDIFF(
+             DATE_ADD(d.date, INTERVAL YEAR(CURDATE()) - YEAR(d.date) + IF(DATE_FORMAT(d.date,'%m-%d') < DATE_FORMAT(CURDATE(),'%m-%d'), 1, 0) YEAR),
+             CURDATE()) BETWEEN 0 AND 7)
+           OR (d.recurring = 0 AND d.date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 7 DAY))
+         )
+       ORDER BY DATE_FORMAT(d.date, '%m-%d') LIMIT 20`
+    ),
+    // out-of-touch: keep_in_touch_days set and overdue (never contacted counts too)
+    query(
+      `SELECT c.id, c.display_name, c.last_contacted_at, c.keep_in_touch_days FROM contacts c
+       WHERE c.deleted_at IS NULL AND c.keep_in_touch_days IS NOT NULL AND c.keep_in_touch_days > 0 ${scope}
+         AND (c.last_contacted_at IS NULL OR c.last_contacted_at < DATE_SUB(NOW(), INTERVAL c.keep_in_touch_days DAY))
+       ORDER BY c.last_contacted_at IS NOT NULL, c.last_contacted_at ASC LIMIT 10`
+    ),
   ]);
 
   return [
@@ -56,6 +76,17 @@ async function derivedNotifications(user) {
       id: `event-${e.id}`, type: 'event_upcoming',
       title: `Upcoming: ${e.title}`,
       body: null, link: '#/events', at: e.starts_at, derived: true,
+    })),
+    ...importantDates.map((d) => ({
+      id: `date-${d.id}`, type: 'important_date',
+      title: `${d.label} — ${d.display_name}`,
+      body: null, link: `#/contacts/${d.contact_id}`, at: d.date, derived: true,
+    })),
+    ...outOfTouch.map((c) => ({
+      id: `outoftouch-${c.id}`, type: 'out_of_touch',
+      title: `Time to reach out to ${c.display_name}`,
+      body: c.last_contacted_at ? `Last contact: ${String(c.last_contacted_at).slice(0, 10)}` : 'No contact recorded yet',
+      link: `#/contacts/${c.id}`, at: c.last_contacted_at, derived: true,
     })),
   ];
 }

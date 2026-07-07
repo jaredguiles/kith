@@ -26,13 +26,38 @@ const MAX_UPLOAD = Number(process.env.MAX_UPLOAD_SIZE || 52428800);
 const IMAGE_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp' };
 const VIDEO_TYPES = { 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm', 'video/x-matroska': '.mkv' };
 
+// Documents: mime AND extension must both be on the whitelist (defense in depth).
+const DOC_MIMES = {
+  'application/pdf': ['.pdf'],
+  'text/plain': ['.txt', '.md'],
+  'text/markdown': ['.md'],
+  'text/x-markdown': ['.md'],
+  'application/msword': ['.doc'],
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+  'application/vnd.ms-excel': ['.xls', '.csv'],
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+  'text/csv': ['.csv'],
+  'application/csv': ['.csv'],
+  'application/zip': ['.zip'],
+  'application/x-zip-compressed': ['.zip'],
+};
+const DOC_EXTENSIONS = ['.pdf', '.txt', '.md', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.zip'];
+
+function docExtension(file) {
+  const ext = path.extname(file.originalname || '').toLowerCase();
+  const allowedForMime = DOC_MIMES[file.mimetype];
+  if (!allowedForMime) return null;
+  if (!DOC_EXTENSIONS.includes(ext) || !allowedForMime.includes(ext)) return null;
+  return ext;
+}
+
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const dir = path.join(MEDIA_PATH, 'kith');
     fs.mkdir(dir, { recursive: true }, (err) => cb(err, dir));
   },
   filename: (req, file, cb) => {
-    const ext = IMAGE_TYPES[file.mimetype] || VIDEO_TYPES[file.mimetype] || '';
+    const ext = IMAGE_TYPES[file.mimetype] || VIDEO_TYPES[file.mimetype] || docExtension(file) || '';
     cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
   },
 });
@@ -42,9 +67,17 @@ const upload = multer({
   limits: { fileSize: MAX_UPLOAD, files: 10 },
   fileFilter: (req, file, cb) => {
     if (IMAGE_TYPES[file.mimetype] || VIDEO_TYPES[file.mimetype]) return cb(null, true);
-    cb(new Error('Only images (jpeg/png/gif/webp) and videos (mp4/mov/webm/mkv) are allowed'));
+    if (docExtension(file)) return cb(null, true);
+    cb(new Error('Only images (jpeg/png/gif/webp), videos (mp4/mov/webm/mkv) and documents (pdf/txt/md/doc/docx/xls/xlsx/csv/zip) are allowed'));
   },
 });
+
+/** Sanitize a filename for a Content-Disposition header. */
+function safeFilename(name) {
+  const base = path.basename(String(name || 'download'));
+  // strip quotes/control chars/CRLF that could break the header
+  return base.replace(/[^\w.\- ()\[\]]/g, '_').slice(0, 200) || 'download';
+}
 
 /** Resolve a stored relative path inside MEDIA_PATH, guarding traversal. */
 function resolveMediaPath(relPath) {
@@ -124,7 +157,7 @@ router.get('/', async (req, res, next) => {
     else if (spicy === '1') where.push('m.is_spicy = 1');
     else if (spicy === '0') where.push('m.is_spicy = 0');
 
-    if (type === 'photo' || type === 'video') { where.push('m.type = ?'); params.push(type); }
+    if (type === 'photo' || type === 'video' || type === 'document') { where.push('m.type = ?'); params.push(type); }
 
     const rows = await query(
       `SELECT m.* FROM media_assets m WHERE ${where.join(' AND ')} ORDER BY m.created_at DESC LIMIT 500`,
@@ -170,17 +203,23 @@ router.post('/', (req, res, next) => {
     const created = [];
     for (const file of req.files) {
       const isVideo = Boolean(VIDEO_TYPES[file.mimetype]);
+      const isImage = Boolean(IMAGE_TYPES[file.mimetype]);
+      const isDoc = !isVideo && !isImage;
+      const mediaType = isVideo ? 'video' : isImage ? 'photo' : 'document';
       const relPath = path.relative(MEDIA_PATH, file.path);
+      // documents: keep the original name for downloads, never profile-eligible,
+      // never spicy-thumbnail/thumbnail logic
       const result = await query(
-        `INSERT INTO media_assets (contact_id, owner_user_id, type, file_path, caption, is_spicy)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [contactId, req.user.id, isVideo ? 'video' : 'photo', relPath, storedCaption, spicyFlag]
+        `INSERT INTO media_assets (contact_id, owner_user_id, type, file_path, caption, is_spicy, is_profile_eligible, original_name)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [contactId, req.user.id, mediaType, relPath, storedCaption, spicyFlag,
+         isDoc ? 0 : 1, isDoc ? safeFilename(file.originalname) : null]
       );
       created.push(result.insertId);
 
       if (isVideo) generateThumbnail(file.path, result.insertId);
       auditWrite(req.user.id, contactId, 'create', 'media', result.insertId, null,
-        { type: isVideo ? 'video' : 'photo', is_spicy: spicyFlag }, 'Uploaded media');
+        { type: mediaType, is_spicy: spicyFlag }, 'Uploaded media');
     }
     res.status(201).json({ ids: created });
   } catch (err) { next(err); }
@@ -207,10 +246,14 @@ function generateThumbnail(videoPath, mediaId) {
     });
 }
 
-// GET /api/media/:id/file — authenticated bytes
+// GET /api/media/:id/file — authenticated bytes; documents download with
+// their original filename (Content-Disposition: attachment)
 router.get('/:id/file', loadMedia, (req, res) => {
   const abs = resolveMediaPath(req.media.file_path);
   if (!abs || !fs.existsSync(abs)) return res.status(404).json({ error: 'File missing' });
+  if (req.media.type === 'document') {
+    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename(req.media.original_name)}"`);
+  }
   res.sendFile(abs);
 });
 

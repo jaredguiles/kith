@@ -72,6 +72,36 @@ function rebuildSearchIndexAsync(contactId) {
 }
 
 /**
+ * Mark a contact as "contacted" for keep-in-touch tracking. Moves
+ * last_contacted_at forward only (GREATEST) so backdated interactions never
+ * regress it. Fire-and-forget safe — never throws.
+ * @param {number} contactId
+ * @param {string|Date} [when] optional timestamp; defaults to NOW()
+ */
+async function touchContact(contactId, when) {
+  try {
+    const id = Number(contactId);
+    if (!Number.isInteger(id) || id <= 0) return;
+    if (when != null) {
+      const d = when instanceof Date ? when : new Date(when);
+      if (Number.isNaN(d.getTime())) return;
+      const ts = d.toISOString().slice(0, 19).replace('T', ' ');
+      await query(
+        "UPDATE contacts SET last_contacted_at = GREATEST(COALESCE(last_contacted_at, '1970-01-01'), ?) WHERE id = ?",
+        [ts, id]
+      );
+    } else {
+      await query(
+        "UPDATE contacts SET last_contacted_at = GREATEST(COALESCE(last_contacted_at, '1970-01-01'), NOW()) WHERE id = ?",
+        [id]
+      );
+    }
+  } catch (err) {
+    console.error('[touch-contact] failed:', err.message);
+  }
+}
+
+/**
  * Cheap date/datetime validation for user-supplied date strings.
  * Accepts `YYYY-MM-DD` optionally followed by a time part
  * (`THH:MM[:SS[.mmm]][Z]` or ` HH:MM[:SS]`). Returns false for anything
@@ -113,6 +143,7 @@ const CONTACT_FIELDS = [
   'location', 'photo_url', 'bio', 'occupation', 'company', 'website',
   'zodiac_sign', 'languages', 'ethnicity', 'how_we_met', 'met_date', 'rating',
   'relationship_type', 'is_favorite', 'is_spicy', 'is_anonymous', 'notes_text',
+  'keep_in_touch_days',
 ];
 
 module.exports = {
@@ -120,6 +151,7 @@ module.exports = {
   buildDisplayName,
   rebuildSearchIndex,
   rebuildSearchIndexAsync,
+  touchContact,
   isValidDate,
   filterContactByScope,
   CONTACT_FIELDS,

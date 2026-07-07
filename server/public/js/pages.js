@@ -9,10 +9,14 @@ export const pageTitles = {
   home: 'Home',
   contacts: 'Contacts',
   events: 'Events',
+  calendar: 'Calendar',
+  map: 'Map',
+  journal: 'Journal',
   notifications: 'Notifications',
   settings: 'Settings',
   review: 'Data review',
   groups: 'Groups',
+  trash: 'Trash',
 };
 
 // Page modules register themselves here (filled in over Phases 4–9).

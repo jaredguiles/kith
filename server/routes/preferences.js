@@ -13,6 +13,11 @@ router.use(requireAuth);
 
 const HIDDEN_KEYS = ['spicy_pin_hash'];
 
+// Known preference keys with constrained values (validated on write, defaulted on read).
+const KNOWN_PREFS = {
+  theme: { values: ['dark', 'light', 'system'], default: 'dark' },
+};
+
 // --- PIN verify throttle (mirror of the login throttle style, per user id) ---
 const PIN_MAX_FAILURES = 5;
 const PIN_LOCKOUT_MS = 15 * 60 * 1000;
@@ -57,6 +62,10 @@ router.get('/', async (req, res, next) => {
       try { prefs[row.key] = JSON.parse(row.value); } catch { prefs[row.key] = row.value; }
     }
     prefs.spicy_pin_set = rows.some((r) => r.key === 'spicy_pin_hash');
+    // defaults + value sanitation for known constrained keys
+    for (const [k, spec] of Object.entries(KNOWN_PREFS)) {
+      if (!spec.values.includes(prefs[k])) prefs[k] = spec.default;
+    }
     res.json({ preferences: prefs });
   } catch (err) { next(err); }
 });
@@ -107,6 +116,9 @@ router.put('/:key', async (req, res, next) => {
     if (HIDDEN_KEYS.includes(key)) return res.status(400).json({ error: 'Use the PIN endpoints for this' });
     if (!/^[a-z0-9_]{1,100}$/i.test(key)) return res.status(400).json({ error: 'Invalid preference key' });
     const { value, type } = req.body || {};
+    if (KNOWN_PREFS[key] && !KNOWN_PREFS[key].values.includes(value)) {
+      return res.status(400).json({ error: `${key} must be one of: ${KNOWN_PREFS[key].values.join(', ')}` });
+    }
     const valueType = type || (typeof value === 'boolean' ? 'boolean' : typeof value === 'object' ? 'json' : 'string');
     await query(
       'INSERT INTO preferences (user_id, `key`, value, type) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), type = VALUES(type)',
