@@ -39,6 +39,7 @@ const TABLES = [
     owner_user_id INT NOT NULL,
     display_name VARCHAR(255) NOT NULL,
     first_name VARCHAR(100) NULL,
+    middle_name VARCHAR(100) NULL,
     last_name VARCHAR(100) NULL,
     nickname VARCHAR(100) NULL,
     email VARCHAR(255) NULL,
@@ -648,6 +649,9 @@ async function ensureColumns() {
   // Keep-in-touch cadence
   await ensureColumn('contacts', 'keep_in_touch_days', 'INT NULL');
   await ensureColumn('contacts', 'last_contacted_at', 'TIMESTAMP NULL');
+
+  // Middle name
+  await ensureColumn('contacts', 'middle_name', 'VARCHAR(100) NULL');
 
   // Recurring reminders
   await ensureColumn('reminders', 'recur_rule', "ENUM('daily','weekly','monthly','yearly') NULL");

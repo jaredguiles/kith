@@ -75,7 +75,7 @@ function vesc(v) {
 function contactToVcard(c, emails, phones, addresses) {
   const lines = ['BEGIN:VCARD', 'VERSION:3.0'];
   lines.push(`FN:${vesc(c.display_name)}`);
-  lines.push(`N:${vesc(c.last_name)};${vesc(c.first_name)};;;`);
+  lines.push(`N:${vesc(c.last_name)};${vesc(c.first_name)};${vesc(c.middle_name)};;`);
   if (c.nickname) lines.push(`NICKNAME:${vesc(c.nickname)}`);
 
   // emails: satellites + scalar (deduped)
@@ -141,7 +141,7 @@ router.get('/vcf', async (req, res, next) => {
 // CSV (RFC 4180-style quoting)
 // ---------------------------------------------------------------------------
 const CSV_COLUMNS = [
-  'id', 'display_name', 'first_name', 'last_name', 'nickname',
+  'id', 'display_name', 'first_name', 'middle_name', 'last_name', 'nickname',
   'primary_email', 'primary_phone', 'birthday', 'location', 'occupation',
   'company', 'website', 'relationship_type', 'how_we_met', 'met_date',
   'rating', 'is_favorite', 'bio', 'created_at',

@@ -50,7 +50,7 @@ async function rebuildSearchIndex(contactId) {
   ]);
 
   const parts = [
-    c.display_name, c.first_name, c.last_name, c.nickname,
+    c.display_name, c.first_name, c.middle_name, c.last_name, c.nickname,
     c.email, c.phone, c.bio, c.location, c.occupation, c.company,
     c.notes_text,
     ...emails.map((r) => r.email),
@@ -138,7 +138,7 @@ function filterContactByScope(contact, scope) {
 
 // Editable contact columns (whitelist — never accept arbitrary keys)
 const CONTACT_FIELDS = [
-  'display_name', 'first_name', 'last_name', 'nickname', 'email', 'phone',
+  'display_name', 'first_name', 'middle_name', 'last_name', 'nickname', 'email', 'phone',
   'birthday', 'age', 'sex', 'pronouns', 'orientation', 'relationship_status',
   'location', 'photo_url', 'bio', 'occupation', 'company', 'website',
   'zodiac_sign', 'languages', 'ethnicity', 'how_we_met', 'met_date', 'rating',

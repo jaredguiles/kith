@@ -1,5 +1,5 @@
 // Contacts page: list (table w/ sort/filter/search/pagination), profile drawer,
-// create/edit modal. Registered into pageRenderers.
+// create modal, inline edit-in-place on the detail page.
 
 import { api, qs } from './api.js';
 import {
@@ -13,6 +13,10 @@ import {
   textInput, selectInput, textarea, toast, openModal, confirmModal, readForm,
   filterPills, feedItem,
 } from './components.js';
+import { formatPhoneSafe, attachPhoneInput, formatAddress, isUSCountry } from './phonefmt.js';
+import {
+  ieSpan, bindInlineEditor, languageFieldHtml, bindLanguageField,
+} from './inline-edit.js';
 import { pageRenderers } from './pages.js';
 import { state, navigate, refreshSidebarLists, isSpicyOn } from './app.js';
 
@@ -263,7 +267,7 @@ async function loadTable(el) {
             ${avatar(c, 'sm')}
             <div>
               <div class="font-medium">${esc(c.display_name)} ${c.is_shared_in ? '<span class="badge neutral">Shared</span>' : ''} ${c.out_of_touch ? '<span class="badge amber">Out of touch</span>' : ''}</div>
-              ${c.email ? `<div class="td-muted">${esc(c.email)}</div>` : ''}
+              ${c.email ? `<div class="td-muted">${esc(c.email)}</div>` : c.phone ? `<div class="td-muted">${esc(formatPhoneSafe(c.phone))}</div>` : ''}
             </div>
           </div>
         </td>
@@ -502,6 +506,10 @@ async function openDuplicatesModal(refresh) {
 }
 
 // --------------------------------------------------------- detail page
+// Inline edit mode state — persists across re-renders of the same contact,
+// resets when navigating to a different one.
+const detailEdit = { id: null, on: false };
+
 export async function renderContactDetail(el, id) {
   let data;
   try {
@@ -513,6 +521,9 @@ export async function renderContactDetail(el, id) {
   const { contact: c, emails, phones, addresses, socials, tags, groups, access, permissions, share_scope } = data;
   const canEdit = access !== 'shared' || permissions === 'edit';
   const isBasic = share_scope === 'basic';
+  if (detailEdit.id !== String(id)) { detailEdit.id = String(id); detailEdit.on = false; }
+  const editMode = canEdit && detailEdit.on;
+  const refresh = () => renderContactDetail(el, id);
   const flag = prideFlagGradient(c.orientation);
   const age = c.age ?? ageFromBirthday(c.birthday);
 
@@ -526,12 +537,48 @@ export async function renderContactDetail(el, id) {
       ? `<span class="text-xs text-muted">Last contact: ${lastContacted ? esc(timeAgo(c.last_contacted_at)) : 'never'}</span>`
       : '';
 
+  // ---- inline-edit field definitions (basic shares can't inline-edit)
+  const relTypes = ['', ...(state.settings.relationship_types || ['Friend', 'Family', 'Coworker', 'Acquaintance', 'Neighbor', 'Other'])];
+  const ieDefs = {
+    name: { type: 'name', label: 'Name', values: { first_name: c.first_name, middle_name: c.middle_name, last_name: c.last_name } },
+    nickname: { type: 'text', label: 'Nickname', value: c.nickname },
+    middle_name: { type: 'text', label: 'Middle name', value: c.middle_name },
+    birthday: { type: 'date', label: 'Birthday', value: (c.birthday || '').slice(0, 10) },
+    location: { type: 'text', label: 'Location', value: c.location },
+    occupation: { type: 'text', label: 'Occupation', value: c.occupation },
+    company: { type: 'text', label: 'Company', value: c.company },
+    website: { type: 'text', label: 'Website', value: c.website, placeholder: 'https://' },
+    languages: { type: 'langs', label: 'Languages', value: c.languages },
+    ethnicity: { type: 'text', label: 'Ethnicity', value: c.ethnicity },
+    how_we_met: { type: 'text', label: 'How we met', value: c.how_we_met },
+    met_date: { type: 'date', label: 'Met date', value: (c.met_date || '').slice(0, 10) },
+    bio: { type: 'textarea', label: 'Bio', value: c.bio },
+    notes_text: { type: 'textarea', label: 'Notes', value: c.notes_text },
+    pronouns: { type: 'select', label: 'Pronouns', value: c.pronouns, options: PRONOUN_OPTIONS },
+    sex: { type: 'select', label: 'Sex', value: c.sex, options: SEX_OPTIONS },
+    orientation: { type: 'select', label: 'Orientation', value: c.orientation, options: ORIENTATION_OPTIONS },
+    relationship_status: { type: 'select', label: 'Relationship status', value: c.relationship_status, options: REL_STATUS_OPTIONS },
+    relationship_type: { type: 'select', label: 'Relationship type', value: c.relationship_type, options: relTypes },
+    keep_in_touch_days: { type: 'number', label: 'Keep in touch (days)', value: c.keep_in_touch_days ?? '' },
+  };
+  const canInline = canEdit && !isBasic;
+
+  // Info card row: inline-editable when allowed; hidden entirely when empty
+  // and not in edit mode (edit mode shows every row with a '+ add' prompt).
   const infoRow = (label, value) => value
-    ? `<div class="flex-between" style="padding:6px 0"><span class="text-sm text-secondary">${esc(label)}</span><span class="text-sm" style="text-align:right">${esc(value)}</span></div>`
+    ? `<div class="info-grid-row"><span class="text-sm text-secondary info-label">${esc(label)}</span><span class="text-sm info-value" style="text-align:right">${esc(value)}</span></div>`
     : '';
+  const ieRow = (label, field, displayValue) => {
+    const has = displayValue !== null && displayValue !== undefined && displayValue !== '';
+    if (!canInline) return infoRow(label, displayValue);
+    return `<div class="info-grid-row ${has || editMode ? '' : 'ie-hidden'}">
+      <span class="text-sm text-secondary info-label">${esc(label)}</span>
+      <span class="text-sm" style="flex:1;display:flex;justify-content:flex-end;min-width:0">${ieSpan(field, ieDefs[field], displayValue, editMode)}</span>
+    </div>`;
+  };
 
   el.innerHTML = `
-  <div class="page-inner" style="max-width:860px">
+  <div class="page-inner ${editMode ? 'detail-edit-mode' : ''}" style="max-width:860px">
     <div class="mb-3"><a class="btn btn-ghost btn-sm" href="#/contacts">${icon('arrow-left')} Contacts</a></div>
     <div class="card shine mb-4 ${c.is_spicy ? 'contact-row has-spicy-data' : ''}">
       <div class="flex items-center gap-4">
@@ -543,12 +590,16 @@ export async function renderContactDetail(el, id) {
         </span>` : avatar(c, 'lg')}
         <div class="flex-1">
           <div class="flex items-center gap-2">
-            <h1 class="page-title">${esc(c.display_name)}</h1>
+            ${canInline && editMode
+              ? `<span class="ie-field ie-on" data-ie="name" role="button" tabindex="0" aria-label="Edit name"><h1 class="page-title ie-val">${esc(c.display_name)}</h1></span>`
+              : `<h1 class="page-title">${esc(c.display_name)}</h1>`}
             ${state.user?.self_contact_id && Number(c.id) === Number(state.user.self_contact_id) ? '<span class="badge blue">This is you</span>' : ''}
             ${c.is_shared_in || access === 'shared' ? '<span class="badge neutral">Shared</span>' : ''}
-            ${c.relationship_type ? `<span class="badge">${esc(c.relationship_type)}</span>` : ''}
+            ${c.relationship_type && !canInline ? `<span class="badge">${esc(c.relationship_type)}</span>` : ''}
             ${isSpicyOn() && c.is_spicy ? `<span class="badge">${icon('flame')}</span>` : ''}
           </div>
+          ${canInline ? `<div class="text-sm text-secondary mt-1">${ieSpan('nickname', ieDefs.nickname, c.nickname ? `“${c.nickname}”` : '', editMode)}</div>`
+            : c.nickname ? `<div class="text-sm text-secondary mt-1">“${esc(c.nickname)}”</div>` : ''}
           <div class="text-sm text-secondary mt-1">
             ${[c.location, c.occupation && c.company ? `${c.occupation} at ${c.company}` : c.occupation || c.company].filter(Boolean).map(esc).join(' · ')}
           </div>
@@ -559,41 +610,55 @@ export async function renderContactDetail(el, id) {
           <button class="btn btn-icon lg" data-action="fav" aria-label="Toggle favorite">
             <span class="star-rating"><span class="star ${c.is_favorite ? 'filled' : ''}">${icon('star')}</span></span>
           </button>` : ''}
-          ${canEdit ? `<button class="btn btn-icon lg" data-action="edit" aria-label="Edit">${icon('edit')}</button>` : ''}
+          ${canInline ? `<button class="btn ${editMode ? 'btn-primary' : 'btn-secondary'} btn-sm" data-action="edit" aria-pressed="${editMode}" aria-label="${editMode ? 'Finish editing' : 'Edit'}">${editMode ? `${icon('check')} Done` : `${icon('edit')} Edit`}</button>` : ''}
           ${access !== 'shared' ? `<button class="btn btn-icon lg" data-action="merge" aria-label="Merge">${icon('merge')}</button>` : ''}
           ${access !== 'shared' ? `<button class="btn btn-icon lg" data-action="share" aria-label="Share">${icon('share')}</button>` : ''}
           ${access !== 'shared' ? `<button class="btn btn-icon lg" data-action="delete" aria-label="Delete">${icon('trash')}</button>` : ''}
         </div>
       </div>
-      ${c.rating ? `<div class="mt-3">${starRating(c.rating)}</div>` : ''}
+      ${canInline
+        ? `<div class="mt-3 ie-stars ${editMode ? 'ie-on' : ''} ${!c.rating && !editMode ? 'ie-hidden' : ''}" id="detail-stars" aria-label="Rating" ${!c.rating && !editMode ? 'style="display:none"' : ''}>${starRating(c.rating || 0, { interactive: true, name: 'detail-rating' })}</div>`
+        : c.rating ? `<div class="mt-3">${starRating(c.rating)}</div>` : ''}
     </div>
 
     <div class="grid-2">
       <div class="card">
         <div class="card-header"><span class="card-title">Info</span></div>
-        ${infoRow('Full name', [c.first_name, c.last_name].filter(Boolean).join(' '))}
-        ${infoRow('Nickname', c.nickname)}
-        ${infoRow('Birthday', c.birthday ? `${fmtDate(c.birthday)}${age != null ? ` (${age})` : ''}` : null)}
-        ${infoRow('Pronouns', c.pronouns)}
-        ${infoRow('Sex', c.sex)}
-        ${infoRow('Orientation', c.orientation)}
-        ${infoRow('Relationship status', c.relationship_status)}
-        ${infoRow('Occupation', c.occupation)}
-        ${infoRow('Company', c.company)}
-        ${c.website ? `<div class="flex-between" style="padding:6px 0"><span class="text-sm text-secondary">Website</span><a class="text-sm" href="${escUrl(c.website)}" target="_blank" rel="noopener noreferrer">${esc(c.website)}</a></div>` : ''}
-        ${infoRow('Languages', c.languages)}
-        ${infoRow('Ethnicity', c.ethnicity)}
+        ${infoRow('Full name', [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' '))}
+        ${ieRow('Middle name', 'middle_name', c.middle_name)}
+        ${ieRow('Birthday', 'birthday', c.birthday ? `${fmtDate(c.birthday)}${age != null ? ` (${age})` : ''}` : '')}
+        ${ieRow('Pronouns', 'pronouns', c.pronouns)}
+        ${ieRow('Sex', 'sex', c.sex)}
+        ${ieRow('Orientation', 'orientation', c.orientation)}
+        ${ieRow('Relationship status', 'relationship_status', c.relationship_status)}
+        ${ieRow('Relationship type', 'relationship_type', c.relationship_type)}
+        ${ieRow('Location', 'location', c.location)}
+        ${ieRow('Occupation', 'occupation', c.occupation)}
+        ${ieRow('Company', 'company', c.company)}
+        ${canInline && editMode
+          ? `<div class="info-grid-row">
+              <span class="text-sm text-secondary info-label">Website</span>
+              <span class="text-sm" style="flex:1;display:flex;justify-content:flex-end;min-width:0">${ieSpan('website', ieDefs.website, c.website, editMode)}</span>
+            </div>`
+          : c.website ? `<div class="info-grid-row"><span class="text-sm text-secondary info-label">Website</span><a class="text-sm" href="${escUrl(c.website)}" target="_blank" rel="noopener noreferrer">${esc(c.website)}</a></div>` : ''}
+        ${ieRow('Languages', 'languages', c.languages)}
+        ${ieRow('Ethnicity', 'ethnicity', c.ethnicity)}
         ${infoRow('Zodiac', c.zodiac_sign || zodiacFromBirthday(c.birthday))}
-        ${infoRow('How we met', c.how_we_met)}
-        ${infoRow('Met', c.met_date ? fmtDate(c.met_date) : null)}
-        ${c.bio ? `<div class="mt-2"><div class="uppercase-label mb-1">Bio</div><div class="text-sm">${esc(c.bio)}</div></div>` : ''}
-        ${c.notes_text ? `<div class="mt-2"><div class="uppercase-label mb-1">Notes</div><div class="text-sm">${esc(c.notes_text)}</div></div>` : ''}
+        ${ieRow('How we met', 'how_we_met', c.how_we_met)}
+        ${ieRow('Met', 'met_date', c.met_date ? fmtDate(c.met_date) : '')}
+        ${ieRow('Keep in touch (days)', 'keep_in_touch_days', c.keep_in_touch_days ?? '')}
+        ${canInline
+          ? `<div class="mt-2 ${c.bio || editMode ? '' : 'ie-hidden'}"><div class="uppercase-label mb-1">Bio</div><div class="text-sm">${ieSpan('bio', ieDefs.bio, c.bio, editMode)}</div></div>`
+          : c.bio ? `<div class="mt-2"><div class="uppercase-label mb-1">Bio</div><div class="text-sm">${esc(c.bio)}</div></div>` : ''}
+        ${canInline
+          ? `<div class="mt-2 ${c.notes_text || editMode ? '' : 'ie-hidden'}"><div class="uppercase-label mb-1">Notes</div><div class="text-sm">${ieSpan('notes_text', ieDefs.notes_text, c.notes_text, editMode)}</div></div>`
+          : c.notes_text ? `<div class="mt-2"><div class="uppercase-label mb-1">Notes</div><div class="text-sm">${esc(c.notes_text)}</div></div>` : ''}
       </div>
 
       <div class="flex-col gap-4" style="display:flex">
         <div class="card">
           <div class="card-header"><span class="card-title">Contact</span>
-            ${canEdit && !isBasic ? `<button class="btn btn-ghost btn-sm" data-action="add-contact-method">${icon('plus')} Add</button>` : ''}
+            ${canEdit && !isBasic ? `<button class="btn ${editMode ? 'btn-secondary' : 'btn-ghost'} btn-sm" data-action="add-contact-method">${icon('plus')} Add</button>` : ''}
           </div>
           <div id="contact-methods">
             ${c.email && !emails.some((e) => e.email === c.email) ? `
@@ -603,25 +668,28 @@ export async function renderContactDetail(el, id) {
               </div>` : ''}
             ${c.phone && !phones.some((p) => p.phone === c.phone) ? `
               <div class="flex-between" style="padding:5px 0">
-                <span class="flex items-center gap-2 text-sm">${icon('phone', 'sat-icon')} ${esc(c.phone)} <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span></span>
+                <span class="flex items-center gap-2 text-sm">${icon('phone', 'sat-icon')} ${esc(formatPhoneSafe(c.phone))} <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span></span>
                 <span class="text-micro text-muted">primary</span>
               </div>` : ''}
             ${emails.map((e) => `
               <div class="flex-between" style="padding:5px 0" data-sat="emails" data-sat-id="${e.id}">
                 <span class="flex items-center gap-2 text-sm">${icon('mail', 'sat-icon')} ${esc(e.email)} ${e.is_primary ? '<span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>' : ''}</span>
                 <span class="flex items-center gap-2"><span class="text-micro text-muted">${esc(e.label || '')}</span>
+                ${canEdit && !isBasic && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
                 ${canEdit && !isBasic ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}</span>
               </div>`).join('')}
             ${phones.map((p) => `
               <div class="flex-between" style="padding:5px 0" data-sat="phones" data-sat-id="${p.id}">
-                <span class="flex items-center gap-2 text-sm">${icon('phone', 'sat-icon')} ${esc(p.phone)} ${p.is_primary ? '<span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>' : ''}</span>
+                <span class="flex items-center gap-2 text-sm">${icon('phone', 'sat-icon')} ${esc(formatPhoneSafe(p.phone))} ${p.is_primary ? '<span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>' : ''}</span>
                 <span class="flex items-center gap-2"><span class="text-micro text-muted">${esc(p.label || '')}</span>
+                ${canEdit && !isBasic && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
                 ${canEdit && !isBasic ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}</span>
               </div>`).join('')}
             ${(addresses || []).map((a) => `
               <div class="flex-between" style="padding:5px 0" data-sat="addresses" data-sat-id="${a.id}">
-                <span class="flex items-center gap-2 text-sm">${icon('map-pin', 'sat-icon')} ${esc([a.street, a.city, a.state, a.zip, a.country].filter(Boolean).join(', '))}</span>
+                <span class="flex items-center gap-2 text-sm">${icon('map-pin', 'sat-icon')} ${esc(formatAddress(a))}</span>
                 <span class="flex items-center gap-2"><span class="text-micro text-muted">${esc(a.label || '')}</span>
+                ${canEdit && !isBasic && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
                 ${canEdit && !isBasic ? `<button class="btn btn-icon" data-locate-addr="${a.id}" aria-label="Locate on map" title="Locate on map">${icon('map-pin')}</button>` : ''}
                 ${canEdit && !isBasic ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}</span>
               </div>`).join('')}
@@ -633,7 +701,7 @@ export async function renderContactDetail(el, id) {
         ${!isBasic ? `
         <div class="card">
           <div class="card-header"><span class="card-title">Social links</span>
-            ${canEdit ? `<button class="btn btn-ghost btn-sm" data-action="add-social">${icon('plus')} Add</button>` : ''}
+            ${canEdit ? `<button class="btn ${editMode ? 'btn-secondary' : 'btn-ghost'} btn-sm" data-action="add-social">${icon('plus')} Add</button>` : ''}
           </div>
           ${(socials || []).length ? (socials || []).map((s) => `
             <div class="flex-between" style="padding:5px 0" data-sat="socials" data-sat-id="${s.id}">
@@ -642,7 +710,10 @@ export async function renderContactDetail(el, id) {
                 ${s.username ? `<span class="text-secondary">@${esc(s.username)}</span>` : ''}
                 ${s.url ? `<a href="${escUrl(s.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open link">${icon('external-link')}</a>` : ''}
               </span>
+              <span class="flex items-center gap-1">
+              ${canEdit && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
               ${canEdit ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}
+              </span>
             </div>`).join('') : '<div class="text-sm text-muted" style="padding:6px 0">No social links yet.</div>'}
         </div>
 
@@ -662,9 +733,10 @@ export async function renderContactDetail(el, id) {
     ${!isBasic ? `
     <div class="card mt-4" id="relationships-card">
       <div class="card-header"><span class="card-title">Relationships</span>
-        ${canEdit ? `<button class="btn btn-ghost btn-sm" data-action="add-relationship">${icon('plus')} Add</button>` : ''}
+        ${canEdit ? `<button class="btn ${editMode ? 'btn-primary' : 'btn-ghost'} btn-sm" data-action="add-relationship">${icon('plus')} Add</button>` : ''}
       </div>
       <div id="contact-relationships"><div class="text-sm text-muted">Loading…</div></div>
+      ${canEdit ? '<div class="text-xs text-muted mt-2">Linking here updates both people’s profiles.</div>' : ''}
     </div>
     <div class="grid-2 mt-4">
       <div class="card" id="dates-card">
@@ -703,7 +775,40 @@ export async function renderContactDetail(el, id) {
     } catch (err) { toast(err.message, 'error'); }
   });
 
-  el.querySelector('[data-action="edit"]')?.addEventListener('click', () => openContactForm(c, () => renderContactDetail(el, id)));
+  // ---- Edit mode toggle (was: open edit modal)
+  el.querySelector('[data-action="edit"]')?.addEventListener('click', () => {
+    detailEdit.on = !detailEdit.on;
+    refresh();
+  });
+
+  // ---- inline edit-in-place
+  if (canInline) {
+    const saveField = async (payload) => {
+      await api.put(`/api/contacts/${c.id}`, payload);
+      // name/nickname changes ripple into sidebar favorites etc.
+      if ('first_name' in payload || 'last_name' in payload || 'middle_name' in payload || 'nickname' in payload) refreshSidebarLists();
+    };
+    bindInlineEditor(el.querySelector('.page-inner'), {
+      defs: ieDefs,
+      save: saveField,
+      onSaved: refresh,
+    });
+
+    // rating stars: clickable inline (click same value to clear)
+    el.querySelectorAll('#detail-stars .star').forEach((s) =>
+      s.addEventListener('click', async () => {
+        const next = Number(s.dataset.star) === Number(c.rating || 0) ? 0 : Number(s.dataset.star);
+        el.querySelectorAll('#detail-stars .star').forEach((st) =>
+          st.classList.toggle('filled', Number(st.dataset.star) <= next));
+        try {
+          await api.put(`/api/contacts/${c.id}`, { rating: next });
+          refresh();
+        } catch (err) {
+          toast(err.message, 'error');
+          refresh();
+        }
+      }));
+  }
 
   // header avatar → direct photo change (upload then set-as-profile)
   const photoBtn = el.querySelector('[data-action="change-photo"]');
@@ -750,6 +855,19 @@ export async function renderContactDetail(el, id) {
         await api.del(`/api/${row.dataset.sat}/${row.dataset.satId}`);
         renderContactDetail(el, id);
       } catch (err) { toast(err.message, 'error'); }
+    })
+  );
+
+  // satellite edit (visible in edit mode)
+  const satItems = { emails, phones, addresses, socials };
+  el.querySelectorAll('[data-edit-sat]').forEach((btn) =>
+    btn.addEventListener('click', () => {
+      const row = btn.closest('[data-sat]');
+      const kind = row.dataset.sat;
+      const item = (satItems[kind] || []).find((x) => String(x.id) === String(row.dataset.satId));
+      if (!item) return;
+      if (kind === 'socials') openSocialModal(c.id, refresh, item);
+      else openSatelliteEditModal(kind, item, refresh);
     })
   );
 
@@ -1147,13 +1265,15 @@ async function openChangelogModal(contact) {
   openModal(modalShell('changelog', `Change log — ${contact.display_name}`, content, '', { size: 'modal-xl' }));
 }
 
-// ---------------------------------------------------------- contact form
+// ------------------------------------------------- create-contact modal
+// Creation only — editing happens inline on the detail page.
 export function openContactForm(existing = null, onSaved = null) {
   const c = existing || {};
   const relTypes = ['', ...(state.settings.relationship_types || ['Friend', 'Family', 'Coworker', 'Acquaintance', 'Neighbor', 'Other'])];
   const content = `
     <div class="form-row">
       ${formGroup('First name', textInput('first_name', c.first_name))}
+      ${formGroup('Middle name', textInput('middle_name', c.middle_name))}
       ${formGroup('Last name', textInput('last_name', c.last_name))}
     </div>
     <div class="form-row">
@@ -1162,11 +1282,21 @@ export function openContactForm(existing = null, onSaved = null) {
     </div>
     <div class="form-row">
       ${formGroup('Email', textInput('email', c.email, 'type="email"'))}
-      ${formGroup('Phone', textInput('phone', c.phone, 'type="tel"'))}
+      ${formGroup('Phone', textInput('phone', c.phone, 'type="tel" data-phone-input'))}
     </div>
     <div class="form-row">
       ${formGroup('Birthday', textInput('birthday', (c.birthday || '').slice(0, 10), 'type="date"'))}
       ${formGroup('Relationship type', selectInput('relationship_type', relTypes, c.relationship_type))}
+    </div>
+    <div class="form-group" id="rel-link-group">
+      <label class="form-label">Related to… (optional)</label>
+      <div class="flex gap-1 flex-wrap mb-1" id="rel-picked"></div>
+      <div class="search-input-wrap">${icon('search')}<input class="form-input" id="rel-search" placeholder="Type to link a person" autocomplete="off" aria-label="Search for a related person"></div>
+      <div id="rel-results"></div>
+      <div class="form-row mt-2" id="rel-type-row" style="display:none">
+        ${formGroup('They are this person’s…', selectInput('link_relation_type', RELATION_TYPES, 'friend'))}
+      </div>
+      <div class="form-hint">Linking updates both people’s profiles.</div>
     </div>
     <div class="form-row">
       ${formGroup('Sex', selectInput('sex', SEX_OPTIONS, c.sex))}
@@ -1185,7 +1315,7 @@ export function openContactForm(existing = null, onSaved = null) {
       ${formGroup('Company', textInput('company', c.company))}
     </div>
     <div class="form-row">
-      ${formGroup('Languages', textInput('languages', c.languages, 'placeholder="English, Spanish"'))}
+      ${formGroup('Languages', languageFieldHtml('languages', c.languages))}
       ${formGroup('Ethnicity', textInput('ethnicity', c.ethnicity))}
     </div>
     <div class="form-row">
@@ -1205,9 +1335,9 @@ export function openContactForm(existing = null, onSaved = null) {
       <button type="button" role="switch" aria-checked="${c.is_spicy ? 'true' : 'false'}" class="toggle-switch ${c.is_spicy ? 'on' : ''}" data-toggle="is_spicy"></button>
     </div>` : ''}`;
 
-  const html = modalShell('contact-form', existing ? `Edit ${c.display_name}` : 'New person', content,
+  const html = modalShell('contact-form', 'New person', content,
     `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>
-     <button class="btn btn-primary" data-action="save">${existing ? 'Save' : 'Create'}</button>`,
+     <button class="btn btn-primary" data-action="save">Create</button>`,
     { size: 'modal-lg' });
 
   openModal(html, {
@@ -1226,20 +1356,60 @@ export function openContactForm(existing = null, onSaved = null) {
           t.setAttribute('aria-checked', t.classList.contains('on') ? 'true' : 'false');
         })
       );
+      attachPhoneInput(overlay.querySelector('[data-phone-input]'));
+      bindLanguageField(overlay);
+
+      // ---- optional relationship link (typeahead, same pattern as the
+      // relationship modal) — POSTed right after the contact create succeeds.
+      let relPicked = null; // { id, name }
+      const pickedEl = overlay.querySelector('#rel-picked');
+      const relTypeRow = overlay.querySelector('#rel-type-row');
+      const renderPicked = () => {
+        pickedEl.innerHTML = relPicked
+          ? `<span class="tag-pill">${esc(relPicked.name)}<button class="tag-x" data-unpick aria-label="Remove link">${icon('x')}</button></span>`
+          : '';
+        relTypeRow.style.display = relPicked ? '' : 'none';
+        pickedEl.querySelector('[data-unpick]')?.addEventListener('click', () => { relPicked = null; renderPicked(); });
+      };
+      const relSearch = overlay.querySelector('#rel-search');
+      const relResults = overlay.querySelector('#rel-results');
+      relSearch.addEventListener('input', debounce(async () => {
+        const q = relSearch.value.trim();
+        if (!q) { relResults.innerHTML = ''; return; }
+        let found;
+        try { found = await api.get('/api/contacts' + qs({ search: q, limit: 6 })); } catch { return; }
+        relResults.innerHTML = (found.contacts || [])
+          .map((r) => `<button type="button" class="popover-item w-full" data-pick="${r.id}" data-name="${esc(r.display_name)}"><span class="av sm" style="width:22px;height:22px;font-size:9px">${esc(initials(r.display_name))}</span>${esc(r.display_name)}</button>`)
+          .join('') || '<div class="text-sm text-muted p-2">No matches.</div>';
+        relResults.querySelectorAll('[data-pick]').forEach((b) =>
+          b.addEventListener('click', () => {
+            relPicked = { id: Number(b.dataset.pick), name: b.dataset.name };
+            relSearch.value = '';
+            relResults.innerHTML = '';
+            renderPicked();
+          }));
+      }, 250));
+
       overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
         const values = readForm(overlay.querySelector('.modal-content'));
+        delete values.link_relation_type;
         values.rating = rating;
         const spicyToggle = overlay.querySelector('[data-toggle="is_spicy"]');
         if (spicyToggle) values.is_spicy = spicyToggle.classList.contains('on');
         try {
-          if (existing) {
-            await api.put(`/api/contacts/${c.id}`, values);
-            toast('Contact saved.');
-          } else {
-            const res = await api.post('/api/contacts', values);
-            toast('Contact created.');
-            navigate(`/contacts/${res.id}`);
+          const res = await api.post('/api/contacts', values);
+          toast('Contact created.');
+          if (relPicked) {
+            try {
+              await api.post(`/api/contacts/${res.id}/relationships`, {
+                related_contact_id: relPicked.id,
+                relation_type: overlay.querySelector('[name="link_relation_type"]').value || 'friend',
+              });
+            } catch (err) {
+              toast(`Contact created, but the link failed: ${err.message}`, 'error');
+            }
           }
+          navigate(`/contacts/${res.id}`);
           close();
           onSaved?.();
           refreshSidebarLists();
@@ -1250,6 +1420,46 @@ export function openContactForm(existing = null, onSaved = null) {
 }
 
 // ---------------------------------------------- add email/phone/address
+/** Shared address field block + live formatted preview. */
+function addressFieldsHtml(a = {}) {
+  return formGroup('Street', textInput('street', a.street)) +
+    `<div class="form-row">${formGroup('City', textInput('city', a.city))}${formGroup('State', textInput('state', a.state, 'data-addr-state'))}</div>` +
+    `<div class="form-row">${formGroup('ZIP', textInput('zip', a.zip))}${formGroup('Country', textInput('country', a.country))}</div>` +
+    `<div class="addr-preview" data-addr-preview aria-live="polite"></div>` +
+    formGroup('Label', selectInput('label', ['home', 'work', 'vacation', 'other'], a.label || 'home'));
+}
+
+/** Wire live preview + US-state auto-uppercase + ZIP trim inside `scope`. */
+function bindAddressFields(scope) {
+  const preview = scope.querySelector('[data-addr-preview]');
+  if (!preview) return;
+  const read = () => ({
+    street: scope.querySelector('[name="street"]')?.value ?? '',
+    city: scope.querySelector('[name="city"]')?.value ?? '',
+    state: scope.querySelector('[name="state"]')?.value ?? '',
+    zip: (scope.querySelector('[name="zip"]')?.value ?? '').trim(),
+    country: scope.querySelector('[name="country"]')?.value ?? '',
+  });
+  const update = () => {
+    const a = read();
+    const formatted = formatAddress(a);
+    preview.textContent = formatted || 'Formatted address preview…';
+  };
+  const stateInput = scope.querySelector('[data-addr-state]');
+  scope.addEventListener('input', (e) => {
+    if (e.target === stateInput) {
+      // auto-uppercase 2-letter state codes only for US (or empty) country
+      const country = scope.querySelector('[name="country"]')?.value ?? '';
+      const v = stateInput.value;
+      if (isUSCountry(country) && /^[a-zA-Z]{1,2}$/.test(v.trim()) && v !== v.toUpperCase()) {
+        stateInput.value = v.toUpperCase();
+      }
+    }
+    update();
+  });
+  update();
+}
+
 function openContactMethodModal(contactId, onSaved) {
   const content = `
     ${formGroup('Type', selectInput('kind', [
@@ -1271,13 +1481,12 @@ function openContactMethodModal(contactId, onSaved) {
           fieldsEl.innerHTML = formGroup('Email', textInput('email', '', 'type="email"')) +
             formGroup('Label', selectInput('label', ['personal', 'work', 'school', 'other'], 'personal'));
         } else if (kind === 'phones') {
-          fieldsEl.innerHTML = formGroup('Phone', textInput('phone', '', 'type="tel"')) +
+          fieldsEl.innerHTML = formGroup('Phone', textInput('phone', '', 'type="tel" data-phone-input')) +
             formGroup('Label', selectInput('label', ['mobile', 'home', 'work', 'other'], 'mobile'));
+          attachPhoneInput(fieldsEl.querySelector('[data-phone-input]'));
         } else {
-          fieldsEl.innerHTML = formGroup('Street', textInput('street')) +
-            `<div class="form-row">${formGroup('City', textInput('city'))}${formGroup('State', textInput('state'))}</div>` +
-            `<div class="form-row">${formGroup('ZIP', textInput('zip'))}${formGroup('Country', textInput('country'))}</div>` +
-            formGroup('Label', selectInput('label', ['home', 'work', 'vacation', 'other'], 'home'));
+          fieldsEl.innerHTML = addressFieldsHtml();
+          bindAddressFields(fieldsEl);
         }
       };
       renderFields('emails');
@@ -1289,6 +1498,7 @@ function openContactMethodModal(contactId, onSaved) {
       overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
         const kind = overlay.querySelector('#method-kind').value;
         const values = readForm(fieldsEl);
+        if (typeof values.zip === 'string') values.zip = values.zip.trim();
         values.is_primary = overlay.querySelector('[data-toggle]').classList.contains('on');
         try {
           await api.post(`/api/contacts/${contactId}/${kind}`, values);
@@ -1301,21 +1511,67 @@ function openContactMethodModal(contactId, onSaved) {
   });
 }
 
-function openSocialModal(contactId, onSaved) {
-  const content = `
-    ${formGroup('Platform', selectInput('platform', SOCIAL_PLATFORMS, 'Instagram'))}
-    ${formGroup('Username', textInput('username', '', 'placeholder="username"'))}
-    ${formGroup('URL', textInput('url', '', 'type="url" placeholder="https://"'))}`;
-  const html = modalShell('add-social', 'Add social link', content,
+/** Edit an existing email/phone/address satellite row (PUT /api/:kind/:id). */
+function openSatelliteEditModal(kind, item, onSaved) {
+  let content;
+  if (kind === 'emails') {
+    content = formGroup('Email', textInput('email', item.email, 'type="email"')) +
+      formGroup('Label', selectInput('label', ['personal', 'work', 'school', 'other'], item.label || 'personal'));
+  } else if (kind === 'phones') {
+    content = formGroup('Phone', textInput('phone', item.phone, 'type="tel" data-phone-input')) +
+      formGroup('Label', selectInput('label', ['mobile', 'home', 'work', 'other'], item.label || 'mobile'));
+  } else {
+    content = addressFieldsHtml(item);
+  }
+  content += `
+    <div class="toggle-row">
+      <div class="toggle-label">Primary</div>
+      <button type="button" role="switch" aria-checked="${item.is_primary ? 'true' : 'false'}" class="toggle-switch ${item.is_primary ? 'on' : ''}" data-toggle="is_primary"></button>
+    </div>`;
+  const titles = { emails: 'Edit email', phones: 'Edit phone', addresses: 'Edit address' };
+  openModal(modalShell('edit-method', titles[kind] || 'Edit', content,
     `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>
-     <button class="btn btn-primary" data-action="save">Add</button>`);
+     <button class="btn btn-primary" data-action="save">Save</button>`), {
+    onMount: (overlay, close) => {
+      const body = overlay.querySelector('.modal-content');
+      attachPhoneInput(body.querySelector('[data-phone-input]'));
+      if (kind === 'addresses') bindAddressFields(body);
+      overlay.querySelector('[data-toggle]').addEventListener('click', (e) => {
+        e.currentTarget.classList.toggle('on');
+        e.currentTarget.setAttribute('aria-checked', e.currentTarget.classList.contains('on') ? 'true' : 'false');
+      });
+      overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
+        const values = readForm(body);
+        if (typeof values.zip === 'string') values.zip = values.zip.trim();
+        values.is_primary = overlay.querySelector('[data-toggle]').classList.contains('on');
+        try {
+          await api.put(`/api/${kind}/${item.id}`, values);
+          toast('Saved.');
+          close();
+          onSaved?.();
+        } catch (err) { toast(err.message, 'error'); }
+      });
+    },
+  });
+}
+
+function openSocialModal(contactId, onSaved, existing = null) {
+  const s = existing || {};
+  const content = `
+    ${formGroup('Platform', selectInput('platform', SOCIAL_PLATFORMS, s.platform || 'Instagram'))}
+    ${formGroup('Username', textInput('username', s.username, 'placeholder="username"'))}
+    ${formGroup('URL', textInput('url', s.url, 'type="url" placeholder="https://"'))}`;
+  const html = modalShell('add-social', existing ? 'Edit social link' : 'Add social link', content,
+    `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+     <button class="btn btn-primary" data-action="save">${existing ? 'Save' : 'Add'}</button>`);
   openModal(html, {
     onMount: (overlay, close) => {
       overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
         const values = readForm(overlay.querySelector('.modal-content'));
         try {
-          await api.post(`/api/contacts/${contactId}/socials`, values);
-          toast('Added.');
+          if (existing) await api.put(`/api/socials/${s.id}`, values);
+          else await api.post(`/api/contacts/${contactId}/socials`, values);
+          toast(existing ? 'Saved.' : 'Added.');
           close();
           onSaved?.();
         } catch (err) { toast(err.message, 'error'); }
