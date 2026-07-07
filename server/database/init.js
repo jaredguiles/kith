@@ -9,6 +9,11 @@ const bcrypt = require('bcryptjs');
 const { query } = require('./connection');
 const { runMigrations } = require('./migrations');
 
+// §7.E Layer A: per-table InnoDB encryption (ENCRYPTED=YES) — enabled in
+// production via TABLE_ENCRYPTION=true (requires the file_key_management
+// plugin on the MariaDB server). Dev DB has no plugin → defaults off.
+const TABLE_ENC = String(process.env.TABLE_ENCRYPTION) === 'true' ? ' ENCRYPTED=YES' : '';
+
 // ---------------------------------------------------------------------------
 // Table DDL — order matters for FKs.
 // ---------------------------------------------------------------------------
@@ -25,7 +30,7 @@ const TABLES = [
     must_change_password BOOLEAN NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // contacts
   `CREATE TABLE IF NOT EXISTS contacts (
@@ -67,7 +72,7 @@ const TABLES = [
     INDEX idx_contacts_owner_deleted (owner_user_id, deleted_at),
     INDEX idx_contacts_favorite (is_favorite),
     INDEX idx_contacts_spicy (is_spicy)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // contact_emails
   `CREATE TABLE IF NOT EXISTS contact_emails (
@@ -80,7 +85,7 @@ const TABLES = [
     CONSTRAINT fk_cemails_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     INDEX idx_cemails_contact (contact_id),
     INDEX idx_cemails_email (email)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // contact_phones
   `CREATE TABLE IF NOT EXISTS contact_phones (
@@ -93,7 +98,7 @@ const TABLES = [
     CONSTRAINT fk_cphones_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     INDEX idx_cphones_contact (contact_id),
     INDEX idx_cphones_phone (phone)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // contact_addresses
   `CREATE TABLE IF NOT EXISTS contact_addresses (
@@ -109,7 +114,7 @@ const TABLES = [
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_caddr_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     INDEX idx_caddr_contact (contact_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // shared_contacts
   `CREATE TABLE IF NOT EXISTS shared_contacts (
@@ -126,7 +131,7 @@ const TABLES = [
     CONSTRAINT fk_share_with FOREIGN KEY (shared_with_user_id) REFERENCES users(id),
     UNIQUE KEY uq_share (contact_id, shared_with_user_id),
     INDEX idx_share_with (shared_with_user_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // spicy_profiles — sensitive fields stored AES-256-GCM encrypted (§7.E Layer C)
   `CREATE TABLE IF NOT EXISTS spicy_profiles (
@@ -160,7 +165,7 @@ const TABLES = [
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_spicy_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // tags
   `CREATE TABLE IF NOT EXISTS tags (
@@ -171,7 +176,7 @@ const TABLES = [
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_tags_owner FOREIGN KEY (owner_user_id) REFERENCES users(id),
     INDEX idx_tags_owner (owner_user_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // contact_tags
   `CREATE TABLE IF NOT EXISTS contact_tags (
@@ -182,7 +187,7 @@ const TABLES = [
     CONSTRAINT fk_ctags_tag FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE,
     INDEX idx_ctags_contact (contact_id),
     INDEX idx_ctags_tag (tag_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // groups — backticked: GROUPS became reserved in MariaDB 10.3+
   `CREATE TABLE IF NOT EXISTS \`groups\` (
@@ -196,7 +201,7 @@ const TABLES = [
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_groups_owner FOREIGN KEY (owner_user_id) REFERENCES users(id),
     INDEX idx_groups_owner (owner_user_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // group_members
   `CREATE TABLE IF NOT EXISTS group_members (
@@ -207,7 +212,7 @@ const TABLES = [
     CONSTRAINT fk_gm_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     INDEX idx_gm_group (group_id),
     INDEX idx_gm_contact (contact_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // social_links
   `CREATE TABLE IF NOT EXISTS social_links (
@@ -220,7 +225,7 @@ const TABLES = [
     CONSTRAINT fk_social_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     INDEX idx_social_contact (contact_id),
     INDEX idx_social_platform_user (platform, username)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // events
   `CREATE TABLE IF NOT EXISTS events (
@@ -241,7 +246,7 @@ const TABLES = [
     deleted_at TIMESTAMP NULL,
     CONSTRAINT fk_events_owner FOREIGN KEY (owner_user_id) REFERENCES users(id),
     INDEX idx_events_owner_starts (owner_user_id, starts_at, status)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // event_contacts
   `CREATE TABLE IF NOT EXISTS event_contacts (
@@ -252,7 +257,7 @@ const TABLES = [
     CONSTRAINT fk_ec_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     INDEX idx_ec_event (event_id),
     INDEX idx_ec_contact (contact_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // media_assets (must exist before event_media)
   `CREATE TABLE IF NOT EXISTS media_assets (
@@ -271,7 +276,7 @@ const TABLES = [
     CONSTRAINT fk_media_owner FOREIGN KEY (owner_user_id) REFERENCES users(id),
     INDEX idx_media_contact_spicy_deleted (contact_id, is_spicy, deleted_at),
     INDEX idx_media_owner (owner_user_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // event_media
   `CREATE TABLE IF NOT EXISTS event_media (
@@ -282,7 +287,7 @@ const TABLES = [
     CONSTRAINT fk_em_media FOREIGN KEY (media_id) REFERENCES media_assets(id) ON DELETE CASCADE,
     INDEX idx_em_event (event_id),
     INDEX idx_em_media (media_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // contact_search_index — cleartext SFW fields ONLY (§7.E)
   `CREATE TABLE IF NOT EXISTS contact_search_index (
@@ -291,7 +296,7 @@ const TABLES = [
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_csi_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     FULLTEXT INDEX ftx_csi_search (search_text)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // timeline_events
   `CREATE TABLE IF NOT EXISTS timeline_events (
@@ -308,7 +313,7 @@ const TABLES = [
     CONSTRAINT fk_tl_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     CONSTRAINT fk_tl_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE SET NULL,
     INDEX idx_tl_contact_occurred (contact_id, occurred_at)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // notes — content of is_spicy notes is field-encrypted (§7.E)
   `CREATE TABLE IF NOT EXISTS notes (
@@ -321,7 +326,7 @@ const TABLES = [
     deleted_at TIMESTAMP NULL,
     CONSTRAINT fk_notes_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     INDEX idx_notes_contact (contact_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // reminders
   `CREATE TABLE IF NOT EXISTS reminders (
@@ -337,7 +342,7 @@ const TABLES = [
     CONSTRAINT fk_rem_owner FOREIGN KEY (owner_user_id) REFERENCES users(id),
     CONSTRAINT fk_rem_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL,
     INDEX idx_rem_owner_due (owner_user_id, due_at, completed_at)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // messages — content of is_spicy messages is field-encrypted (§7.E)
   `CREATE TABLE IF NOT EXISTS messages (
@@ -351,7 +356,7 @@ const TABLES = [
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_msg_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     INDEX idx_msg_contact_sent (contact_id, sent_at)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // audit_log
   `CREATE TABLE IF NOT EXISTS audit_log (
@@ -368,7 +373,7 @@ const TABLES = [
     INDEX idx_audit_contact (contact_id),
     INDEX idx_audit_entity (entity_type, entity_id),
     INDEX idx_audit_user (user_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // import_jobs (before contact_field_changelog which FKs it)
   `CREATE TABLE IF NOT EXISTS import_jobs (
@@ -390,7 +395,7 @@ const TABLES = [
     completed_at TIMESTAMP NULL,
     CONSTRAINT fk_ij_user FOREIGN KEY (user_id) REFERENCES users(id),
     INDEX idx_ij_user_status (user_id, status)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // contact_field_changelog
   `CREATE TABLE IF NOT EXISTS contact_field_changelog (
@@ -406,7 +411,7 @@ const TABLES = [
     CONSTRAINT fk_cfc_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
     CONSTRAINT fk_cfc_job FOREIGN KEY (import_job_id) REFERENCES import_jobs(id) ON DELETE SET NULL,
     INDEX idx_cfc_contact (contact_id)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // import_staging
   `CREATE TABLE IF NOT EXISTS import_staging (
@@ -426,7 +431,7 @@ const TABLES = [
     CONSTRAINT fk_is_job FOREIGN KEY (import_job_id) REFERENCES import_jobs(id) ON DELETE CASCADE,
     CONSTRAINT fk_is_match FOREIGN KEY (suggested_match_contact_id) REFERENCES contacts(id) ON DELETE SET NULL,
     INDEX idx_is_job_status (import_job_id, review_status)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // app_settings — \`key\` is a MariaDB reserved word; always backtick
   `CREATE TABLE IF NOT EXISTS app_settings (
@@ -435,7 +440,7 @@ const TABLES = [
     value TEXT NULL,
     type VARCHAR(20) NOT NULL DEFAULT 'string',
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // preferences (per-user)
   `CREATE TABLE IF NOT EXISTS preferences (
@@ -447,7 +452,7 @@ const TABLES = [
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_prefs_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     UNIQUE KEY uq_prefs (user_id, \`key\`)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // notifications
   `CREATE TABLE IF NOT EXISTS notifications (
@@ -462,7 +467,7 @@ const TABLES = [
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_notif_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     INDEX idx_notif_user (user_id, dismissed_at)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`,
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 ];
 
 // ---------------------------------------------------------------------------

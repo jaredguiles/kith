@@ -27,6 +27,16 @@ if (process.env.NODE_ENV === 'production') {
     console.error('FATAL: FIELD_ENCRYPTION_KEY is missing or a placeholder. Refusing to start in production.');
     process.exit(1);
   }
+  // §7.E: the field key must be a real 32-byte base64 key in production.
+  const keyBuf = Buffer.from(process.env.FIELD_ENCRYPTION_KEY, 'base64');
+  if (keyBuf.length !== 32) {
+    console.error('FATAL: FIELD_ENCRYPTION_KEY must be a base64-encoded 32-byte key (openssl rand -base64 32).');
+    process.exit(1);
+  }
+  if (process.env.JWT_SECRET.length < 32) {
+    console.error('FATAL: JWT_SECRET must be at least 32 characters in production.');
+    process.exit(1);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -96,6 +106,25 @@ app.use('/api/changelog', changelogRouter);
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api', require('./routes/dashboard'));
 app.use('/api/import', require('./routes/import'));
+
+// ---------------------------------------------------------------------------
+// API 404 + global JSON error handler (never leak stack traces)
+// ---------------------------------------------------------------------------
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
+
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+    return res.status(413).json({ error: 'Payload too large' });
+  }
+  if (err && err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Invalid JSON body' });
+  }
+  console.error('[error]', req.method, req.originalUrl, err.message);
+  res.status(err.status || 500).json({ error: err.status ? err.message : 'Something went wrong' });
+});
 
 // ---------------------------------------------------------------------------
 // Static SPA (no build step — vanilla files in server/public)

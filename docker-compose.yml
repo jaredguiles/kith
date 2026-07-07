@@ -8,7 +8,9 @@ services:
     ports:
       - "${EXTERNAL_PORT}:${INTERNAL_PORT}"
     volumes:
-      - /srv/kith:/media                       # the storage layer media mount (photos/videos + thumbnails)
+      # the storage layer NFS mount (photos/videos + thumbnails). Note: /srv/kith
+      # itself is local disk on the application server — Personal/ is the NFS share.
+      - /srv/kith/media:/media
       - /opt/kith/uploads:/app/uploads   # Temp import-upload staging
     networks:
       - kith_network
@@ -36,6 +38,7 @@ services:
       - "traefik.http.routers.kith-api.tls=true"
       - "traefik.http.routers.kith-api.tls.certresolver=letsencrypt"
       - "traefik.http.routers.kith-api.priority=100"
+      - "traefik.http.routers.kith-api.service=kith"
       - "traefik.http.services.kith.loadbalancer.server.port=${INTERNAL_PORT}"
     logging:
       driver: json-file
