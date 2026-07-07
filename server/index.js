@@ -9,6 +9,8 @@ const path = require('node:path');
 const express = require('express');
 const helmet = require('helmet');
 
+const { initDatabase } = require('./database/init');
+
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
@@ -71,6 +73,29 @@ app.get(/^\/(?!api\/).*/, (req, res) => {
   res.sendFile(path.join(publicDir, 'index.html'));
 });
 
-app.listen(PORT, () => {
-  console.log(`Kith listening on :${PORT} (${process.env.NODE_ENV || 'development'})`);
-});
+// ---------------------------------------------------------------------------
+// Boot: init DB (schema + seed + migrations), then listen. Retry a few times —
+// the dev DB container may still be warming up.
+// ---------------------------------------------------------------------------
+async function boot() {
+  const maxAttempts = 10;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await initDatabase();
+      break;
+    } catch (err) {
+      if (attempt === maxAttempts) {
+        console.error('FATAL: database init failed:', err.message);
+        process.exit(1);
+      }
+      console.warn(`[boot] DB init attempt ${attempt}/${maxAttempts} failed (${err.code || err.message}); retrying in 3s`);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
+  }
+
+  app.listen(PORT, () => {
+    console.log(`Kith listening on :${PORT} (${process.env.NODE_ENV || 'development'})`);
+  });
+}
+
+boot();
