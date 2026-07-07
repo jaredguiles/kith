@@ -1,15 +1,15 @@
 // Settings page (admin sections) + per-user preferences + Account & security
 // (2FA, API tokens, password, theme — visible to ALL users).
 
-import { api, setToken } from './api.js';
-import { esc, fmtBytes, fmtDate, timeAgo } from './utils.js';
+import { api, qs, setToken } from './api.js';
+import { esc, fmtBytes, fmtDate, timeAgo, debounce, initials } from './utils.js';
 import { icon } from './icons.js';
 import {
   emptyState, modalShell, formGroup, textInput, selectInput,
   toast, openModal, confirmModal, toggleSwitch,
 } from './components.js';
 import { pageRenderers } from './pages.js';
-import { state, refreshSidebarLists, setThemePref, getThemePref } from './app.js';
+import { state, refreshSidebarLists, setThemePref, getThemePref, refreshUser } from './app.js';
 
 const THEME_OPTIONS = [
   { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }, { value: 'system', label: 'System' },
@@ -346,11 +346,35 @@ async function renderAccountSection(container) {
     container.innerHTML = `<div class="text-sm text-muted">${esc(err?.message || "Couldn't load your account.")}</div>`;
     return;
   }
+  // linked self-contact name (best-effort; the id link still works without it)
+  let selfContactName = null;
+  if (me.self_contact_id) {
+    try {
+      selfContactName = (await api.get(`/api/contacts/${me.self_contact_id}`)).contact?.display_name || null;
+    } catch { /* deleted/inaccessible — show id link only */ }
+  }
   const isAdminPage = state.user.role !== 'user';
   const active = tokens.filter((t) => !t.revoked_at);
 
   container.innerHTML = `
     <div class="card-header"><span class="card-title flex items-center gap-2">${icon('shield')} Account & security</span></div>
+    <div class="form-row">
+      ${formGroup('Display name', textInput('account_display_name', me.display_name || '', 'autocomplete="name"'))}
+      ${formGroup('Email', textInput('account_email', me.email || '', 'type="email" autocomplete="email"'))}
+    </div>
+    <button class="btn btn-secondary btn-sm mb-2" data-save-account>Save account</button>
+    <div class="toggle-row">
+      <div><div class="toggle-label">My profile contact</div>
+        <div class="toggle-desc">${me.self_contact_id
+          ? `Linked to ${selfContactName ? `<a href="#/contacts/${encodeURIComponent(me.self_contact_id)}">${esc(selfContactName)}</a>` : `<a href="#/contacts/${encodeURIComponent(me.self_contact_id)}">your contact</a>`} — record your own details and family links.`
+          : 'You as a contact — record your own details and link family relationships.'}</div></div>
+      <div class="flex gap-1 flex-wrap" style="justify-content:flex-end">
+        ${me.self_contact_id
+          ? `<button class="btn btn-secondary btn-sm" data-self-unlink>Unlink</button>`
+          : `<button class="btn btn-secondary btn-sm" data-self-create>Create</button>
+             <button class="btn btn-secondary btn-sm" data-self-link>Link existing…</button>`}
+      </div>
+    </div>
     <div class="toggle-row">
       <div><div class="toggle-label">Password</div><div class="toggle-desc">Change your Kith password.</div></div>
       <button class="btn btn-secondary btn-sm" data-change-password>Change password</button>
@@ -392,6 +416,49 @@ async function renderAccountSection(container) {
     <div class="form-hint mt-2">Calendar feed: subscribe to <code>${esc(location.origin)}/api/ics/calendar.ics?token=&lt;your token&gt;</code> with a read token.</div>`;
 
   container.querySelector('[data-change-password]').addEventListener('click', openChangePasswordModal);
+
+  // account fields (display name + email → PUT /api/users/me)
+  container.querySelector('[data-save-account]')?.addEventListener('click', async () => {
+    const btn = container.querySelector('[data-save-account]');
+    const display_name = container.querySelector('[name="account_display_name"]').value.trim();
+    const email = container.querySelector('[name="account_email"]').value.trim();
+    if (!email) { toast('Email is required.', 'error'); return; }
+    btn.disabled = true;
+    try {
+      await api.put('/api/users/me', { display_name: display_name || null, email });
+      await refreshUser();
+      toast('Account saved.');
+      renderAccountSection(container);
+    } catch (err) {
+      btn.disabled = false;
+      toast(err.status === 409 ? 'That email is already in use.' : err.message, 'error');
+    }
+  });
+
+  // self-contact link management
+  container.querySelector('[data-self-create]')?.addEventListener('click', async () => {
+    try {
+      const res = await api.post('/api/users/me/self-contact');
+      await refreshUser();
+      refreshSidebarLists();
+      toast(res.created ? 'Your profile contact is ready.' : 'Linked to your existing profile.');
+      renderAccountSection(container);
+    } catch (err) { toast(err.message, 'error'); }
+  });
+  container.querySelector('[data-self-unlink]')?.addEventListener('click', async () => {
+    const ok = await confirmModal('Unlink profile contact',
+      'Unlink your profile contact? The contact itself is kept.', { confirmLabel: 'Unlink' });
+    if (!ok) return;
+    try {
+      await api.put('/api/users/me/self-contact', { contact_id: null });
+      await refreshUser();
+      toast('Profile contact unlinked.');
+      renderAccountSection(container);
+    } catch (err) { toast(err.message, 'error'); }
+  });
+  container.querySelector('[data-self-link]')?.addEventListener('click', () =>
+    openSelfContactLinkModal(() => { renderAccountSection(container); }));
+
   container.querySelector('[data-totp-enable]')?.addEventListener('click', () => openTotpEnableModal(() => renderAccountSection(container)));
   container.querySelector('[data-totp-disable]')?.addEventListener('click', () => openTotpDisableModal(() => renderAccountSection(container)));
   container.querySelector('[data-account-theme]')?.addEventListener('change', (e) => setThemePref(e.target.value));
@@ -406,6 +473,47 @@ async function renderAccountSection(container) {
         renderAccountSection(container);
       } catch (err) { toast(err.message, 'error'); }
     }));
+}
+
+// ---------------------------------------------- self-contact link picker
+function openSelfContactLinkModal(onDone) {
+  const content = `
+    <p class="text-sm text-secondary mb-3">Pick the contact that is you. Kith links it to your account so your own details and family relationships have a home.</p>
+    <div class="form-group">
+      <div class="search-input-wrap">${icon('search')}<input class="form-input" id="self-link-search" placeholder="Type to find a person" autocomplete="off"></div>
+      <div id="self-link-results"></div>
+    </div>`;
+  openModal(modalShell('self-link', 'Link your profile contact', content,
+    `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>`), {
+    onMount: (overlay, close) => {
+      const searchInput = overlay.querySelector('#self-link-search');
+      const resultsEl = overlay.querySelector('#self-link-results');
+      searchInput.addEventListener('input', debounce(async () => {
+        const q = searchInput.value.trim();
+        if (!q) { resultsEl.innerHTML = ''; return; }
+        let found;
+        try { found = await api.get('/api/contacts' + qs({ search: q, limit: 6 })); } catch { return; }
+        resultsEl.innerHTML = (found.contacts || [])
+          .filter((c) => !c.is_shared_in) // own contacts only
+          .map((c) => `<button class="popover-item w-full" data-pick="${c.id}"><span class="av sm" style="width:22px;height:22px;font-size:9px">${esc(initials(c.display_name))}</span>${esc(c.display_name)}</button>`)
+          .join('') || '<div class="text-sm text-muted p-2">No matches among your own contacts.</div>';
+        resultsEl.querySelectorAll('[data-pick]').forEach((b) =>
+          b.addEventListener('click', async () => {
+            b.disabled = true;
+            try {
+              await api.put('/api/users/me/self-contact', { contact_id: Number(b.dataset.pick) });
+              await refreshUser();
+              toast('Profile contact linked.');
+              close();
+              onDone?.();
+            } catch (err) {
+              b.disabled = false;
+              toast(err.message, 'error');
+            }
+          }));
+      }, 250));
+    },
+  });
 }
 
 // ------------------------------------------------------------ password

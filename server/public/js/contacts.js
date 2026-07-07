@@ -6,7 +6,7 @@ import {
   esc, escUrl, fmtDate, timeAgo, initials, prideFlagGradient,
   ageFromBirthday, zodiacFromBirthday, debounce, parseDate, loadLeaflet,
 } from './utils.js';
-import { createMap } from './map.js';
+import { createMap, avatarPin } from './map.js';
 import { icon } from './icons.js';
 import {
   avatar, tagPill, groupBadge, starRating, emptyState, modalShell, formGroup,
@@ -535,10 +535,16 @@ export async function renderContactDetail(el, id) {
     <div class="mb-3"><a class="btn btn-ghost btn-sm" href="#/contacts">${icon('arrow-left')} Contacts</a></div>
     <div class="card shine mb-4 ${c.is_spicy ? 'contact-row has-spicy-data' : ''}">
       <div class="flex items-center gap-4">
-        ${avatar(c, 'lg')}
+        ${canEdit ? `
+        <span class="av-edit-wrap">
+          ${avatar(c, 'lg')}
+          <button class="av-edit-btn" data-action="change-photo" aria-label="Change profile photo" title="Change profile photo">${icon('camera')}</button>
+          <input type="file" id="profile-photo-file" accept="image/jpeg,image/png,image/gif,image/webp" class="hidden">
+        </span>` : avatar(c, 'lg')}
         <div class="flex-1">
           <div class="flex items-center gap-2">
             <h1 class="page-title">${esc(c.display_name)}</h1>
+            ${state.user?.self_contact_id && Number(c.id) === Number(state.user.self_contact_id) ? '<span class="badge blue">This is you</span>' : ''}
             ${c.is_shared_in || access === 'shared' ? '<span class="badge neutral">Shared</span>' : ''}
             ${c.relationship_type ? `<span class="badge">${esc(c.relationship_type)}</span>` : ''}
             ${isSpicyOn() && c.is_spicy ? `<span class="badge">${icon('flame')}</span>` : ''}
@@ -592,29 +598,29 @@ export async function renderContactDetail(el, id) {
           <div id="contact-methods">
             ${c.email && !emails.some((e) => e.email === c.email) ? `
               <div class="flex-between" style="padding:5px 0">
-                <span class="flex items-center gap-2 text-sm">${icon('mail')} ${esc(c.email)} <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span></span>
+                <span class="flex items-center gap-2 text-sm">${icon('mail', 'sat-icon')} ${esc(c.email)} <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span></span>
                 <span class="text-micro text-muted">primary</span>
               </div>` : ''}
             ${c.phone && !phones.some((p) => p.phone === c.phone) ? `
               <div class="flex-between" style="padding:5px 0">
-                <span class="flex items-center gap-2 text-sm">${icon('phone')} ${esc(c.phone)} <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span></span>
+                <span class="flex items-center gap-2 text-sm">${icon('phone', 'sat-icon')} ${esc(c.phone)} <span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span></span>
                 <span class="text-micro text-muted">primary</span>
               </div>` : ''}
             ${emails.map((e) => `
               <div class="flex-between" style="padding:5px 0" data-sat="emails" data-sat-id="${e.id}">
-                <span class="flex items-center gap-2 text-sm">${icon('mail')} ${esc(e.email)} ${e.is_primary ? '<span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>' : ''}</span>
+                <span class="flex items-center gap-2 text-sm">${icon('mail', 'sat-icon')} ${esc(e.email)} ${e.is_primary ? '<span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>' : ''}</span>
                 <span class="flex items-center gap-2"><span class="text-micro text-muted">${esc(e.label || '')}</span>
                 ${canEdit && !isBasic ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}</span>
               </div>`).join('')}
             ${phones.map((p) => `
               <div class="flex-between" style="padding:5px 0" data-sat="phones" data-sat-id="${p.id}">
-                <span class="flex items-center gap-2 text-sm">${icon('phone')} ${esc(p.phone)} ${p.is_primary ? '<span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>' : ''}</span>
+                <span class="flex items-center gap-2 text-sm">${icon('phone', 'sat-icon')} ${esc(p.phone)} ${p.is_primary ? '<span class="dot" style="width:6px;height:6px;border-radius:50%;background:var(--accent);display:inline-block"></span>' : ''}</span>
                 <span class="flex items-center gap-2"><span class="text-micro text-muted">${esc(p.label || '')}</span>
                 ${canEdit && !isBasic ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}</span>
               </div>`).join('')}
             ${(addresses || []).map((a) => `
               <div class="flex-between" style="padding:5px 0" data-sat="addresses" data-sat-id="${a.id}">
-                <span class="flex items-center gap-2 text-sm">${icon('map-pin')} ${esc([a.street, a.city, a.state, a.zip, a.country].filter(Boolean).join(', '))}</span>
+                <span class="flex items-center gap-2 text-sm">${icon('map-pin', 'sat-icon')} ${esc([a.street, a.city, a.state, a.zip, a.country].filter(Boolean).join(', '))}</span>
                 <span class="flex items-center gap-2"><span class="text-micro text-muted">${esc(a.label || '')}</span>
                 ${canEdit && !isBasic ? `<button class="btn btn-icon" data-locate-addr="${a.id}" aria-label="Locate on map" title="Locate on map">${icon('map-pin')}</button>` : ''}
                 ${canEdit && !isBasic ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}</span>
@@ -631,7 +637,7 @@ export async function renderContactDetail(el, id) {
           </div>
           ${(socials || []).length ? (socials || []).map((s) => `
             <div class="flex-between" style="padding:5px 0" data-sat="socials" data-sat-id="${s.id}">
-              <span class="flex items-center gap-2 text-sm">${icon('link')}
+              <span class="flex items-center gap-2 text-sm">${icon('link', 'sat-icon')}
                 <span class="font-medium">${esc(s.platform || '')}</span>
                 ${s.username ? `<span class="text-secondary">@${esc(s.username)}</span>` : ''}
                 ${s.url ? `<a href="${escUrl(s.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open link">${icon('external-link')}</a>` : ''}
@@ -699,6 +705,32 @@ export async function renderContactDetail(el, id) {
 
   el.querySelector('[data-action="edit"]')?.addEventListener('click', () => openContactForm(c, () => renderContactDetail(el, id)));
 
+  // header avatar → direct photo change (upload then set-as-profile)
+  const photoBtn = el.querySelector('[data-action="change-photo"]');
+  const photoInput = el.querySelector('#profile-photo-file');
+  photoBtn?.addEventListener('click', () => photoInput?.click());
+  photoInput?.addEventListener('change', async () => {
+    const file = photoInput.files?.[0];
+    if (!file) return;
+    photoBtn.disabled = true;
+    toast('Uploading photo…');
+    try {
+      const form = new FormData();
+      form.append('files', file);
+      form.append('contact_id', c.id);
+      const up = await api.post('/api/media', form);
+      const mediaId = up?.ids?.[0];
+      if (!mediaId) throw new Error('Upload failed.');
+      await api.put(`/api/contacts/${c.id}/photo`, { media_id: mediaId });
+      toast('Profile photo updated.');
+      renderContactDetail(el, id);
+      refreshSidebarLists();
+    } catch (err) {
+      photoBtn.disabled = false;
+      toast(err.message || "Couldn't set the photo.", 'error');
+    }
+  });
+
   el.querySelector('[data-action="delete"]')?.addEventListener('click', async () => {
     const ok = await confirmModal('Delete contact', `Delete ${c.display_name}? This can't be undone.`);
     if (!ok) return;
@@ -753,7 +785,7 @@ export async function renderContactDetail(el, id) {
     el.querySelector('[data-action="add-gift"]')?.addEventListener('click', () =>
       openGiftModal(c, () => renderContactDetail(el, id)));
 
-    renderAddressMiniMap(el, addresses || []);
+    renderAddressMiniMap(el, addresses || [], c);
   }
 
   el.querySelector('[data-action="add-contact-method"]')?.addEventListener('click', () => openContactMethodModal(c.id, () => renderContactDetail(el, id)));
@@ -1054,7 +1086,7 @@ function openGiftModal(contact, onSaved) {
 }
 
 // -------------------------------------------------------- address mini-map
-async function renderAddressMiniMap(el, addresses) {
+async function renderAddressMiniMap(el, addresses, contact) {
   const host = el.querySelector('#contact-minimap-host');
   if (!host) return;
   const geocoded = addresses.filter((a) =>
@@ -1072,7 +1104,7 @@ async function renderAddressMiniMap(el, addresses) {
   const map = createMap(mapEl, { center: pts[0], zoom: 13, zoomControl: false, attributionControl: false });
   for (const a of geocoded) {
     const label = [a.label, [a.street, a.city].filter(Boolean).join(', ')].filter(Boolean).join(' — ');
-    L.marker([Number(a.latitude), Number(a.longitude)], { title: label || 'Address' }).addTo(map);
+    L.marker([Number(a.latitude), Number(a.longitude)], { title: label || 'Address', icon: avatarPin(L, contact) }).addTo(map);
   }
   if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { padding: [24, 24], maxZoom: 13 });
   requestAnimationFrame(() => map.invalidateSize());

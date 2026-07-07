@@ -40,6 +40,14 @@ export function emptyState(iconName, title, desc, actionHtml = '') {
   return `<div class="empty-state">${icon(iconName)}<h3>${esc(title)}</h3><p>${esc(desc)}</p>${actionHtml}</div>`;
 }
 
+/** Inline Kith logo SVG (mirrors assets/logo.svg) so currentColor works — an
+ * <img> can't inherit color, which rendered the mark black/invisible in dark
+ * mode. Returns the bare <svg>; put it inside a .logo-mark span (which sizes
+ * and colors it). `cls` adds a class to the svg when extra styling is needed. */
+export function logoMark(cls = '') {
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none" aria-hidden="true"${cls ? ` class="${esc(cls)}"` : ''}><rect x="5" y="3" width="9" height="26" fill="currentColor"/><path d="M18 12 L28 12 L14 26 L14 16 Z" fill="currentColor"/><path d="M13 20 L19.5 20 L28 29 L18 29 Z" fill="currentColor"/></svg>`;
+}
+
 /** Card with a title row, body HTML, and optional header actions. */
 export function sectionCard(title, bodyHtml, actionsHtml = '') {
   return `

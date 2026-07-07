@@ -1,10 +1,11 @@
 // Journal page — reverse-chron feed of timeline items, notes, and events
-// across all contacts. GET /api/journal?page=&limit=.
+// across all contacts. GET /api/journal?page=&limit=. "New entry" posts a
+// manual timeline entry via POST /api/timeline.
 
 import { api, qs } from './api.js';
-import { esc, initials, parseDate, timeAgo } from './utils.js';
+import { esc, initials, parseDate, timeAgo, debounce, toLocalInput, fromLocalInput } from './utils.js';
 import { icon } from './icons.js';
-import { emptyState } from './components.js';
+import { emptyState, modalShell, formGroup, textInput, textarea, toast, openModal } from './components.js';
 import { pageRenderers } from './pages.js';
 import { isSpicyOn } from './app.js';
 
@@ -66,13 +67,101 @@ function groupedHtml(entries) {
   return out;
 }
 
+// ------------------------------------------------------------ new entry
+// POST /api/timeline { contact_id, type, title, description, is_spicy,
+// occurred_at } — type is free-form VARCHAR (defaults to 'note' server-side);
+// we send 'entry' for manual journal entries.
+function openJournalEntryModal(onSaved) {
+  const content = `
+    <div class="form-group">
+      <label class="form-label">Person</label>
+      <div class="flex gap-1 flex-wrap mb-1" id="je-picked"></div>
+      <div class="search-input-wrap">${icon('search')}<input class="form-input" id="je-search" placeholder="Type to find a person" autocomplete="off"></div>
+      <div id="je-results"></div>
+    </div>
+    ${formGroup('Title (optional)', textInput('title', '', 'placeholder="A few words to remember it by"'))}
+    ${formGroup('What happened?', textarea('description', '', 'placeholder="Write it down while it\u2019s fresh." style="min-height:90px"'))}
+    ${formGroup('When', `<input class="form-input" name="occurred_at" type="datetime-local" value="${esc(toLocalInput(new Date()))}">`)}
+    ${isSpicyOn() ? `
+    <div class="toggle-row">
+      <div><div class="toggle-label">Spicy entry</div><div class="toggle-desc">Only visible while spicy mode is on.</div></div>
+      <button type="button" role="switch" aria-checked="false" class="toggle-switch" data-toggle="is_spicy"></button>
+    </div>` : ''}`;
+
+  openModal(modalShell('journal-entry', 'New journal entry', content,
+    `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+     <button class="btn btn-primary" data-action="save">Add entry</button>`), {
+    onMount: (overlay, close) => {
+      let picked = null; // { id, name }
+      const pickedEl = overlay.querySelector('#je-picked');
+      const renderPicked = () => {
+        pickedEl.innerHTML = picked
+          ? `<span class="tag-pill">${esc(picked.name)}<button class="tag-x" data-unpick aria-label="Remove">${icon('x')}</button></span>`
+          : '';
+        pickedEl.querySelector('[data-unpick]')?.addEventListener('click', () => { picked = null; renderPicked(); });
+      };
+      const searchInput = overlay.querySelector('#je-search');
+      const resultsEl = overlay.querySelector('#je-results');
+      searchInput.addEventListener('input', debounce(async () => {
+        const q = searchInput.value.trim();
+        if (!q) { resultsEl.innerHTML = ''; return; }
+        let found;
+        try { found = await api.get('/api/contacts' + qs({ search: q, limit: 6 })); } catch { return; }
+        resultsEl.innerHTML = (found.contacts || [])
+          .map((c) => `<button class="popover-item w-full" data-pick="${c.id}" data-name="${esc(c.display_name)}"><span class="av sm" style="width:22px;height:22px;font-size:9px">${esc(initials(c.display_name))}</span>${esc(c.display_name)}</button>`)
+          .join('') || '<div class="text-sm text-muted p-2">No matches.</div>';
+        resultsEl.querySelectorAll('[data-pick]').forEach((b) =>
+          b.addEventListener('click', () => {
+            picked = { id: Number(b.dataset.pick), name: b.dataset.name };
+            searchInput.value = '';
+            resultsEl.innerHTML = '';
+            renderPicked();
+          }));
+      }, 250));
+
+      const spicyToggle = overlay.querySelector('[data-toggle="is_spicy"]');
+      spicyToggle?.addEventListener('click', () => {
+        spicyToggle.classList.toggle('on');
+        spicyToggle.setAttribute('aria-checked', spicyToggle.classList.contains('on') ? 'true' : 'false');
+      });
+
+      overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
+        const description = overlay.querySelector('[name="description"]').value.trim();
+        if (!picked) { toast('Pick a person first.', 'error'); return; }
+        if (!description) { toast('Write what happened first.', 'error'); return; }
+        const saveBtn = overlay.querySelector('[data-action="save"]');
+        saveBtn.disabled = true;
+        try {
+          await api.post('/api/timeline', {
+            contact_id: picked.id,
+            type: 'entry',
+            title: overlay.querySelector('[name="title"]').value.trim() || null,
+            description,
+            occurred_at: fromLocalInput(overlay.querySelector('[name="occurred_at"]').value),
+            is_spicy: Boolean(spicyToggle?.classList.contains('on')),
+          });
+          toast('Entry added.');
+          close();
+          onSaved?.();
+        } catch (err) {
+          saveBtn.disabled = false;
+          toast(err.message, 'error');
+        }
+      });
+    },
+  });
+}
+
 async function renderJournalPage(el) {
   el.innerHTML = `
   <div class="page-inner" style="max-width:720px">
     <div class="page-header">
       <div>
         <h1 class="page-title">Journal</h1>
-        <div class="page-subtitle">Everything, in order</div>
+        <div class="page-subtitle">Your relationship diary — notes, timeline moments and completed events across everyone, newest first.</div>
+      </div>
+      <div class="page-actions">
+        <button class="btn btn-primary" data-action="new-entry">${icon('plus')} New entry</button>
       </div>
     </div>
     <div id="journal-feed">${emptyState('clock', 'Loading…', 'Fetching your journal.')}</div>
@@ -84,7 +173,18 @@ async function renderJournalPage(el) {
   let page = 1;
   let total = 0;
   let loaded = 0;
-  const all = [];
+  let all = [];
+
+  const reload = () => {
+    page = 1; total = 0; loaded = 0; all = [];
+    feed.innerHTML = emptyState('clock', 'Loading…', 'Fetching your journal.');
+    loadPage().catch((err) => {
+      feed.innerHTML = emptyState('alert-circle', "Couldn't load the journal", err?.message || 'Try again shortly.');
+      footer.innerHTML = '';
+    });
+  };
+
+  el.querySelector('[data-action="new-entry"]').addEventListener('click', () => openJournalEntryModal(reload));
 
   const loadPage = async () => {
     const data = await api.get('/api/journal' + qs({ page, limit: LIMIT }));
@@ -92,9 +192,14 @@ async function renderJournalPage(el) {
     const entries = data.entries || [];
     loaded += entries.length;
     all.push(...entries);
-    feed.innerHTML = all.length
-      ? groupedHtml(all)
-      : emptyState('book-open', 'Nothing here yet', 'Notes, events, and timeline entries show up here as you add them.');
+    if (all.length) {
+      feed.innerHTML = groupedHtml(all);
+    } else {
+      feed.innerHTML = emptyState('book-open', 'Your journal is empty',
+        'Notes, timeline moments, and completed events land here automatically — or write your first entry now.',
+        `<button class="btn btn-primary" data-action="empty-new-entry">${icon('plus')} New entry</button>`);
+      feed.querySelector('[data-action="empty-new-entry"]')?.addEventListener('click', () => openJournalEntryModal(reload));
+    }
     footer.innerHTML = loaded < total && entries.length
       ? `<button class="btn btn-secondary" id="journal-more">${icon('chevron-down')} Load more</button>`
       : '';

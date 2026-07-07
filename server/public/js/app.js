@@ -3,7 +3,7 @@
 import { api, qs, setToken } from './api.js';
 import { esc, initials, debounce, fmtDateTime } from './utils.js';
 import { icon } from './icons.js';
-import { toast, openModal, modalShell, toggleSwitch, emptyState } from './components.js';
+import { toast, openModal, modalShell, toggleSwitch, emptyState, confirmModal, logoMark } from './components.js';
 import { renderPage, pageTitles } from './pages.js';
 
 // ---------------------------------------------------------------- state
@@ -226,7 +226,9 @@ export async function setThemePref(pref) {
 function logoHtml() {
   const custom = state.settings.app_logo;
   if (custom) return `<img src="${esc(custom)}" alt="">`;
-  return `<img src="/assets/logo.svg" alt="" style="filter:none">`;
+  // Inline SVG (not <img>) so currentColor follows the theme — an <img>
+  // rendered the mark black, invisible in dark mode.
+  return logoMark();
 }
 
 function shellHtml() {
@@ -277,11 +279,15 @@ function shellHtml() {
         <div id="sidebar-groups"></div>
       </div>
       <div class="sidebar-footer">
-        <span class="av sm">${esc(initials(u.display_name || u.username))}</span>
-        <div class="user-meta">
-          <div class="user-name">${esc(u.display_name || u.username)}</div>
-          <div class="user-role">${esc(u.role.replace('_', ' '))}</div>
-        </div>
+        <span class="popover-wrap" id="user-menu-wrap" style="flex:1;min-width:0;display:flex">
+          <button class="sidebar-user-chip" id="user-chip" aria-haspopup="true" aria-expanded="false" title="Account menu">
+            <span class="av sm">${esc(initials(u.display_name || u.username))}</span>
+            <div class="user-meta">
+              <div class="user-name" id="sidebar-user-name">${esc(u.display_name || u.username)}</div>
+              <div class="user-role">${esc(u.role.replace('_', ' '))}</div>
+            </div>
+          </button>
+        </span>
         <button class="btn btn-icon" id="theme-toggle" aria-label="Switch theme" title="Theme">${icon(themeIcon(getThemePref()))}</button>
         <a class="btn btn-icon" href="#/trash" aria-label="Trash" title="Trash">${icon('trash')}</a>
         <button class="btn btn-icon" data-action="logout" aria-label="Log out">${icon('log-out')}</button>
@@ -340,10 +346,80 @@ export async function refreshNotifCount() {
   } catch { /* ignore */ }
 }
 
+/** Re-fetch the session user (e.g. after linking a self-contact or editing
+ * the account) and refresh the sidebar display name. */
+export async function refreshUser() {
+  try {
+    const data = await api.get('/api/auth/me');
+    state.user = data.user;
+  } catch { return; }
+  const nameEl = document.getElementById('sidebar-user-name');
+  if (nameEl) nameEl.textContent = state.user.display_name || state.user.username;
+}
+
+/** "My profile": open the linked self-contact, or offer to create one. */
+export async function openMyProfile() {
+  if (state.user?.self_contact_id) {
+    navigate(`/contacts/${state.user.self_contact_id}`);
+    return;
+  }
+  const ok = await confirmModal(
+    'Create your profile?',
+    'Kith will add you as a contact so you can record your own details and link family relationships.',
+    { confirmLabel: 'Create profile', danger: false }
+  );
+  if (!ok) return;
+  try {
+    const res = await api.post('/api/users/me/self-contact');
+    await refreshUser();
+    refreshSidebarLists();
+    toast(res.created ? 'Your profile contact is ready.' : 'Linked to your existing profile.');
+    navigate(`/contacts/${res.contact_id}`);
+  } catch (err) {
+    toast(err.message || "Couldn't create your profile.", 'error');
+  }
+}
+
 function bindShell() {
   // flame toggle
   document.getElementById('flame-toggle')?.addEventListener('click', () => {
     setSpicyActive(!state.spicyActive);
+  });
+
+  // user chip → account menu (My profile / Account & security)
+  const userWrap = document.getElementById('user-menu-wrap');
+  const userChip = document.getElementById('user-chip');
+  userChip?.addEventListener('click', () => {
+    const existing = userWrap.querySelector('.popover');
+    if (existing) {
+      existing.remove();
+      userChip.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    const pop = document.createElement('div');
+    pop.className = 'popover';
+    pop.innerHTML = `
+      <button class="popover-item" data-user-menu="profile">${icon('user')} My profile</button>
+      <a class="popover-item" href="#/settings" data-user-menu="account">${icon('shield')} Account &amp; security</a>`;
+    userWrap.appendChild(pop);
+    userChip.setAttribute('aria-expanded', 'true');
+    const closePop = (e) => {
+      if (!userWrap.contains(e.target)) {
+        pop.remove();
+        userChip.setAttribute('aria-expanded', 'false');
+        document.removeEventListener('click', closePop);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closePop), 0);
+    pop.querySelector('[data-user-menu="profile"]').addEventListener('click', () => {
+      pop.remove();
+      userChip.setAttribute('aria-expanded', 'false');
+      openMyProfile();
+    });
+    pop.querySelector('[data-user-menu="account"]').addEventListener('click', () => {
+      pop.remove();
+      userChip.setAttribute('aria-expanded', 'false');
+    });
   });
 
   // theme toggle: cycles dark → light → system
@@ -541,7 +617,7 @@ function renderLogin(message = '') {
   <div class="login-screen">
     <div class="login-card">
       <div class="login-logo">
-        <span class="logo-mark"><img src="/assets/logo.svg" alt=""></span>
+        <span class="logo-mark">${logoMark()}</span>
         <span class="wordmark">Kith</span>
       </div>
       ${message ? `<div class="form-error mb-3 text-center">${esc(message)}</div>` : ''}
@@ -588,7 +664,7 @@ function renderTotpStep(pendingToken) {
   <div class="login-screen">
     <div class="login-card">
       <div class="login-logo">
-        <span class="logo-mark"><img src="/assets/logo.svg" alt=""></span>
+        <span class="logo-mark">${logoMark()}</span>
         <span class="wordmark">Kith</span>
       </div>
       <h2 class="section-heading text-center">Two-factor code</h2>
@@ -647,7 +723,7 @@ function renderForcedPasswordChange() {
   <div class="login-screen">
     <div class="login-card">
       <div class="login-logo">
-        <span class="logo-mark"><img src="/assets/logo.svg" alt=""></span>
+        <span class="logo-mark">${logoMark()}</span>
         <span class="wordmark">Kith</span>
       </div>
       <h2 class="section-heading text-center">Change your password</h2>

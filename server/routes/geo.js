@@ -128,76 +128,140 @@ router.get('/contacts', async (req, res, next) => {
 });
 
 // ------------------------------------------------------------------- tiles
-// GET /api/geo/tiles/:z/:x/:y.png — authenticated OSM tile proxy with an
-// on-disk forever-cache. Browser cache: 7 days.
+// GET /api/geo/tiles/:style/:z/:x/:y.png — authenticated tile proxy with an
+// on-disk forever-cache (per-style subdirectory). Browser cache: 7 days.
+// GET /api/geo/tiles/:z/:x/:y.png stays as a backward-compat alias for 'osm'.
 const TILE_CACHE_PATH = process.env.TILE_CACHE_PATH || '/app/uploads/tilecache';
 const TILE_UPSTREAM = (process.env.TILE_UPSTREAM || 'https://tile.openstreetmap.org').replace(/\/+$/, '');
 const TILE_UA = 'Kith-selfhosted/1.1 (personal CRM; contact admin@example.com)';
 
+// Whitelisted tile styles. 'osm' honors TILE_UPSTREAM for self-hosted mirrors.
+// CARTO basemaps are fine for personal self-hosted use with attribution.
+const TILE_STYLES = {
+  osm: {
+    label: 'OpenStreetMap',
+    upstream: (z, x, y) => `${TILE_UPSTREAM}/${z}/${x}/${y}.png`,
+    attribution: '© OpenStreetMap',
+  },
+  light: {
+    label: 'Light (CARTO)',
+    upstream: (z, x, y) => `https://basemaps.cartocdn.com/light_all/${z}/${x}/${y}.png`,
+    attribution: '© OpenStreetMap © CARTO',
+  },
+  dark: {
+    label: 'Dark (CARTO)',
+    upstream: (z, x, y) => `https://basemaps.cartocdn.com/dark_all/${z}/${x}/${y}.png`,
+    attribution: '© OpenStreetMap © CARTO',
+  },
+  voyager: {
+    label: 'Voyager (CARTO)',
+    upstream: (z, x, y) => `https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`,
+    attribution: '© OpenStreetMap © CARTO',
+  },
+  topo: {
+    label: 'Topographic',
+    upstream: (z, x, y) => `https://tile.opentopomap.org/${z}/${x}/${y}.png`,
+    attribution: '© OpenStreetMap © OpenTopoMap',
+  },
+};
+
+// GET /api/geo/styles → the whitelist, so the frontend switcher doesn't hardcode.
+router.get('/styles', (req, res) => {
+  res.json({
+    styles: Object.entries(TILE_STYLES).map(([id, s]) => ({
+      id, label: s.label, attribution: s.attribution,
+    })),
+  });
+});
+
+async function serveTile(req, res, style) {
+  const def = TILE_STYLES[style];
+  if (!def) return res.status(400).json({ error: 'Unknown tile style' });
+
+  const z = Number(req.params.z), x = Number(req.params.x), y = Number(req.params.y);
+  if (!Number.isInteger(z) || z < 0 || z > 19) return res.status(400).json({ error: 'Invalid zoom' });
+  const max = 2 ** z;
+  if (!Number.isInteger(x) || x < 0 || x >= max || !Number.isInteger(y) || y < 0 || y >= max) {
+    return res.status(400).json({ error: 'Invalid tile coordinates' });
+  }
+
+  // Per-style cache layout: tilecache/<style>/z/x/y.png. Old-layout osm files
+  // (tilecache/z/x/y.png) are simply orphaned — harmless, no migration.
+  const dir = path.join(TILE_CACHE_PATH, style, String(z), String(x));
+  const file = path.join(dir, `${y}.png`);
+
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Cache-Control', 'private, max-age=604800'); // 7 days
+
+  // disk cache hit
+  let cacheHit = false;
+  try {
+    await fs.promises.access(file, fs.constants.R_OK);
+    cacheHit = true;
+  } catch { /* miss — fetch upstream */ }
+  if (cacheHit) {
+    try {
+      await pipeline(fs.createReadStream(file), res);
+    } catch (err) {
+      // stream failed mid-flight (client abort / file vanished) — response
+      // is unusable at this point, just log.
+      console.error('[tiles] cache stream failed:', err.message);
+      if (!res.writableEnded) res.end();
+    }
+    return;
+  }
+
+  // fetch upstream
+  let resp;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      resp = await fetch(def.upstream(z, x, y), {
+        headers: { 'User-Agent': TILE_UA },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return res.status(502).json({ error: 'Tile upstream unavailable' });
+  }
+  if (!resp.ok || !resp.body) {
+    return res.status(502).json({ error: 'Tile upstream unavailable' });
+  }
+
+  const buf = Buffer.from(await resp.arrayBuffer());
+  // write-through cache (atomic-ish: tmp then rename); failures non-fatal
+  try {
+    await fs.promises.mkdir(dir, { recursive: true });
+    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+    await fs.promises.writeFile(tmp, buf);
+    await fs.promises.rename(tmp, file);
+  } catch (err) {
+    console.error('[tiles] cache write failed:', err.message);
+  }
+  res.end(buf);
+}
+
+// Styled 4-segment route is registered BEFORE the legacy 3-segment route.
+// Express only matches this pattern for 4-segment paths, so the legacy
+// /tiles/12/2342/3133.png (3 segments) skips it entirely and hits the alias
+// below; a 4-segment path with a non-whitelisted first segment gets a 400.
+router.get('/tiles/:style/:z/:x/:y.png', async (req, res, next) => {
+  try {
+    const style = String(req.params.style);
+    if (!Object.prototype.hasOwnProperty.call(TILE_STYLES, style)) {
+      return res.status(400).json({ error: 'Unknown tile style' });
+    }
+    await serveTile(req, res, style);
+  } catch (err) { next(err); }
+});
+
+// Backward-compat: unstyled route → 'osm'.
 router.get('/tiles/:z/:x/:y.png', async (req, res, next) => {
   try {
-    const z = Number(req.params.z), x = Number(req.params.x), y = Number(req.params.y);
-    if (!Number.isInteger(z) || z < 0 || z > 19) return res.status(400).json({ error: 'Invalid zoom' });
-    const max = 2 ** z;
-    if (!Number.isInteger(x) || x < 0 || x >= max || !Number.isInteger(y) || y < 0 || y >= max) {
-      return res.status(400).json({ error: 'Invalid tile coordinates' });
-    }
-
-    const dir = path.join(TILE_CACHE_PATH, String(z), String(x));
-    const file = path.join(dir, `${y}.png`);
-
-    res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Cache-Control', 'private, max-age=604800'); // 7 days
-
-    // disk cache hit
-    let cacheHit = false;
-    try {
-      await fs.promises.access(file, fs.constants.R_OK);
-      cacheHit = true;
-    } catch { /* miss — fetch upstream */ }
-    if (cacheHit) {
-      try {
-        await pipeline(fs.createReadStream(file), res);
-      } catch (err) {
-        // stream failed mid-flight (client abort / file vanished) — response
-        // is unusable at this point, just log.
-        console.error('[tiles] cache stream failed:', err.message);
-        if (!res.writableEnded) res.end();
-      }
-      return;
-    }
-
-    // fetch upstream
-    let resp;
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10000);
-      try {
-        resp = await fetch(`${TILE_UPSTREAM}/${z}/${x}/${y}.png`, {
-          headers: { 'User-Agent': TILE_UA },
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch {
-      return res.status(502).json({ error: 'Tile upstream unavailable' });
-    }
-    if (!resp.ok || !resp.body) {
-      return res.status(502).json({ error: 'Tile upstream unavailable' });
-    }
-
-    const buf = Buffer.from(await resp.arrayBuffer());
-    // write-through cache (atomic-ish: tmp then rename); failures non-fatal
-    try {
-      await fs.promises.mkdir(dir, { recursive: true });
-      const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
-      await fs.promises.writeFile(tmp, buf);
-      await fs.promises.rename(tmp, file);
-    } catch (err) {
-      console.error('[tiles] cache write failed:', err.message);
-    }
-    res.end(buf);
+    await serveTile(req, res, 'osm');
   } catch (err) { next(err); }
 });
 

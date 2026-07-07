@@ -128,7 +128,7 @@ router.post('/login/totp', async (req, res, next) => {
 // GET /api/auth/me
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
-    const rows = await query('SELECT totp_enabled FROM users WHERE id = ?', [req.user.id]);
+    const rows = await query('SELECT totp_enabled, self_contact_id FROM users WHERE id = ?', [req.user.id]);
     res.json({
       user: {
         id: req.user.id,
@@ -138,6 +138,7 @@ router.get('/me', requireAuth, async (req, res, next) => {
         role: req.user.role,
         must_change_password: Boolean(req.user.must_change_password),
         totp_enabled: Boolean(rows[0] && rows[0].totp_enabled),
+        self_contact_id: rows[0] && rows[0].self_contact_id != null ? rows[0].self_contact_id : null,
       },
     });
   } catch (err) {

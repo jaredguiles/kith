@@ -161,7 +161,8 @@ body.spicy-mode::after { opacity: 0.03; }
   padding: 16px;
 }
 .sidebar-logo { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
-.sidebar-logo .logo-mark { width: 22px; height: 22px; color: var(--accent); transition: color var(--spicy-duration) ease-in-out; }
+/* Logo mark follows text color (white in dark mode, near-black in light) per user request. */
+.sidebar-logo .logo-mark { width: 22px; height: 22px; color: var(--text-primary); transition: color var(--spicy-duration) ease-in-out; }
 .sidebar-logo .logo-mark img, .sidebar-logo .logo-mark svg { width: 22px; height: 22px; }
 .sidebar-logo .wordmark {
   font-weight: 600; font-size: 16px; letter-spacing: 0.02em;
@@ -296,17 +297,17 @@ body.spicy-mode::after { opacity: 0.03; }
 
 /* ---------------------------------------------------------------- buttons */
 .btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
-  padding: 8px 14px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 6px 12px;
   border-radius: var(--radius-md);
-  font-size: 14px; font-weight: 500;
+  font-size: 13px; font-weight: 500;
   border: 1px solid transparent;
   background: none; color: var(--text-primary);
   transition: background 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out, transform 100ms ease-in-out;
   white-space: nowrap;
 }
 .btn:active { transform: scale(0.98); }
-.btn svg { width: 16px; height: 16px; }
+.btn svg { width: 15px; height: 15px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 a.btn, a.btn:hover { text-decoration: none; }
 
@@ -324,8 +325,11 @@ a.btn, a.btn:hover { text-decoration: none; }
 }
 .btn-icon:hover { background: var(--bg-hover); color: var(--text-primary); }
 .btn-icon.lg { width: 36px; height: 36px; }
-.btn-sm { padding: 5px 10px; font-size: 13px; }
+.btn-sm { padding: 4px 8px; font-size: 12px; }
+.btn-sm svg { width: 13px; height: 13px; }
 .btn-block { width: 100%; }
+/* Auth card actions keep a substantial hit target despite the compact base */
+.login-card .btn-block { padding: 9px 14px; font-size: 14px; }
 
 /* ------------------------------------------------------------------ cards */
 .card {
@@ -864,8 +868,8 @@ a.btn, a.btn:hover { text-decoration: none; }
   padding: 32px;
 }
 .login-logo { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 24px; }
-.login-logo .logo-mark { width: 28px; height: 28px; color: var(--accent); }
-.login-logo .logo-mark img { width: 28px; height: 28px; }
+.login-logo .logo-mark { width: 28px; height: 28px; color: var(--text-primary); }
+.login-logo .logo-mark img, .login-logo .logo-mark svg { width: 28px; height: 28px; }
 .login-logo .wordmark { font-size: 20px; font-weight: 600; letter-spacing: 0.02em; }
 
 /* ----------------------------------------------------------------- mobile */
@@ -1172,3 +1176,116 @@ a.btn, a.btn:hover { text-decoration: none; }
   .bulk-bar { bottom: 10px; gap: 6px; padding: 8px 10px; }
 }
 .min-w-0 { min-width: 0; }
+
+/* ------------------------------------------------------- inline logo mark */
+/* logoMark() inlines the SVG so currentColor works (an <img> can't inherit
+   color → the mark went invisible in dark mode). Containers size the span;
+   the svg fills it. */
+.logo-mark { display: inline-flex; align-items: center; justify-content: center; color: var(--text-primary); }
+.logo-mark svg { width: 100%; height: 100%; display: block; }
+
+/* ------------------------------------------------------ map avatar pins */
+.map-avatar-pin { background: none; border: none; }
+.map-avatar-pin .pin-av {
+  position: relative;
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: var(--bg-elevated, #20202a);
+  border: 2px solid var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45), 0 0 0 2px rgba(255, 255, 255, 0.08);
+  font-weight: 600; font-size: 12px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+.map-avatar-pin .pin-av img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  border-radius: 50%; object-fit: cover;
+}
+/* small tail under the circle so it reads as a pin */
+.map-avatar-pin .pin-av::after {
+  content: '';
+  position: absolute;
+  left: 50%; bottom: -8px;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top: 6px solid var(--accent);
+  border-bottom: none;
+}
+
+/* --------------------------------------------------- map style switcher */
+.map-style-switcher {
+  position: absolute;
+  top: 12px; right: 12px;
+  z-index: 500; /* above leaflet panes (400), below its controls' popups */
+  display: inline-flex; gap: 3px;
+  padding: 3px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(var(--glass-blur));
+  box-shadow: var(--shadow-sm);
+}
+.map-style-switcher .map-style-pill {
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  border: none; background: none;
+  font-size: 12px; font-weight: 500;
+  color: var(--text-secondary);
+  transition: background 150ms ease-out, color 150ms ease-out;
+  white-space: nowrap;
+}
+.map-style-switcher .map-style-pill:hover { background: var(--bg-hover); color: var(--text-primary); }
+.map-style-switcher .map-style-pill.active { background: var(--accent-subtle); color: var(--accent); }
+@media (max-width: 768px) {
+  .map-style-switcher { max-width: calc(100% - 60px); overflow-x: auto; }
+}
+
+/* ------------------------------------------- contact method row icons */
+/* User feedback: the mail/phone/pin icons were too small to read. Rows
+   render their leading icon with icon(name, 'sat-icon'). */
+svg.sat-icon {
+  width: 17px; height: 17px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  align-self: center;
+}
+
+/* -------------------------------------------- avatar photo edit badge */
+.av-edit-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
+.av-edit-btn {
+  position: absolute;
+  right: -2px; bottom: -2px;
+  width: 24px; height: 24px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent);
+  color: #fff;
+  border: 2px solid var(--bg-base);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 150ms ease-out, transform 100ms ease-in-out;
+  z-index: 2;
+}
+.av-edit-btn svg { width: 12px; height: 12px; }
+.av-edit-wrap:hover .av-edit-btn, .av-edit-btn:focus-visible { opacity: 1; }
+.av-edit-btn:active { transform: scale(0.94); }
+@media (hover: none) {
+  .av-edit-btn { opacity: 0.9; }
+}
+[data-theme="light"] .av-edit-btn { border-color: #ffffff; }
+
+/* ------------------------------------------------- sidebar user menu */
+.sidebar-user-chip {
+  display: flex; align-items: center; gap: 10px;
+  flex: 1; min-width: 0;
+  border: none; background: none;
+  padding: 4px; margin: -4px;
+  border-radius: var(--radius-md);
+  text-align: left;
+  cursor: pointer;
+  transition: background 150ms ease-out;
+}
+.sidebar-user-chip:hover { background: var(--bg-hover); }
+.sidebar-footer .popover { bottom: calc(100% + 6px); top: auto; }

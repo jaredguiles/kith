@@ -9,6 +9,7 @@ const bcrypt = require('bcryptjs');
 const { query } = require('../database/connection');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { auditWrite } = require('../lib/audit');
+const { rebuildSearchIndex } = require('../lib/contacts');
 
 const router = express.Router();
 
@@ -24,6 +25,126 @@ router.get('/directory', async (req, res, next) => {
       'SELECT id, username, display_name FROM users WHERE is_active = 1 ORDER BY display_name, username'
     );
     res.json({ users: rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Self-service endpoints — ANY authenticated user, own row only.
+// ---------------------------------------------------------------------------
+
+// Pragmatic email shape check (same leniency as the importer: something@something).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// PUT /api/users/me {display_name?, email?} — update own profile basics.
+router.put('/me', async (req, res, next) => {
+  try {
+    const { display_name, email } = req.body || {};
+    const updates = [];
+    const params = [];
+
+    if (email !== undefined) {
+      const e = String(email || '').trim();
+      if (!EMAIL_RE.test(e)) return res.status(400).json({ error: 'Invalid email address' });
+      if (e.length > 255) return res.status(400).json({ error: 'Email too long' });
+      updates.push('email = ?'); params.push(e);
+    }
+    if (display_name !== undefined) {
+      const d = String(display_name || '').trim();
+      if (!d) return res.status(400).json({ error: 'Display name cannot be empty' });
+      if (d.length > 100) return res.status(400).json({ error: 'Display name too long (max 100)' });
+      updates.push('display_name = ?'); params.push(d);
+    }
+    if (updates.length === 0) return res.status(400).json({ error: 'Nothing to update' });
+
+    params.push(req.user.id);
+    try {
+      await query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+    } catch (err) {
+      if (err && err.code === 'ER_DUP_ENTRY') {
+        return res.status(409).json({ error: 'Email already in use' });
+      }
+      throw err;
+    }
+    const audited = {
+      ...(email !== undefined && { email: String(email).trim() }),
+      ...(display_name !== undefined && { display_name: String(display_name).trim() }),
+    };
+    auditWrite(req.user.id, null, 'update', 'user', req.user.id, null, audited,
+      `User ${req.user.username} updated their profile`);
+    const rows = await query('SELECT id, username, email, display_name, role FROM users WHERE id = ?', [req.user.id]);
+    res.json({ user: rows[0] });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/** Load the user's linked self-contact if it exists and is not soft-deleted. */
+async function loadSelfContact(userId) {
+  const users = await query('SELECT self_contact_id FROM users WHERE id = ?', [userId]);
+  const selfId = users[0] && users[0].self_contact_id;
+  if (!selfId) return null;
+  const contacts = await query('SELECT id FROM contacts WHERE id = ? AND deleted_at IS NULL', [selfId]);
+  return contacts.length ? contacts[0] : null; // dangling / soft-deleted → null
+}
+
+// POST /api/users/me/self-contact — idempotent create-or-return of the user's
+// own contact card. A dangling/soft-deleted link is replaced with a fresh one.
+router.post('/me/self-contact', async (req, res, next) => {
+  try {
+    const existing = await loadSelfContact(req.user.id);
+    if (existing) return res.json({ contact_id: existing.id, created: false });
+
+    const displayName = req.user.display_name || req.user.username;
+    // Naive first/last split on the first space.
+    const sp = displayName.indexOf(' ');
+    const firstName = sp === -1 ? displayName : displayName.slice(0, sp);
+    const lastName = sp === -1 ? null : displayName.slice(sp + 1).trim() || null;
+
+    const result = await query(
+      `INSERT INTO contacts (owner_user_id, display_name, first_name, last_name, email)
+       VALUES (?, ?, ?, ?, ?)`,
+      [req.user.id, displayName, firstName, lastName, req.user.email || null]
+    );
+    const contactId = result.insertId;
+    await query('UPDATE users SET self_contact_id = ? WHERE id = ?', [contactId, req.user.id]);
+    await rebuildSearchIndex(contactId);
+    auditWrite(req.user.id, contactId, 'create', 'contact', contactId, null,
+      { display_name: displayName, self_contact: true },
+      `Created self-contact for user ${req.user.username}`);
+    res.status(201).json({ contact_id: contactId, created: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/users/me/self-contact {contact_id} — link an existing own contact
+// as the self-contact; contact_id: null clears the link.
+router.put('/me/self-contact', async (req, res, next) => {
+  try {
+    const { contact_id } = req.body || {};
+    if (contact_id === null) {
+      await query('UPDATE users SET self_contact_id = NULL WHERE id = ?', [req.user.id]);
+      auditWrite(req.user.id, null, 'update', 'user', req.user.id, null,
+        { self_contact_id: null }, `User ${req.user.username} cleared their self-contact link`);
+      return res.json({ ok: true });
+    }
+    const id = Number(contact_id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: 'contact_id must be a positive integer or null' });
+    }
+    // Must be an existing, non-deleted contact OWNED by the user.
+    const rows = await query(
+      'SELECT id FROM contacts WHERE id = ? AND owner_user_id = ? AND deleted_at IS NULL',
+      [id, req.user.id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Contact not found' });
+
+    await query('UPDATE users SET self_contact_id = ? WHERE id = ?', [id, req.user.id]);
+    auditWrite(req.user.id, id, 'update', 'user', req.user.id, null,
+      { self_contact_id: id }, `User ${req.user.username} linked contact ${id} as their self-contact`);
+    res.json({ ok: true });
   } catch (err) {
     next(err);
   }

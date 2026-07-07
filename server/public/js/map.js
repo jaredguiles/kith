@@ -1,26 +1,78 @@
 // Map page — all contact pins on a Leaflet map (vendored, tiles proxied
-// through /api/geo/tiles). Exports createMap() for contact-detail mini-maps.
+// through /api/geo/tiles). Exports createMap() + avatarPin() for
+// contact-detail mini-maps.
 
 import { api, qs } from './api.js';
 import { esc, initials, loadLeaflet } from './utils.js';
 import { icon } from './icons.js';
 import { emptyState, toast } from './components.js';
 import { pageRenderers } from './pages.js';
+import { state } from './app.js';
+
+// Whitelisted tile styles (mirrors server/routes/geo.js TILE_STYLES; the
+// switcher itself renders from GET /api/geo/styles so labels stay in sync).
+const VALID_STYLES = ['osm', 'light', 'dark', 'voyager', 'topo'];
+const DEFAULT_ATTRIBUTION = '&copy; OpenStreetMap';
+
+const tileUrl = (style) => `/api/geo/tiles/${encodeURIComponent(style)}/{z}/{x}/{y}.png`;
+
+/** Resolve the effective tile style: explicit user preference, else follow
+ * the app theme (dark → 'dark' tiles, light → 'voyager'). */
+export function resolveMapStyle() {
+  const saved = state.preferences?.map_style;
+  if (VALID_STYLES.includes(saved)) return saved;
+  const theme = document.documentElement.getAttribute('data-theme');
+  return theme === 'light' ? 'voyager' : 'dark';
+}
+
+/**
+ * Circular avatar pin (accent ring + tail) for contact markers. Replaces
+ * L.Icon.Default, whose image path resolution breaks under the vendored
+ * setup (renders as a missing-image placeholder). Initials render under the
+ * photo <img>; the element keeps class 'av' so the document-level error
+ * listener in app.js strips broken photos back to initials.
+ */
+export function avatarPin(L, contact) {
+  const img = contact?.photo_url ? `<img src="${esc(contact.photo_url)}" alt="">` : '';
+  return L.divIcon({
+    className: 'map-avatar-pin',
+    html: `<span class="av pin-av">${esc(initials(contact?.display_name))}${img}</span>`,
+    iconSize: [36, 44],
+    iconAnchor: [18, 44],
+    popupAnchor: [0, -42],
+  });
+}
 
 /**
  * Create a Leaflet map on `el` with the authenticated same-origin tile proxy.
  * Call after loadLeaflet() has resolved. Returns the L.Map instance.
- * opts: { center: [lat,lng], zoom, ...L.MapOptions }
+ * opts: { center: [lat,lng], zoom, style, attribution, ...L.MapOptions }
+ * style defaults to resolveMapStyle(); the active tile layer is kept on
+ * map._kithTileLayer so callers can swap styles.
  */
 export function createMap(el, opts = {}) {
   const L = window.L;
-  const { center = [30, 0], zoom = 2, ...rest } = opts;
+  const { center = [30, 0], zoom = 2, style, attribution, ...rest } = opts;
   const map = L.map(el, { center, zoom, worldCopyJump: true, ...rest });
-  L.tileLayer('/api/geo/tiles/{z}/{x}/{y}.png', {
+  const resolved = VALID_STYLES.includes(style) ? style : resolveMapStyle();
+  map._kithTileLayer = L.tileLayer(tileUrl(resolved), {
     maxZoom: 19,
-    attribution: '&copy; OpenStreetMap',
+    attribution: attribution || DEFAULT_ATTRIBUTION,
   }).addTo(map);
+  map._kithStyle = resolved;
   return map;
+}
+
+/** Swap the map's tile layer to another whitelisted style. */
+function setMapStyle(map, styleId, attribution) {
+  const L = window.L;
+  if (!VALID_STYLES.includes(styleId) || map._kithStyle === styleId) return;
+  if (map._kithTileLayer) map.removeLayer(map._kithTileLayer);
+  map._kithTileLayer = L.tileLayer(tileUrl(styleId), {
+    maxZoom: 19,
+    attribution: attribution || DEFAULT_ATTRIBUTION,
+  }).addTo(map);
+  map._kithStyle = styleId;
 }
 
 // Group pins that sit within ~0.02° of each other (light clustering, no plugin).
@@ -58,6 +110,48 @@ function clusterPopupHtml(group) {
         <span class="map-popup-name">${esc(p.display_name)}</span>
       </a>`).join('')}
   </div>`;
+}
+
+// ---------------------------------------------------------- style switcher
+/** Compact pill control, top-right over the map. Persists the choice as the
+ * per-user 'map_style' preference (arbitrary keys are accepted by
+ * PUT /api/preferences/:key — only KNOWN_PREFS values are constrained). */
+async function renderStyleSwitcher(el, map) {
+  const wrap = el.querySelector('.map-canvas-wrap');
+  if (!wrap) return;
+  let styles = [];
+  try {
+    styles = (await api.get('/api/geo/styles')).styles || [];
+  } catch { return; } // no switcher without the style list — map still works
+  if (!styles.length || !el.isConnected) return;
+
+  const host = document.createElement('div');
+  host.className = 'map-style-switcher';
+  host.setAttribute('role', 'group');
+  host.setAttribute('aria-label', 'Map style');
+  host.innerHTML = styles.map((s) => `
+    <button class="map-style-pill ${s.id === map._kithStyle ? 'active' : ''}"
+      data-style="${esc(s.id)}" data-attribution="${esc(s.attribution || '')}"
+      aria-pressed="${s.id === map._kithStyle ? 'true' : 'false'}">${esc(s.label || s.id)}</button>`).join('');
+  wrap.appendChild(host);
+
+  host.querySelectorAll('[data-style]').forEach((btn) =>
+    btn.addEventListener('click', async () => {
+      const styleId = btn.dataset.style;
+      if (styleId === map._kithStyle) return;
+      setMapStyle(map, styleId, btn.dataset.attribution || undefined);
+      host.querySelectorAll('[data-style]').forEach((b) => {
+        const on = b.dataset.style === styleId;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      try {
+        await api.put('/api/preferences/map_style', { value: styleId, type: 'string' });
+        state.preferences.map_style = styleId;
+      } catch (err) {
+        toast(err.message || "Couldn't save the map style.", 'error');
+      }
+    }));
 }
 
 async function renderMapPage(el) {
@@ -99,6 +193,7 @@ async function renderMapPage(el) {
 
   canvas.innerHTML = '';
   const map = createMap(canvas, { center: [20, 0], zoom: 2 });
+  renderStyleSwitcher(el, map);
 
   const useClusters = pins.length > 50;
   const groups = useClusters ? clusterPins(pins) : pins.map((p) => [{ ...p, lat: Number(p.lat), lng: Number(p.lng) }]);
@@ -108,7 +203,7 @@ async function renderMapPage(el) {
     if (group.length === 1) {
       const p = group[0];
       allLatLngs.push([p.lat, p.lng]);
-      L.marker([p.lat, p.lng], { title: p.display_name })
+      L.marker([p.lat, p.lng], { title: p.display_name, icon: avatarPin(L, p) })
         .addTo(map)
         .bindPopup(pinPopupHtml(p), { maxWidth: 260 });
     } else {

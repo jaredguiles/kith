@@ -659,6 +659,12 @@ async function ensureColumns() {
 
   // Document attachments keep their original filename
   await ensureColumn('media_assets', 'original_name', 'VARCHAR(255) NULL');
+
+  // "My profile": each user may link a self-contact (their own contact card).
+  // Deliberately NO FK constraint — ensureColumn only adds columns, and an
+  // idempotent FK-add would need extra information_schema plumbing for little
+  // gain. Code treats a dangling/soft-deleted self_contact_id as "not linked".
+  await ensureColumn('users', 'self_contact_id', 'INT NULL');
 }
 
 // ---------------------------------------------------------------------------
