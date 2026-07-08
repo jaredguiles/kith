@@ -116,6 +116,14 @@ body.spicy-mode {
 [data-theme="dark"] body.spicy-mode {
   --paper: #191410;
   --panel: #221b12;
+  /* Must restate dark ink/muted/rules: the light `body.spicy-mode` block
+     above has higher specificity than `[data-theme="dark"]`, so without these
+     the dark theme would inherit light-theme #1c1813 text on near-black paper
+     (invisible). */
+  --ink: #ece4d2;
+  --muted: #8b8271;
+  --rule: rgba(236, 228, 210, 0.13);
+  --rule-strong: rgba(236, 228, 210, 0.26);
   --accent: #d0808a; /* dusty rose/oxblood */
   --accent-weak: rgba(208, 128, 138, 0.14);
   --spicy: 1;
