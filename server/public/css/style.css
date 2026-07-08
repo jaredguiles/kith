@@ -79,7 +79,11 @@
 body.spicy-mode {
   --paper: #efe5d8;
   --panel: #f6ede1;
-  --accent: var(--spicy-accent-color, #7a1f2b); /* oxblood */
+  --ink: #1c1813;
+  --muted: #6f685b;
+  --rule: rgba(28, 24, 19, 0.16);
+  --rule-strong: rgba(28, 24, 19, 0.32);
+  --accent: #7a1f2b; /* oxblood */
   --accent-weak: rgba(122, 31, 43, 0.10);
   --spicy: 1;
 }
@@ -112,7 +116,7 @@ body.spicy-mode {
 [data-theme="dark"] body.spicy-mode {
   --paper: #191410;
   --panel: #221b12;
-  --accent: var(--spicy-accent-color, #d0808a); /* dusty rose/oxblood */
+  --accent: #d0808a; /* dusty rose/oxblood */
   --accent-weak: rgba(208, 128, 138, 0.14);
   --spicy: 1;
 }
