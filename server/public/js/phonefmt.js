@@ -79,7 +79,14 @@ export function formatPhone(raw) {
   }
   const rest = digits.slice(cc.length);
   if (!rest) return `+${cc}`;
-  if (cc === '1') return rest.length === 10 ? `+1 ${nanp(rest)}` : `+1 ${genericGroups(rest)}`;
+  // NANP: national number is exactly 10 digits. Ten → format directly. More
+  // than ten means the input was previously mangled (e.g. a stray group split
+  // like "+1 123 456 789 01" → 11 rest digits) — take the first 10 so a bad
+  // stored value reformats cleanly. Fewer than ten stays loosely grouped.
+  if (cc === '1') {
+    if (rest.length >= 10) return `+1 ${nanp(rest.slice(0, 10))}`;
+    return `+1 ${genericGroups(rest)}`;
+  }
   const groups = GROUPS[cc];
   return `+${cc} ${groups ? groupDigits(rest, groups) : genericGroups(rest)}`;
 }

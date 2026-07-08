@@ -9,7 +9,7 @@ import {
 import { createMap, avatarPin } from './map.js';
 import { icon } from './icons.js';
 import {
-  avatar, tagPill, groupBadge, starRating, emptyState, modalShell, formGroup,
+  avatar, tagPill, groupBadge, emptyState, modalShell, formGroup,
   textInput, selectInput, textarea, toast, openModal, confirmModal, readForm,
   filterPills, feedItem, sectionHeader, leaderRow, recNo,
 } from './components.js';
@@ -252,7 +252,6 @@ async function loadTable(el) {
       <th class="sortable" data-sort="name">Name ${sortArrow('name')}</th>
       <th>Tags</th>
       <th class="sortable" data-sort="location">Location ${sortArrow('location')}</th>
-      <th class="sortable" data-sort="rating">Rating ${sortArrow('rating')}</th>
       <th class="sortable" data-sort="last_contacted_at">Last contact ${sortArrow('last_contacted_at')}</th>
       <th class="sortable" data-sort="updated">Updated ${sortArrow('updated')}</th>
       <th></th>
@@ -273,7 +272,6 @@ async function loadTable(el) {
         </td>
         <td><div class="flex gap-1 flex-wrap">${(c.tags || []).slice(0, 3).map((t) => tagPill(t)).join('')}</div></td>
         <td class="td-secondary">${esc(c.location || '')}</td>
-        <td>${c.rating ? starRating(c.rating) : '<span class="td-muted">—</span>'}</td>
         <td class="td-muted">${c.last_contacted_at ? esc(timeAgo(c.last_contacted_at)) : '—'}</td>
         <td class="td-muted">${timeAgo(c.updated_at)}</td>
         <td>
@@ -665,9 +663,6 @@ export async function renderContactDetail(el, id) {
           <div class="rec-status"><span class="rec-status-l">Status</span><span class="rec-status-v">${
             canInline ? ieSpan('relationship_status', ieDefs.relationship_status, c.relationship_status, editMode) : esc(c.relationship_status || '')
           }</span></div>` : ''}
-          ${canInline
-            ? `<div class="rec-squares ie-stars ${editMode ? 'ie-on' : ''} ${!c.rating && !editMode ? 'ie-hidden' : ''}" id="detail-stars" aria-label="Rating" ${!c.rating && !editMode ? 'style="display:none"' : ''}>${starRating(c.rating || 0, { interactive: true, name: 'detail-rating' })}</div>`
-            : c.rating ? `<div class="rec-squares">${starRating(c.rating)}</div>` : ''}
           ${!isBasic ? `
           <div class="rec-tags" id="detail-tags">
             ${(tags || []).map((t) => tagPill(t, { removable: canEdit })).join('')}
@@ -792,20 +787,6 @@ export async function renderContactDetail(el, id) {
       onSaved: refresh,
     });
 
-    // rating stars: clickable inline (click same value to clear)
-    el.querySelectorAll('#detail-stars .star').forEach((s) =>
-      s.addEventListener('click', async () => {
-        const next = Number(s.dataset.star) === Number(c.rating || 0) ? 0 : Number(s.dataset.star);
-        el.querySelectorAll('#detail-stars .star').forEach((st) =>
-          st.classList.toggle('filled', Number(st.dataset.star) <= next));
-        try {
-          await api.put(`/api/contacts/${c.id}`, { rating: next });
-          refresh();
-        } catch (err) {
-          toast(err.message, 'error');
-          refresh();
-        }
-      }));
   }
 
   // header avatar → direct photo change (upload then set-as-profile)
@@ -1222,9 +1203,21 @@ async function renderAddressMiniMap(el, addresses, contact) {
     const label = [a.label, [a.street, a.city].filter(Boolean).join(', ')].filter(Boolean).join(' — ');
     L.marker([Number(a.latitude), Number(a.longitude)], { title: label || 'Address', icon: avatarPin(L, contact) }).addTo(map);
   }
-  if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { padding: [24, 24], maxZoom: 13 });
-  requestAnimationFrame(() => map.invalidateSize());
-  setTimeout(() => map.invalidateSize(), 300);
+  const refit = () => {
+    map.invalidateSize({ animate: false });
+    if (pts.length > 1) map.fitBounds(L.latLngBounds(pts), { padding: [24, 24], maxZoom: 13 });
+  };
+  // The detail page lays out progressively; the map can init before its column
+  // reaches final width, leaving Leaflet with a stale (too-wide) inline size
+  // that overflows the column. Re-run invalidateSize across several frames and
+  // whenever the host resizes so the tile pane matches the column.
+  requestAnimationFrame(refit);
+  [120, 350, 700, 1200].forEach((t) => setTimeout(refit, t));
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => refit());
+    ro.observe(mapEl);
+    setTimeout(() => ro.disconnect(), 6000);
+  }
 }
 
 // ------------------------------------------------------ audit & changelog
@@ -1323,10 +1316,6 @@ export function openContactForm(existing = null, onSaved = null) {
     ${formGroup('Keep in touch every ___ days', textInput('keep_in_touch_days', c.keep_in_touch_days ?? '', 'type="number" min="1" step="1" placeholder="Leave empty to turn off"'), 'Kith flags them as out of touch when this many days pass without contact.')}
     ${formGroup('Bio', textarea('bio', c.bio))}
     ${formGroup('Notes', textarea('notes_text', c.notes_text))}
-    <div class="form-group">
-      <label class="form-label">Rating</label>
-      ${starRating(c.rating || 0, { interactive: true, name: 'rating' })}
-    </div>
     ${isSpicyOn() ? `
     <div class="toggle-row">
       <div><div class="toggle-label">Spicy contact</div><div class="toggle-desc">Marks this contact as having spicy content.</div></div>
@@ -1340,14 +1329,6 @@ export function openContactForm(existing = null, onSaved = null) {
 
   openModal(html, {
     onMount: (overlay, close) => {
-      let rating = c.rating || 0;
-      overlay.querySelectorAll('.star-rating.interactive .star').forEach((s) =>
-        s.addEventListener('click', () => {
-          rating = Number(s.dataset.star) === rating ? 0 : Number(s.dataset.star);
-          overlay.querySelectorAll('.star-rating.interactive .star').forEach((st) =>
-            st.classList.toggle('filled', Number(st.dataset.star) <= rating));
-        })
-      );
       overlay.querySelectorAll('[data-toggle]').forEach((t) =>
         t.addEventListener('click', () => {
           t.classList.toggle('on');
@@ -1391,7 +1372,6 @@ export function openContactForm(existing = null, onSaved = null) {
       overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
         const values = readForm(overlay.querySelector('.modal-content'));
         delete values.link_relation_type;
-        values.rating = rating;
         const spicyToggle = overlay.querySelector('[data-toggle="is_spicy"]');
         if (spicyToggle) values.is_spicy = spicyToggle.classList.contains('on');
         try {

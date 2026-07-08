@@ -283,7 +283,7 @@ function shellHtml() {
       </div>
       <div class="sidebar-bottom">
         <div class="sidebar-quiet-row">
-          ${state.spicyEnabled ? `<button class="btn-flame ${state.spicyActive ? 'active' : ''}" id="flame-toggle" title="Confidential layer" aria-label="Toggle confidential layer" aria-pressed="${state.spicyActive}">${icon('lock')}<span class="conf-label">confidential</span><span class="conf-dot"></span></button>` : ''}
+          ${state.spicyEnabled ? `<button class="btn-flame btn-flame-icon ${state.spicyActive ? 'active' : ''}" id="flame-toggle" title="Confidential layer" aria-label="Toggle confidential layer" aria-pressed="${state.spicyActive}">${icon('lock')}<span class="conf-dot"></span></button>` : ''}
           <span class="flex-1"></span>
           <button class="btn btn-icon" id="theme-toggle" aria-label="Switch theme" title="Theme">${icon(themeIcon(getThemePref()))}</button>
           <a class="btn btn-icon" href="#/trash" aria-label="Trash" title="Trash">${icon('trash')}</a>

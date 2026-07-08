@@ -398,6 +398,12 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--in
   text-transform: lowercase;
   color: var(--muted);
 }
+/* icon-only sidebar confidential toggle: centered lock + state dot, no label */
+.btn-flame.btn-flame-icon {
+  justify-content: center;
+  gap: 5px;
+  padding: 4px 5px;
+}
 .btn-flame .conf-dot {
   width: 5px; height: 5px; border-radius: 50%;
   background: var(--accent);
@@ -537,15 +543,16 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--in
   display: flex; align-items: baseline; gap: 10px;
   padding: 7px 0;
   min-width: 0;
+  flex-wrap: nowrap;
 }
 .rec-leader .rec-dots {
-  flex: 1;
+  flex: 1 1 auto;
   border-bottom: 1px dotted var(--rule);
   transform: translateY(-4px);
-  min-width: 12px;
+  min-width: 20px;
 }
-.rec-leader .rec-leader-left { min-width: 0; }
-.rec-leader .rec-leader-right { text-align: right; min-width: 0; }
+.rec-leader .rec-leader-left { flex: none; min-width: 0; white-space: nowrap; }
+.rec-leader .rec-leader-right { flex: 0 1 auto; text-align: right; min-width: 0; }
 a.rec-leader { color: inherit; }
 a.rec-leader:hover { text-decoration: none; }
 a.rec-leader:hover .rec-leader-left { color: var(--accent); }
@@ -814,7 +821,7 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
   color: var(--muted);
   flex-shrink: 0;
 }
-.rec-kv .rec-kv-val { text-align: right; min-width: 0; overflow-wrap: anywhere; }
+.rec-kv .rec-kv-val { flex: 0 1 auto; text-align: right; min-width: 0; overflow-wrap: anywhere; }
 .rec-kv .rec-kv-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .rec-kv .sat-icon { display: none; }
 .rec-primary-dot {
@@ -830,10 +837,18 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
   font-family: var(--font-mono);
   font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--muted);
-  width: 118px; flex: none;
+  width: 104px; flex: none; white-space: nowrap;
 }
 .rec-part-val, .rec-part-val .ie-val { font-family: var(--font-serif); font-size: 16px; color: var(--ink); }
-.rec-part-val { text-align: right; min-width: 0; }
+.rec-part-val {
+  flex: 0 1 auto;
+  text-align: right; min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* editable / link values contain flex children — let them own the ellipsis */
+.rec-part-val a { overflow: hidden; text-overflow: ellipsis; }
 
 /* serif prose blocks (bio / notes) */
 .rec-prose, .rec-prose .ie-val {
@@ -1880,11 +1895,17 @@ a.btn, a.btn:hover { text-decoration: none; }
 
 /* -------------------------------------------------- contact mini-map */
 .mini-map {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   height: 200px;
   border-radius: 0;
   overflow: hidden;
   border: 1px solid var(--rule);
 }
+/* Leaflet writes an inline width on its container from the host's offsetWidth
+   at init; constrain it so a mis-timed measure can't overflow the column. */
+.mini-map .leaflet-container { width: 100% !important; max-width: 100%; }
 
 /* ------------------------------------------------- document media tiles */
 .media-doc-tile .media-doc-inner {
@@ -1978,6 +1999,17 @@ svg.sat-icon {
   box-shadow: 0 1px 0 0 var(--accent);
 }
 .ie-field .ie-val { white-space: pre-wrap; word-break: break-word; }
+/* Particulars rows: keep the value on one line (ellipsis) so the dotted-leader
+   row stays a single ~31px line instead of wrapping to 62px. The value span,
+   its ie-field wrapper, and the ie-val text must all clip. */
+.rec-leader { align-items: center; }
+.rec-part-val { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+.rec-part-val .ie-field { max-width: 100%; min-width: 0; }
+.rec-part-val .ie-field .ie-val {
+  white-space: nowrap; word-break: normal;
+  overflow: hidden; text-overflow: ellipsis; display: block; min-width: 0;
+}
+.rec-part-val > a { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-block; max-width: 100%; }
 .ie-field.ie-on .ie-val { border-bottom: 1px dotted var(--accent); }
 .ie-add {
   display: inline-flex; align-items: center; gap: 4px;
