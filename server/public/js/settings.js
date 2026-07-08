@@ -23,9 +23,11 @@ async function renderSettings(el) {
       <div class="rec-toolbar"><span class="rec-crumb"><span>Account & Security</span></span></div>
       <div class="rec-rule-strong mb-4"></div>
       <div class="rec-section" id="account-section"><div class="text-sm text-muted">Loading…</div></div>
+      <div class="rec-section" id="notifications-section"><div class="text-sm text-muted">Loading…</div></div>
       <div class="mb-6"></div>
     </div>`;
     renderAccountSection(el.querySelector('#account-section'));
+    renderNotificationsSection(el.querySelector('#notifications-section'));
     return;
   }
 
@@ -51,6 +53,7 @@ async function renderSettings(el) {
     <div class="rec-rule-strong mb-4"></div>
 
     <div class="rec-section" id="account-section"><div class="text-sm text-muted">Loading account…</div></div>
+    <div class="rec-section" id="notifications-section"><div class="text-sm text-muted">Loading…</div></div>
 
     <div class="rec-section">
       ${sectionHeader('02', 'General')}
@@ -142,6 +145,7 @@ async function renderSettings(el) {
 
   // ---- account & security (all users; admins see it atop settings)
   renderAccountSection(el.querySelector('#account-section'));
+  renderNotificationsSection(el.querySelector('#notifications-section'));
 
   // ---- theme (per-user preference)
   el.querySelector('[data-theme-select]')?.addEventListener('change', (e) => setThemePref(e.target.value));
@@ -284,6 +288,229 @@ function openUserForm(existing, onSaved, isMainAdmin) {
 }
 
 pageRenderers.settings = renderSettings;
+
+// ---------------------------------------------- Notifications & push (all users)
+const DIGEST_DAYS = [
+  { value: '0', label: 'Sunday' }, { value: '1', label: 'Monday' }, { value: '2', label: 'Tuesday' },
+  { value: '3', label: 'Wednesday' }, { value: '4', label: 'Thursday' }, { value: '5', label: 'Friday' },
+  { value: '6', label: 'Saturday' },
+];
+const CHANNEL_OPTIONS = [
+  { value: 'email', label: 'Email' }, { value: 'push', label: 'Push' },
+  { value: 'both', label: 'Both' }, { value: 'none', label: 'None' },
+];
+
+// VAPID key (base64url) → Uint8Array for pushManager.subscribe.
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+const pushSupported = () =>
+  'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+
+async function renderNotificationsSection(container) {
+  if (!container) return;
+  let prefs;
+  try {
+    prefs = (await api.get('/api/notifications/prefs')).prefs || {};
+  } catch (err) {
+    container.innerHTML = `${sectionHeader('10', 'Notifications')}<div class="text-sm text-muted">${esc(err?.message || "Couldn't load notification settings.")}</div>`;
+    return;
+  }
+
+  const secure = location.protocol === 'https:';
+  const supported = pushSupported();
+
+  container.innerHTML = `
+    ${sectionHeader('10', 'Notifications')}
+    <div class="form-row">
+      ${formGroup('Channel', selectInput('notify_channel', CHANNEL_OPTIONS, prefs.notify_channel || 'email', 'data-notif="notify_channel"'), 'How Kith reaches you.')}
+      ${formGroup('Delivery email', `<input class="form-input" name="notify_email" type="email" value="${esc(prefs.notify_email || '')}" placeholder="${esc(prefs.account_email || 'name@example.com')}" data-notif-email>`, 'Leave blank to use your account email.')}
+    </div>
+    <button class="btn btn-secondary btn-sm mb-2" data-save-notif>Save channel & email</button>
+
+    <div class="divider"></div>
+    <div class="toggle-row">
+      <div><div class="toggle-label">Weekly digest</div><div class="toggle-desc">A once-a-week summary of birthdays, reminders, and people you’re losing touch with.</div></div>
+      ${toggleSwitch(Boolean(prefs.digest_weekly), 'data-notif-toggle="digest_weekly"')}
+    </div>
+    <div class="toggle-row">
+      <div><div class="toggle-label">Digest day</div><div class="toggle-desc">Which day the weekly digest is sent.</div></div>
+      <div style="width:160px">${selectInput('digest_day', DIGEST_DAYS, String(prefs.digest_day ?? 1), 'data-notif-select="digest_day"')}</div>
+    </div>
+
+    <div class="divider"></div>
+    <div class="uppercase-label mb-2">Nudges</div>
+    <div class="toggle-row">
+      <div><div class="toggle-label">Birthdays</div><div class="toggle-desc">Remind me before a contact’s birthday.</div></div>
+      ${toggleSwitch(Boolean(prefs.nudge_birthdays), 'data-notif-toggle="nudge_birthdays"')}
+    </div>
+    <div class="toggle-row">
+      <div><div class="toggle-label">Reminders</div><div class="toggle-desc">Nudge me about overdue reminders.</div></div>
+      ${toggleSwitch(Boolean(prefs.nudge_reminders), 'data-notif-toggle="nudge_reminders"')}
+    </div>
+    <div class="toggle-row">
+      <div><div class="toggle-label">Out of touch</div><div class="toggle-desc">Flag people I haven’t contacted in a while.</div></div>
+      ${toggleSwitch(Boolean(prefs.nudge_out_of_touch), 'data-notif-toggle="nudge_out_of_touch"')}
+    </div>
+
+    <div class="divider"></div>
+    <button class="btn btn-secondary btn-sm" data-test-digest>${icon('mail')} Send me a test digest</button>
+
+    <div class="divider"></div>
+    <div class="uppercase-label mb-2">Push on this device</div>
+    <div id="push-controls">${pushControlsHtml(supported, secure)}</div>`;
+
+  // channel + email save
+  container.querySelector('[data-save-notif]')?.addEventListener('click', async () => {
+    const btn = container.querySelector('[data-save-notif]');
+    btn.disabled = true;
+    try {
+      await api.put('/api/notifications/prefs', {
+        notify_channel: container.querySelector('[data-notif="notify_channel"]').value,
+        notify_email: container.querySelector('[data-notif-email]').value.trim() || null,
+      });
+      toast('Notification settings saved.');
+    } catch (err) { toast(err.message, 'error'); }
+    btn.disabled = false;
+  });
+
+  // toggles (save individually, like the confidential-layer toggles)
+  container.querySelectorAll('[data-notif-toggle]').forEach((t) =>
+    t.addEventListener('click', async () => {
+      const key = t.dataset.notifToggle;
+      const newVal = !t.classList.contains('on');
+      try {
+        await api.put('/api/notifications/prefs', { [key]: newVal });
+        t.classList.toggle('on', newVal);
+        t.setAttribute('aria-checked', newVal ? 'true' : 'false');
+      } catch (err) { toast(err.message, 'error'); }
+    }));
+
+  // digest day select
+  container.querySelector('[data-notif-select="digest_day"]')?.addEventListener('change', async (e) => {
+    try {
+      await api.put('/api/notifications/prefs', { digest_day: Number(e.target.value) });
+      toast('Digest day updated.');
+    } catch (err) { toast(err.message, 'error'); }
+  });
+
+  // test digest
+  container.querySelector('[data-test-digest]')?.addEventListener('click', async () => {
+    const btn = container.querySelector('[data-test-digest]');
+    btn.disabled = true;
+    try {
+      const res = await api.post('/api/notifications/test-digest');
+      toast(res?.sent ? 'Test digest sent — check your inbox.' : 'Digest queued.');
+    } catch (err) { toast(err.message, 'error'); }
+    btn.disabled = false;
+  });
+
+  bindPushControls(container);
+}
+
+function pushControlsHtml(supported, secure) {
+  if (!secure) {
+    return `<div class="text-sm text-muted">Push requires HTTPS — open the app at <a href="https://kith.example.com">https://kith.example.com</a> to enable notifications on this device.</div>`;
+  }
+  if (!supported) {
+    return `<div class="text-sm text-muted">This browser doesn’t support push notifications.</div>`;
+  }
+  return `
+    <div class="flex gap-2 flex-wrap" id="push-btns">
+      <button class="btn btn-primary btn-sm" data-push-enable>${icon('bell')} Enable push on this device</button>
+      <button class="btn btn-secondary btn-sm hidden" data-push-test>${icon('bell')} Send test notification</button>
+      <button class="btn btn-secondary btn-sm hidden" data-push-disable>Turn off push here</button>
+    </div>
+    <div class="text-micro text-muted mt-2" id="push-status">Checking device status…</div>`;
+}
+
+function bindPushControls(container) {
+  const secure = location.protocol === 'https:';
+  const supported = pushSupported();
+  if (!secure || !supported) return;
+
+  const statusEl = container.querySelector('#push-status');
+  const enableBtn = container.querySelector('[data-push-enable]');
+  const testBtn = container.querySelector('[data-push-test]');
+  const disableBtn = container.querySelector('[data-push-disable]');
+  const setState = (subscribed, note) => {
+    enableBtn.classList.toggle('hidden', subscribed);
+    testBtn.classList.toggle('hidden', !subscribed);
+    disableBtn.classList.toggle('hidden', !subscribed);
+    if (statusEl) statusEl.textContent = note || (subscribed ? 'Push is enabled on this device.' : 'Push is off on this device.');
+  };
+
+  // reflect current subscription state
+  (async () => {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      setState(Boolean(sub));
+    } catch { setState(false); }
+  })();
+
+  enableBtn?.addEventListener('click', async () => {
+    enableBtn.disabled = true;
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') {
+        toast(perm === 'denied' ? 'Notifications are blocked in your browser settings.' : 'Permission not granted.', 'error');
+        enableBtn.disabled = false;
+        return;
+      }
+      const reg = await navigator.serviceWorker.ready;
+      const { publicKey } = await api.get('/api/push/key');
+      if (!publicKey) throw new Error('Server is missing a push key.');
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(publicKey),
+        });
+      }
+      const json = sub.toJSON();
+      await api.post('/api/push/subscribe', {
+        subscription: { endpoint: sub.endpoint, keys: json.keys },
+        user_agent: navigator.userAgent,
+      });
+      setState(true, 'Push enabled on this device.');
+      toast('Push notifications enabled.');
+    } catch (err) {
+      toast(err.message || "Couldn't enable push.", 'error');
+    }
+    enableBtn.disabled = false;
+  });
+
+  testBtn?.addEventListener('click', async () => {
+    testBtn.disabled = true;
+    try {
+      const res = await api.post('/api/push/test');
+      toast(res?.sent ? 'Test notification sent.' : 'Test queued.');
+    } catch (err) { toast(err.message, 'error'); }
+    testBtn.disabled = false;
+  });
+
+  disableBtn?.addEventListener('click', async () => {
+    disableBtn.disabled = true;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) {
+        await api.post('/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});
+        await sub.unsubscribe().catch(() => {});
+      }
+      setState(false, 'Push turned off on this device.');
+      toast('Push turned off here.');
+    } catch (err) { toast(err.message, 'error'); }
+    disableBtn.disabled = false;
+  });
+}
 
 // Non-admins have no Settings link in the sidebar (app.js renders it for
 // admins only, and we must not touch app.js). Inject an "Account" nav item

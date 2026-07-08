@@ -146,6 +146,8 @@ app.use('/api/contacts/:id/merge', mergeRouter);
 app.use('/api/audit-log', auditRouter);
 app.use('/api/changelog', changelogRouter);
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api', require('./routes/interactions'));
+app.use('/api/push', require('./routes/push'));
 app.use('/api', require('./routes/dashboard'));
 app.use('/api/import', require('./routes/import'));
 app.use('/api', require('./routes/relationships'));
@@ -221,27 +223,20 @@ async function boot() {
   });
 
   startImportWorker();
-  startTrashPurge();
+  startScheduler();
 }
 
 // ---------------------------------------------------------------------------
-// Trash purge — daily sweep of expired soft-deleted rows (routes/trash.js).
-// One run 60s after boot, then every 24h. Both timers unref'd.
+// Scheduler — croner jobs for daily nudges (08:00), weekly digests (08:15),
+// and the trash purge (03:00), plus a boot catch-up. Replaces the previous
+// setInterval trash-purge sweeper (migrated into lib/scheduler.js, Job C).
 // ---------------------------------------------------------------------------
-function startTrashPurge() {
-  const runPurge = () => {
-    try {
-      const trash = require('./routes/trash');
-      if (typeof trash.purgeExpiredTrash === 'function') {
-        Promise.resolve(trash.purgeExpiredTrash())
-          .catch((err) => console.error('[trash-purge] failed:', err.message));
-      }
-    } catch (err) {
-      console.error('[trash-purge] unavailable:', err.message);
-    }
-  };
-  setTimeout(runPurge, 60 * 1000).unref();
-  setInterval(runPurge, 24 * 3600 * 1000).unref();
+function startScheduler() {
+  try {
+    require('./lib/scheduler').startScheduler(getPool());
+  } catch (err) {
+    console.error('[scheduler] failed to start:', err.message);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +276,7 @@ async function shutdown(signal) {
     if (server) {
       await new Promise((resolve) => server.close(resolve));
     }
+    try { require('./lib/scheduler').stopScheduler(); } catch { /* ignore */ }
     if (importWorker) {
       await importWorker.terminate().catch(() => { /* ignore */ });
       importWorker = null;

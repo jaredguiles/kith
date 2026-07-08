@@ -82,7 +82,14 @@ router.get('/dashboard', async (req, res, next) => {
        WHERE n.deleted_at IS NULL ${showSpicy ? '' : 'AND n.is_spicy = 0'}
        ORDER BY n.created_at DESC LIMIT 10`
     );
-    const combined = [...activity, ...notes]
+    // recent interactions (one-tap touchpoints) as part of activity
+    const interactions = await query(
+      `SELECT i.id, CONCAT('interaction:', i.type) AS type, i.note AS title, i.created_at,
+              c.id AS contact_id, c.display_name AS contact_name
+       FROM interactions i JOIN contacts c ON c.id = i.contact_id AND c.deleted_at IS NULL ${scope}
+       ORDER BY i.created_at DESC LIMIT 10`
+    );
+    const combined = [...activity, ...notes, ...interactions]
       .map((a) => (a.is_spicy
         ? { ...a, title: decryptField(a.title), description: decryptField(a.description) }
         : a))

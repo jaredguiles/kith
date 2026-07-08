@@ -539,6 +539,36 @@ const TABLES = [
     source VARCHAR(20) NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
+
+  // interactions — one-tap touchpoint log (distinct from notes/timeline)
+  `CREATE TABLE IF NOT EXISTS interactions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    contact_id INT NOT NULL,
+    owner_user_id INT NOT NULL,
+    type ENUM('call','text','met','email','video','gift','social','other') NOT NULL DEFAULT 'other',
+    note VARCHAR(500) NULL,
+    occurred_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_interactions_contact FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE CASCADE,
+    CONSTRAINT fk_interactions_owner FOREIGN KEY (owner_user_id) REFERENCES users(id),
+    INDEX idx_interactions_contact_occurred (contact_id, occurred_at),
+    INDEX idx_interactions_owner_occurred (owner_user_id, occurred_at)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
+
+  // push_subscriptions — Web Push (VAPID) endpoints per user
+  `CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    endpoint VARCHAR(500) NOT NULL,
+    p256dh VARCHAR(255) NOT NULL,
+    auth VARCHAR(255) NOT NULL,
+    user_agent VARCHAR(255) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_used_at TIMESTAMP NULL,
+    CONSTRAINT fk_push_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_endpoint (endpoint(255)),
+    INDEX idx_push_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 ];
 
 // ---------------------------------------------------------------------------
@@ -669,6 +699,15 @@ async function ensureColumns() {
   // idempotent FK-add would need extra information_schema plumbing for little
   // gain. Code treats a dangling/soft-deleted self_contact_id as "not linked".
   await ensureColumn('users', 'self_contact_id', 'INT NULL');
+
+  // Notification + digest + nudge delivery preferences (per-user).
+  await ensureColumn('users', 'notify_email', 'VARCHAR(255) NULL');
+  await ensureColumn('users', 'digest_weekly', 'BOOLEAN NOT NULL DEFAULT 1');
+  await ensureColumn('users', 'digest_day', 'TINYINT NOT NULL DEFAULT 1');
+  await ensureColumn('users', 'nudge_birthdays', 'BOOLEAN NOT NULL DEFAULT 1');
+  await ensureColumn('users', 'nudge_reminders', 'BOOLEAN NOT NULL DEFAULT 1');
+  await ensureColumn('users', 'nudge_out_of_touch', 'BOOLEAN NOT NULL DEFAULT 1');
+  await ensureColumn('users', 'notify_channel', "ENUM('email','push','both','none') NOT NULL DEFAULT 'email'");
 }
 
 // ---------------------------------------------------------------------------

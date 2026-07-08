@@ -681,6 +681,7 @@ export async function renderContactDetail(el, id) {
             ${canEdit ? `<button class="rec-act" data-action="add-tag">+ Tag</button>` : ''}
           </div>` : ''}
         </div>
+        ${canEdit && !isBasic ? `<div id="interaction-bar" class="rec-quicklog"></div>` : ''}
       </div>
     </div>
 
@@ -735,11 +736,15 @@ export async function renderContactDetail(el, id) {
         ${!isBasic ? `
         <div class="rec-section" id="timeline-card">
           ${sectionHeader('04', 'Timeline')}
+          <div id="contact-interactions"></div>
           <div id="contact-timeline"><div class="text-sm text-muted">Loading…</div></div>
         </div>
         <div class="rec-section" id="media-card">
           ${sectionHeader('05', 'Media · Contact sheet')}
           <div id="contact-media"><div class="text-sm text-muted">Loading…</div></div>
+        </div>
+        <div class="rec-section" id="messages-card" hidden>
+          <div id="contact-messages"></div>
         </div>` : ''}
       </div>
     </div>

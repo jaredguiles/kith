@@ -5,6 +5,7 @@ import { esc, initials, debounce, fmtDateTime } from './utils.js';
 import { icon } from './icons.js';
 import { toast, openModal, modalShell, toggleSwitch, emptyState, confirmModal, logoMark, recNo } from './components.js';
 import { renderPage, pageTitles } from './pages.js';
+import { searchPeople, ensureIndex, invalidateSearchIndex } from './search-index.js';
 
 // ---------------------------------------------------------------- state
 export const state = {
@@ -289,6 +290,9 @@ function shellHtml() {
 }
 
 export async function refreshSidebarLists() {
+  // Contact roster may have changed (create/delete/rename/favorite) — mark the
+  // command-palette search index stale so it rebuilds on next open.
+  invalidateSearchIndex();
   try {
     const [favData, groupData] = await Promise.all([
       api.get('/api/contacts' + qs({ favorites: 1, limit: 20 })),
@@ -466,8 +470,11 @@ export function openCommandPalette() {
     <div class="cmdk" role="dialog" aria-label="Command palette">
       <input class="cmdk-input" placeholder="Search people, events, notes, groups…" autocomplete="off">
       <div class="cmdk-results" id="cmdk-results"></div>
+      <div class="cmdk-foot"><span class="cmdk-kbd">↑↓</span> navigate <span class="cmdk-kbd">↵</span> open · people search is typo-tolerant</div>
     </div>`;
   document.body.appendChild(overlay);
+  // Warm the client-side people index so the first keystroke is instant.
+  ensureIndex().catch(() => {});
   const input = overlay.querySelector('.cmdk-input');
   const results = overlay.querySelector('#cmdk-results');
   let selected = 0;
@@ -495,10 +502,11 @@ export function openCommandPalette() {
     document.removeEventListener('keydown', keyHandler);
   };
 
-  // Sectioned results from /api/search: People / Events / Notes / Groups / Actions.
-  const renderResults = (res, q) => {
+  // Sectioned results: People (MiniSearch, client-side fuzzy) + Events / Notes
+  // / Groups from /api/search (server-side) + Actions.
+  const renderResults = (res, q, people) => {
     const matchedActions = actions.filter((a) => !q || a.label.toLowerCase().includes(q.toLowerCase()));
-    const people = res?.contacts || [];
+    people = people || [];
     const events = res?.events || [];
     const notes = res?.notes || [];
     const groups = res?.groups || [];
@@ -555,13 +563,20 @@ export function openCommandPalette() {
 
   const doSearch = debounce(async (q) => {
     let res = null;
+    let people = [];
     if (q && q.length >= 1) {
-      try {
-        res = await api.get('/api/search' + qs({ q }));
-      } catch { /* not logged in or error */ }
+      // People: instant client-side MiniSearch. Notes/events/groups: server.
+      const [pplRes, srvRes] = await Promise.allSettled([
+        searchPeople(q),
+        api.get('/api/search' + qs({ q })),
+      ]);
+      if (pplRes.status === 'fulfilled') people = pplRes.value;
+      if (srvRes.status === 'fulfilled') res = srvRes.value;
+      // Fallback: if the index yielded nothing, use server contact hits.
+      if (!people.length && res?.contacts?.length) people = res.contacts;
     }
-    renderResults(res, q);
-  }, 200);
+    renderResults(res, q, people);
+  }, 160);
 
   const keyHandler = (e) => {
     if (e.key === 'Escape') { close(); return; }

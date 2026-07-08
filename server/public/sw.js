@@ -3,7 +3,7 @@
 // network pass-through.
 //
 // Deploys MUST bump VERSION so old caches are purged on activate.
-const VERSION = 'v13';
+const VERSION = 'v14';
 const CACHE = `kith-${VERSION}`;
 
 const SHELL = [
@@ -21,6 +21,8 @@ const SHELL = [
   '/js/phonefmt.js',
   '/js/groups.js',
   '/js/events.js',
+  '/js/interactions.js',
+  '/js/search-index.js',
   '/js/media.js',
   '/js/spicy.js',
   '/js/dashboard.js',
@@ -32,6 +34,7 @@ const SHELL = [
   '/js/trashpage.js',
   '/vendor/leaflet/leaflet.js',
   '/vendor/leaflet/leaflet.css',
+  '/vendor/minisearch/minisearch.js',
   '/vendor/leaflet/images/marker-icon.png',
   '/vendor/leaflet/images/marker-icon-2x.png',
   '/vendor/leaflet/images/marker-shadow.png',
@@ -100,6 +103,44 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(() => cached || new Response('Offline', { status: 503, statusText: 'Offline' }));
       return cached || network;
+    })
+  );
+});
+
+// ------------------------------------------------------------- push
+// Server sends JSON: { title, body, url }. Falls back gracefully if the
+// payload is plain text or absent.
+self.addEventListener('push', (event) => {
+  let data = {};
+  if (event.data) {
+    try { data = event.data.json(); }
+    catch { data = { body: event.data.text() }; }
+  }
+  const title = data.title || 'Kith';
+  const options = {
+    body: data.body || '',
+    icon: '/assets/icons/icon-192.png',
+    badge: '/assets/icons/icon-192.png',
+    tag: data.tag || undefined,
+    data: { url: data.url || '/' },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Focus an existing client at the target url, or open a new window.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ('focus' in client) {
+          client.focus();
+          if ('navigate' in client && target) client.navigate(target).catch(() => {});
+          return;
+        }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(target);
     })
   );
 });

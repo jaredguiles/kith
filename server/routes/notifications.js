@@ -7,9 +7,19 @@ const express = require('express');
 const { query } = require('../database/connection');
 const { requireAuth, isAdmin } = require('../middleware/auth');
 const { spicyVisible } = require('./contacts');
+const scheduler = require('../lib/scheduler');
 
 const router = express.Router();
 router.use(requireAuth);
+
+// --------------------------------------------------------------- prefs
+// The notify_* / digest_* / nudge_* fields the settings UI reads/writes.
+const NOTIFY_CHANNELS = ['email', 'push', 'both', 'none'];
+const BOOL_FIELDS = ['digest_weekly', 'nudge_birthdays', 'nudge_reminders', 'nudge_out_of_touch'];
+
+function isEmailish(v) {
+  return typeof v === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+}
 
 async function derivedNotifications(user) {
   const showSpicy = await spicyVisible(user);
@@ -139,6 +149,84 @@ router.post('/:id/dismiss', async (req, res, next) => {
     await query('UPDATE notifications SET dismissed_at = NOW() WHERE id = ? AND user_id = ?', [id, req.user.id]);
     res.json({ ok: true });
   } catch (err) { next(err); }
+});
+
+// GET /api/notifications/prefs — the user's notify_/digest_/nudge_ settings
+router.get('/prefs', async (req, res, next) => {
+  try {
+    const rows = await query(
+      `SELECT notify_email, notify_channel, digest_weekly, digest_day,
+              nudge_birthdays, nudge_reminders, nudge_out_of_touch, email
+       FROM users WHERE id = ?`,
+      [req.user.id]
+    );
+    const u = rows[0] || {};
+    res.json({
+      prefs: {
+        notify_email: u.notify_email || null,
+        notify_channel: u.notify_channel || 'email',
+        digest_weekly: Boolean(u.digest_weekly),
+        digest_day: Number(u.digest_day ?? 1),
+        nudge_birthdays: Boolean(u.nudge_birthdays),
+        nudge_reminders: Boolean(u.nudge_reminders),
+        nudge_out_of_touch: Boolean(u.nudge_out_of_touch),
+        account_email: u.email || null,
+      },
+    });
+  } catch (err) { next(err); }
+});
+
+// PUT /api/notifications/prefs — update notify_/digest_/nudge_ settings
+router.put('/prefs', async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const updates = [];
+    const params = [];
+
+    for (const f of BOOL_FIELDS) {
+      if (body[f] !== undefined) {
+        if (typeof body[f] !== 'boolean') return res.status(400).json({ error: `${f} must be a boolean` });
+        updates.push(`${f} = ?`); params.push(body[f] ? 1 : 0);
+      }
+    }
+    if (body.digest_day !== undefined) {
+      const d = Number(body.digest_day);
+      if (!Number.isInteger(d) || d < 0 || d > 6) return res.status(400).json({ error: 'digest_day must be 0-6' });
+      updates.push('digest_day = ?'); params.push(d);
+    }
+    if (body.notify_channel !== undefined) {
+      if (!NOTIFY_CHANNELS.includes(body.notify_channel)) {
+        return res.status(400).json({ error: `notify_channel must be one of: ${NOTIFY_CHANNELS.join(', ')}` });
+      }
+      updates.push('notify_channel = ?'); params.push(body.notify_channel);
+    }
+    if (body.notify_email !== undefined) {
+      if (body.notify_email === null || body.notify_email === '') {
+        updates.push('notify_email = ?'); params.push(null);
+      } else if (!isEmailish(body.notify_email)) {
+        return res.status(400).json({ error: 'notify_email must be a valid email address' });
+      } else {
+        updates.push('notify_email = ?'); params.push(String(body.notify_email).trim());
+      }
+    }
+
+    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
+    params.push(req.user.id);
+    await query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// POST /api/notifications/test-digest — preview: run the weekly digest for just
+// the current user immediately. Wrapped so it never 500s.
+router.post('/test-digest', async (req, res, next) => {
+  try {
+    const sent = await scheduler.runWeeklyDigest(req.user.id);
+    res.json({ ok: true, sent });
+  } catch (err) {
+    console.error('[notifications] test-digest failed:', err.message);
+    res.json({ ok: false, error: 'Digest preview could not be sent' });
+  }
 });
 
 module.exports = router;
