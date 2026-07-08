@@ -743,16 +743,23 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
   position: relative;
   transition: background var(--spicy-duration) ease;
 }
-.rec-portrait .av {
+.rec-portrait .av,
+.rec-portrait .av.lg,
+.rec-portrait .av.sm {
   position: absolute; inset: 0;
   width: 100%; height: 100%;
   border: none; border-radius: 0;
   background: none;
+  overflow: hidden;
   font-family: var(--font-serif);
   font-size: 44px; font-weight: 400;
   color: var(--ink);
 }
-.rec-portrait .av img { border-radius: 0; }
+.rec-portrait .av img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  border-radius: 0; object-fit: cover;
+}
 .rec-portrait-cap {
   position: absolute; bottom: 5px; left: 6px;
   font-family: var(--font-mono);
