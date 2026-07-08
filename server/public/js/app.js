@@ -146,34 +146,6 @@ function promptSpicyPin() {
   });
 }
 
-// ---------------------------------------------------------------- accent
-function applyAccentSettings() {
-  const rootStyle = document.documentElement.style;
-  const accent = state.settings.accent_color;
-  const spicy = state.settings.spicy_accent_color;
-  if (accent && /^#[0-9a-fA-F]{6}$/.test(accent)) {
-    rootStyle.setProperty('--accent', accent);
-    rootStyle.setProperty('--accent-hover', shade(accent, -12));
-    rootStyle.setProperty('--accent-subtle', hexToRgba(accent, 0.07));
-    rootStyle.setProperty('--accent-border', hexToRgba(accent, 0.18));
-    rootStyle.setProperty('--accent-glow', hexToRgba(accent, 0.10));
-  }
-  if (spicy && /^#[0-9a-fA-F]{6}$/.test(spicy)) {
-    rootStyle.setProperty('--spicy-accent-color', spicy);
-    rootStyle.setProperty('--spicy-accent-hover', shade(spicy, -12));
-  }
-}
-function hexToRgba(hex, a) {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
-}
-function shade(hex, pct) {
-  const n = parseInt(hex.slice(1), 16);
-  const f = (c) => Math.max(0, Math.min(255, Math.round(c * (1 + pct / 100))));
-  const r = f((n >> 16) & 255), g = f((n >> 8) & 255), b = f(n & 255);
-  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
-}
-
 // ----------------------------------------------------------------- theme
 const THEME_PREFS = ['dark', 'light', 'system'];
 let systemThemeMedia = null;
@@ -801,7 +773,6 @@ async function start() {
     return;
   }
   await loadContext();
-  applyAccentSettings();
   applyTheme(getThemePref());
   document.body.classList.toggle('spicy-mode', state.spicyActive);
   root.innerHTML = shellHtml();
@@ -816,9 +787,20 @@ async function start() {
 
 async function boot() {
   // PWA service worker — HTTPS only (plain-HTTP dev skips it to avoid cache
-  // hell) and never allowed to break the app.
+  // hell) and never allowed to break the app. When a NEW worker takes control
+  // (deploy), reload once so users see the fresh assets without a manual
+  // cache clear. The flag guards against reload loops.
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     try {
+      let swReloaded = false;
+      // first-ever install also fires controllerchange (clients.claim) —
+      // only reload when a page that ALREADY had a controller gets a new one.
+      const hadController = Boolean(navigator.serviceWorker.controller);
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (swReloaded || !hadController) return;
+        swReloaded = true;
+        location.reload();
+      });
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     } catch { /* never fatal */ }
   }

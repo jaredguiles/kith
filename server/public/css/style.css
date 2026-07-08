@@ -724,6 +724,9 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
 .rec-act-primary { color: var(--ink); border-bottom: 1px solid var(--ink); }
 .rec-act-danger:hover { color: var(--red); }
 .rec-act.active { color: var(--accent); }
+/* EDIT toggles: quiet at rest, unmistakably active when on */
+.rec-act-edit { color: var(--ink); }
+.rec-act-edit.active { color: var(--accent); border-bottom: 1px solid var(--accent); }
 .rec-rule-strong { border-top: 1px solid var(--ink); margin-top: 14px; }
 
 .rec-dossier {
@@ -771,7 +774,7 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
   letter-spacing: -0.02em; line-height: 1;
   margin: 6px 0 0;
   color: var(--ink);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .rec-nick { font-family: var(--font-serif); font-style: italic; font-size: 17px; color: var(--muted); margin-top: 5px; }
 .rec-meta-line {
@@ -779,7 +782,7 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
   font-size: 11px; letter-spacing: 0.05em;
   color: var(--muted);
   margin-top: 11px;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .rec-status-row {
   display: flex; align-items: center; gap: 24px;
@@ -798,6 +801,9 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
   color: var(--accent);
   transition: color var(--spicy-duration) ease;
 }
+/* status values ("Married", "In a relationship") must never split mid-word;
+   .rec-status-row wraps whole clusters, so the value gets a full line. */
+.rec-status .rec-status-v, .rec-status .rec-status-v .ie-val { white-space: nowrap; word-break: normal; }
 /* 5-square rating — restyles .star-rating buttons into filled/hollow squares */
 .rec-squares .star-rating { display: inline-flex; gap: 4px; }
 .rec-squares .star {
@@ -816,9 +822,10 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
 .rec-tags { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; min-width: 0; }
 .rec-tags .tag-pill, .rec-tags .group-badge { border: none; background: none; padding: 0; }
 
-/* key/value mono rows (CONTACT section) */
+/* key/value mono rows (CONTACT section): key left, value+actions as one
+   right-aligned cluster (margin-left:auto on the value — never centered). */
 .rec-kv {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  display: flex; align-items: baseline; gap: 10px;
   padding: 6px 0;
   font-family: var(--font-mono);
   font-size: 12.5px;
@@ -829,8 +836,9 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
   color: var(--muted);
   flex-shrink: 0;
 }
-.rec-kv .rec-kv-val { flex: 0 1 auto; text-align: right; min-width: 0; overflow-wrap: anywhere; }
+.rec-kv .rec-kv-val { flex: 0 1 auto; margin-left: auto; text-align: right; min-width: 0; overflow-wrap: break-word; }
 .rec-kv .rec-kv-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.rec-kv .rec-kv-actions:empty { display: none; }
 .rec-kv .sat-icon { display: none; }
 .rec-primary-dot {
   display: inline-block;
@@ -851,12 +859,9 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
 .rec-part-val {
   flex: 0 1 auto;
   text-align: right; min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 65%;
+  overflow-wrap: break-word;
 }
-/* editable / link values contain flex children — let them own the ellipsis */
-.rec-part-val a { overflow: hidden; text-overflow: ellipsis; }
 
 /* serif prose blocks (bio / notes) */
 .rec-prose, .rec-prose .ie-val {
@@ -2006,18 +2011,23 @@ svg.sat-icon {
   background: var(--accent-weak);
   box-shadow: 0 1px 0 0 var(--accent);
 }
-.ie-field .ie-val { white-space: pre-wrap; word-break: break-word; }
-/* Particulars rows: keep the value on one line (ellipsis) so the dotted-leader
-   row stays a single ~31px line instead of wrapping to 62px. The value span,
-   its ie-field wrapper, and the ie-val text must all clip. */
-.rec-leader { align-items: center; }
-.rec-part-val { flex: 0 1 auto; min-width: 0; overflow: hidden; }
-.rec-part-val .ie-field { max-width: 100%; min-width: 0; }
+/* word-break:normal — never split words mid-word; overflow-wrap only kicks in
+   for genuinely unbroken strings (URLs) and does not shrink min-content, so
+   flex items never collapse to one-character-per-line. */
+.ie-field .ie-val { white-space: pre-wrap; word-break: normal; overflow-wrap: break-word; }
+/* Particulars rows: values are right-aligned and wrap at WORD boundaries only
+   — no ellipsis, no mid-word breaks. The dotted leader sits on the FIRST
+   line's baseline (.rec-leader is baseline-aligned); extra lines stack below.
+   Short values stay on one line; max-width:65% keeps key+dots present. */
+.rec-part-val { flex: 0 1 auto; min-width: 0; max-width: 65%; }
+/* the hover-highlight negative-margin trick (-1px -4px) breaks flex intrinsic
+   sizing here and made even short values wrap — keep only the vertical part */
+.rec-part-val .ie-field { max-width: 100%; min-width: 0; padding: 1px 0; margin: -1px 0; }
 .rec-part-val .ie-field .ie-val {
-  white-space: nowrap; word-break: normal;
-  overflow: hidden; text-overflow: ellipsis; display: block; min-width: 0;
+  white-space: normal; word-break: normal; overflow-wrap: break-word;
+  text-align: right; min-width: 0;
 }
-.rec-part-val > a { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: inline-block; max-width: 100%; }
+.rec-part-val > a { overflow-wrap: break-word; }
 .ie-field.ie-on .ie-val { border-bottom: 1px dotted var(--accent); }
 .ie-add {
   display: inline-flex; align-items: center; gap: 4px;

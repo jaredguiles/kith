@@ -546,6 +546,8 @@ export async function renderContactDetail(el, id) {
     occupation: { type: 'text', label: 'Occupation', value: c.occupation },
     company: { type: 'text', label: 'Company', value: c.company },
     website: { type: 'text', label: 'Website', value: c.website, placeholder: 'https://' },
+    email: { type: 'text', label: 'Primary email', value: c.email, placeholder: 'name@example.com' },
+    phone: { type: 'text', label: 'Primary phone', value: c.phone, placeholder: '+1 555 000 0000' },
     languages: { type: 'langs', label: 'Languages', value: c.languages },
     ethnicity: { type: 'text', label: 'Ethnicity', value: c.ethnicity },
     how_we_met: { type: 'text', label: 'How we met', value: c.how_we_met },
@@ -593,15 +595,23 @@ export async function renderContactDetail(el, id) {
       <span class="rec-kv-val">${valueHtml}</span>
       ${actionsHtml ? `<span class="rec-kv-actions">${actionsHtml}</span>` : ''}
     </div>`;
-  const satActions = (withEdit) => `
-    ${withEdit && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
-    ${withEdit ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}`;
+  // edit affordances only exist in edit mode — view mode is read-only rows
+  const satActions = (withEdit) => withEdit && editMode
+    ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>
+       <button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>`
+    : '';
   const primaryDot = '<span class="rec-primary-dot" title="Primary"></span>';
   const canSat = canEdit && !isBasic;
 
+  // scalar contact.email/contact.phone ("primary" rows from the create form)
+  // get the same inline-edit affordance as particulars (sparse PUT).
+  const scalarKv = (key, field, displayValue) => kvRow(key,
+    canInline ? `${ieSpan(field, ieDefs[field], displayValue, editMode)}${displayValue ? primaryDot : ''}`
+      : `${esc(displayValue)}${primaryDot}`);
+
   const contactRows = `
-    ${c.email && !emails.some((e) => e.email === c.email) ? kvRow('Email', `${esc(c.email)}${primaryDot}`) : ''}
-    ${c.phone && !phones.some((p) => p.phone === c.phone) ? kvRow('Mobile', `${esc(formatPhoneSafe(c.phone))}${primaryDot}`) : ''}
+    ${c.email && !emails.some((e) => e.email === c.email) ? scalarKv('Email', 'email', c.email) : ''}
+    ${c.phone && !phones.some((p) => p.phone === c.phone) ? scalarKv('Mobile', 'phone', formatPhoneSafe(c.phone)) : ''}
     ${emails.map((e) => kvRow(e.label || 'Email', `${esc(e.email)}${e.is_primary ? primaryDot : ''}`, {
       attrs: `data-sat="emails" data-sat-id="${Number(e.id)}"`, actionsHtml: satActions(canSat),
     })).join('')}
@@ -610,8 +620,9 @@ export async function renderContactDetail(el, id) {
     })).join('')}
     ${(addresses || []).map((a) => kvRow(a.label || 'Address', esc(formatAddress(a)), {
       attrs: `data-sat="addresses" data-sat-id="${Number(a.id)}"`,
-      actionsHtml: `${satActions(canSat)}
-        ${canSat ? `<button class="btn btn-icon" data-locate-addr="${Number(a.id)}" aria-label="Locate on map" title="Locate on map">${icon('map-pin')}</button>` : ''}`,
+      actionsHtml: canSat && editMode
+        ? `${satActions(canSat)}<button class="btn btn-icon" data-locate-addr="${Number(a.id)}" aria-label="Locate on map" title="Locate on map">${icon('map-pin')}</button>`
+        : '',
     })).join('')}
     ${!c.email && !c.phone && !emails.length && !phones.length && !(addresses || []).length ? '<div class="text-sm text-muted" style="padding:6px 0">No contact details yet.</div>' : ''}`;
 
@@ -620,8 +631,8 @@ export async function renderContactDetail(el, id) {
       <span class="rec-part-key">${esc(s.platform || 'Link')}</span>
       <span class="rec-dots"></span>
       <span class="rec-part-val">${s.username ? `@${esc(s.username)}` : ''}${s.url ? ` <a href="${escUrl(s.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open link">${icon('external-link')}</a>` : ''}</span>
-      ${canEdit && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>` : ''}
-      ${canEdit ? `<button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}
+      ${canEdit && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>
+      <button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}
     </div>`).join('') : '<div class="text-sm text-muted" style="padding:6px 0">No social links yet.</div>';
 
   el.innerHTML = `
@@ -630,7 +641,7 @@ export async function renderContactDetail(el, id) {
       <span class="rec-crumb"><a href="#/contacts">People</a> <span>/</span> <span>${esc(c.display_name)}</span></span>
       <span class="rec-actions">
         ${access !== 'shared' ? `<button class="rec-act ${c.is_favorite ? 'active' : ''}" data-action="fav" aria-label="Toggle favorite" aria-pressed="${c.is_favorite ? 'true' : 'false'}">${c.is_favorite ? 'Favorited' : 'Favorite'}</button>` : ''}
-        ${canInline ? `<button class="rec-act rec-act-primary" data-action="edit" aria-pressed="${editMode}" aria-label="${editMode ? 'Finish editing' : 'Edit'}">${editMode ? 'Done' : 'Edit'}</button>` : ''}
+        ${canInline ? `<button class="rec-act rec-act-edit ${editMode ? 'active' : ''}" data-action="edit" aria-pressed="${editMode}" aria-label="${editMode ? 'Finish editing' : 'Edit'}">${editMode ? 'Done' : 'Edit'}</button>` : ''}
         ${access !== 'shared' ? `<button class="rec-act" data-action="merge" aria-label="Merge">Merge</button>` : ''}
         ${access !== 'shared' ? `<button class="rec-act" data-action="share" aria-label="Share">Share</button>` : ''}
         ${access !== 'shared' ? `<button class="rec-act rec-act-danger" data-action="delete" aria-label="Delete">Delete</button>` : ''}

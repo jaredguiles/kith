@@ -62,12 +62,6 @@ async function renderSettings(el) {
     <div class="rec-section">
       ${sectionHeader('03', 'Appearance')}
       ${formGroup('Theme', selectInput('theme_pref', THEME_OPTIONS, getThemePref(), 'data-theme-select'), 'Applies to your account on every device.')}
-      <div class="form-row">
-        ${formGroup('Accent color', `<input class="form-input" type="color" value="${esc(settings.accent_color || '#7c5bf5')}" data-setting-color="accent_color" style="height:38px;padding:4px">`)}
-        ${formGroup('Spicy accent color', `<input class="form-input" type="color" value="${esc(settings.spicy_accent_color || '#c2394f')}" data-setting-color="spicy_accent_color" style="height:38px;padding:4px">`)}
-      </div>
-      <div class="form-hint">Defaults per BRANDING: #7c5bf5 (purple) and #c2394f (rose). Changes apply on save.</div>
-      <button class="btn btn-secondary btn-sm mt-2" data-save-appearance>Save appearance</button>
     </div>
 
     <div class="rec-section">
@@ -159,17 +153,6 @@ async function renderSettings(el) {
       const relTypes = el.querySelector('[data-setting="relationship_types"]').value.split(',').map((s) => s.trim()).filter(Boolean);
       await api.put('/api/settings/relationship_types', { value: relTypes, type: 'json' });
       toast('Settings saved. Reloading.');
-      setTimeout(() => location.reload(), 600);
-    } catch (err) { toast(err.message, 'error'); }
-  });
-
-  // ---- appearance
-  el.querySelector('[data-save-appearance]').addEventListener('click', async () => {
-    try {
-      for (const input of el.querySelectorAll('[data-setting-color]')) {
-        await api.put(`/api/settings/${input.dataset.settingColor}`, { value: input.value, type: 'color' });
-      }
-      toast('Appearance saved. Reloading.');
       setTimeout(() => location.reload(), 600);
     } catch (err) { toast(err.message, 'error'); }
   });
