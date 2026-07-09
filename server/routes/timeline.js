@@ -404,4 +404,18 @@ messagesRouter.post('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+messagesRouter.delete('/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Message not found' });
+    const rows = await query('SELECT contact_id FROM messages WHERE id = ?', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Message not found' });
+    const found = await contactAccess(req.user, rows[0].contact_id);
+    if (!found) return res.status(404).json({ error: 'Message not found' });
+    if (found.access === 'shared' && found.share.permissions !== 'edit') return res.status(403).json({ error: 'Read-only access' });
+    await query('DELETE FROM messages WHERE id = ?', [id]);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 module.exports = { timelineRouter, notesRouter, remindersRouter, messagesRouter };

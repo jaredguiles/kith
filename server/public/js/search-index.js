@@ -42,7 +42,7 @@ async function build() {
   const ms = new MiniSearch({
     fields: FIELDS,
     storeFields: STORE,
-    searchOptions: { prefix: true, fuzzy: 0.2, boost: { display_name: 3, nickname: 2 } },
+    searchOptions: { prefix: true, fuzzy: 0.3, maxFuzzy: 4, boost: { display_name: 3, nickname: 2 } },
   });
   // /api/contacts caps limit at 200 server-side; fetch the full first page.
   const data = await api.get('/api/contacts' + qs({ limit: 200, sort: 'name' }));
