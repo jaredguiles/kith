@@ -101,7 +101,21 @@ function groupExactPins(pins, precision = 5) {
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push({ ...p, lat, lng });
   }
-  return [...buckets.values()];
+  return [...buckets.values()].map(dedupeByContact);
+}
+
+// Within a co-located group, never list the same person twice — a contact with
+// two addresses that round to the same point, or an address + free-text
+// location at the same spot, must appear once. Keeps the first occurrence.
+function dedupeByContact(group) {
+  const seen = new Set();
+  const out = [];
+  for (const p of group) {
+    if (seen.has(p.contact_id)) continue;
+    seen.add(p.contact_id);
+    out.push(p);
+  }
+  return out;
 }
 
 function pinPopupHtml(p) {

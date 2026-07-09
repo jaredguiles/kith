@@ -3,7 +3,7 @@
 // network pass-through.
 //
 // Deploys MUST bump VERSION so old caches are purged on activate.
-const VERSION = 'v17';
+const VERSION = 'v18';
 const CACHE = `kith-${VERSION}`;
 
 const SHELL = [
