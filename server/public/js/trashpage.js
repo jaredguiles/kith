@@ -34,7 +34,7 @@ function sectionHtml(index, title, rows) {
 
 async function renderTrashPage(el) {
   el.innerHTML = `
-  <div class="page-inner" style="max-width:720px">
+  <div class="page-inner">
     <div class="rec-toolbar">
       <span class="rec-crumb"><span>Trash</span></span>
     </div>

@@ -19,7 +19,7 @@ async function renderSettings(el) {
   if (state.user.role === 'user') {
     // Non-admins get their personal Account & security page here.
     el.innerHTML = `
-    <div class="page-inner" style="max-width:760px">
+    <div class="page-inner">
       <div class="rec-toolbar"><span class="rec-crumb"><span>Account & Security</span></span></div>
       <div class="rec-rule-strong mb-4"></div>
       <div class="rec-section" id="account-section"><div class="text-sm text-muted">Loading…</div></div>
@@ -48,7 +48,7 @@ async function renderSettings(el) {
   const isMainAdmin = state.user.role === 'main_admin';
 
   el.innerHTML = `
-  <div class="page-inner" style="max-width:760px">
+  <div class="page-inner">
     <div class="rec-toolbar"><span class="rec-crumb"><span>Settings</span></span></div>
     <div class="rec-rule-strong mb-4"></div>
 
@@ -446,10 +446,26 @@ function bindPushControls(container) {
     if (statusEl) statusEl.textContent = note || (subscribed ? 'Push is enabled on this device.' : 'Push is off on this device.');
   };
 
+  // Acquire an up-to-date registration: register /sw.js explicitly (don't rely
+  // only on app.js), then update() so a newer waiting worker is fetched. Falls
+  // back to serviceWorker.ready if register isn't available for any reason.
+  const getReg = async () => {
+    try {
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      try { await reg.update(); } catch { /* update is best-effort */ }
+      // If a newer worker is waiting (e.g. one that has the push handler),
+      // activate it now so pushManager operations run against a live handler.
+      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      return reg;
+    } catch {
+      return navigator.serviceWorker.ready;
+    }
+  };
+
   // reflect current subscription state
   (async () => {
     try {
-      const reg = await navigator.serviceWorker.ready;
+      const reg = await getReg();
       const sub = await reg.pushManager.getSubscription();
       setState(Boolean(sub));
     } catch { setState(false); }
@@ -464,21 +480,42 @@ function bindPushControls(container) {
         enableBtn.disabled = false;
         return;
       }
-      const reg = await navigator.serviceWorker.ready;
+      const reg = await getReg();
       const { publicKey } = await api.get('/api/push/key');
       if (!publicKey) throw new Error('Server is missing a push key.');
+
+      // Always re-subscribe fresh: an existing subscription may have been
+      // created with an old VAPID key and would silently fail delivery.
+      // Unsubscribe any existing sub, then subscribe with the current key.
       let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
+      if (sub) {
+        await sub.unsubscribe().catch(() => {});
+        sub = null;
+      }
+      try {
         sub = await reg.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(publicKey),
         });
+      } catch (subErr) {
+        console.error('[push] pushManager.subscribe failed:', subErr.name, subErr.message);
+        toast(`Push subscribe failed: ${subErr.name || 'error'}`, 'error');
+        enableBtn.disabled = false;
+        return;
       }
+
       const json = sub.toJSON();
-      await api.post('/api/push/subscribe', {
-        subscription: { endpoint: sub.endpoint, keys: json.keys },
-        user_agent: navigator.userAgent,
-      });
+      try {
+        await api.post('/api/push/subscribe', {
+          subscription: { endpoint: sub.endpoint, keys: json.keys },
+          user_agent: navigator.userAgent,
+        });
+      } catch (postErr) {
+        console.error('[push] POST /api/push/subscribe failed:', postErr.message);
+        toast(`Couldn't save subscription: ${postErr.message || 'server error'}`, 'error');
+        enableBtn.disabled = false;
+        return;
+      }
       setState(true, 'Push enabled on this device.');
       toast('Push notifications enabled.');
     } catch (err) {
@@ -499,7 +536,7 @@ function bindPushControls(container) {
   disableBtn?.addEventListener('click', async () => {
     disableBtn.disabled = true;
     try {
-      const reg = await navigator.serviceWorker.ready;
+      const reg = await getReg();
       const sub = await reg.pushManager.getSubscription();
       if (sub) {
         await api.post('/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => {});

@@ -150,7 +150,7 @@ function openJournalEntryModal(onSaved) {
 
 async function renderJournalPage(el) {
   el.innerHTML = `
-  <div class="page-inner" style="max-width:720px">
+  <div class="page-inner">
     <div class="rec-toolbar">
       <span class="rec-crumb"><span>Journal</span></span>
       <span class="rec-actions">

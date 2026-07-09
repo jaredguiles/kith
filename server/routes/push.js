@@ -26,9 +26,15 @@ router.post('/subscribe', async (req, res, next) => {
     const p256dh = subscription && subscription.keys && subscription.keys.p256dh;
     const auth = subscription && subscription.keys && subscription.keys.auth;
     if (!endpoint || !p256dh || !auth) {
+      console.warn('[push] subscribe rejected: missing/invalid', {
+        hasEndpoint: Boolean(endpoint),
+        hasKeys: Boolean(p256dh && auth),
+        endpointLen: endpoint ? String(endpoint).length : 0,
+      });
       return res.status(400).json({ error: 'subscription.endpoint and keys.p256dh/auth are required' });
     }
-    if (String(endpoint).length > 500) {
+    if (String(endpoint).length > 1024) {
+      console.warn('[push] subscribe rejected: endpoint too long', { endpointLen: String(endpoint).length });
       return res.status(400).json({ error: 'endpoint too long' });
     }
     const ua = user_agent ? String(user_agent).slice(0, 255) : (req.headers['user-agent'] || '').slice(0, 255) || null;
@@ -41,6 +47,7 @@ router.post('/subscribe', async (req, res, next) => {
          auth = VALUES(auth), user_agent = VALUES(user_agent), last_used_at = NOW()`,
       [req.user.id, String(endpoint), String(p256dh).slice(0, 255), String(auth).slice(0, 255), ua]
     );
+    console.log('[push] subscription saved for user', req.user.id);
     res.status(201).json({ ok: true });
   } catch (err) { next(err); }
 });

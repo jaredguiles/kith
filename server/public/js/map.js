@@ -88,6 +88,22 @@ function clusterPins(pins, cell = 0.02) {
   return [...buckets.values()];
 }
 
+// Group ONLY pins at the (near-)identical coordinate. Used even when broad
+// clustering is off: two people at the exact same lat/lng would otherwise
+// stack precisely on top of each other, leaving only the top marker
+// clickable. Rounding to ~1m (5 decimals) folds duplicate geocodes together.
+function groupExactPins(pins, precision = 5) {
+  const buckets = new Map();
+  for (const p of pins) {
+    const lat = Number(p.lat), lng = Number(p.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+    const key = `${lat.toFixed(precision)}:${lng.toFixed(precision)}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push({ ...p, lat, lng });
+  }
+  return [...buckets.values()];
+}
+
 function pinPopupHtml(p) {
   const img = p.photo_url ? `<img src="${esc(p.photo_url)}" alt="">` : '';
   return `
@@ -194,7 +210,10 @@ async function renderMapPage(el) {
   renderStyleSwitcher(el, map);
 
   const useClusters = pins.length > 50;
-  const groups = useClusters ? clusterPins(pins) : pins.map((p) => [{ ...p, lat: Number(p.lat), lng: Number(p.lng) }]);
+  // Broad clustering above the threshold; otherwise still fold EXACT-coordinate
+  // duplicates so co-located contacts render as one clickable multi-person
+  // marker instead of stacking invisibly.
+  const groups = useClusters ? clusterPins(pins) : groupExactPins(pins);
   const allLatLngs = [];
 
   for (const group of groups) {

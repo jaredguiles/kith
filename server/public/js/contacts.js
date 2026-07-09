@@ -32,12 +32,40 @@ const listState = {
   selectMode: false, selected: new Map(), // id → display_name
 };
 
+// Ordered family → extended → in-laws → step/god → social → generic.
+// selectInput renders a flat list (no <optgroup>), so options are grouped by
+// ordering only. Every value here is a valid backend RELATION_TYPE key.
 const RELATION_TYPES = [
-  { value: 'spouse', label: 'Spouse' }, { value: 'partner', label: 'Partner' },
-  { value: 'parent', label: 'Parent' }, { value: 'child', label: 'Child' },
-  { value: 'sibling', label: 'Sibling' }, { value: 'friend', label: 'Friend' },
-  { value: 'colleague', label: 'Colleague' }, { value: 'introduced_by', label: 'Introduced by' },
-  { value: 'ex', label: 'Ex' }, { value: 'family', label: 'Family' }, { value: 'other', label: 'Other' },
+  // Immediate family
+  { value: 'parent', label: 'Parent' }, { value: 'mother', label: 'Mother' }, { value: 'father', label: 'Father' },
+  { value: 'child', label: 'Child' }, { value: 'son', label: 'Son' }, { value: 'daughter', label: 'Daughter' },
+  { value: 'sibling', label: 'Sibling' }, { value: 'brother', label: 'Brother' }, { value: 'sister', label: 'Sister' },
+  // Spouses / partners
+  { value: 'spouse', label: 'Spouse' }, { value: 'husband', label: 'Husband' }, { value: 'wife', label: 'Wife' },
+  { value: 'partner', label: 'Partner' }, { value: 'ex', label: 'Ex' },
+  // Grandparents / grandchildren
+  { value: 'grandparent', label: 'Grandparent' }, { value: 'grandmother', label: 'Grandmother' }, { value: 'grandfather', label: 'Grandfather' },
+  { value: 'grandchild', label: 'Grandchild' }, { value: 'grandson', label: 'Grandson' }, { value: 'granddaughter', label: 'Granddaughter' },
+  // Extended blood
+  { value: 'aunt', label: 'Aunt' }, { value: 'uncle', label: 'Uncle' },
+  { value: 'niece', label: 'Niece' }, { value: 'nephew', label: 'Nephew' },
+  { value: 'cousin', label: 'Cousin' },
+  // In-laws
+  { value: 'parent_in_law', label: 'Parent-in-law' }, { value: 'mother_in_law', label: 'Mother-in-law' }, { value: 'father_in_law', label: 'Father-in-law' },
+  { value: 'child_in_law', label: 'Child-in-law' }, { value: 'son_in_law', label: 'Son-in-law' }, { value: 'daughter_in_law', label: 'Daughter-in-law' },
+  { value: 'sibling_in_law', label: 'Sibling-in-law' }, { value: 'brother_in_law', label: 'Brother-in-law' }, { value: 'sister_in_law', label: 'Sister-in-law' },
+  // Step / god family
+  { value: 'step_parent', label: 'Step-parent' }, { value: 'step_child', label: 'Step-child' }, { value: 'step_sibling', label: 'Step-sibling' },
+  { value: 'godparent', label: 'Godparent' }, { value: 'godchild', label: 'Godchild' },
+  // Social / professional
+  { value: 'friend', label: 'Friend' }, { value: 'best_friend', label: 'Best friend' },
+  { value: 'colleague', label: 'Colleague' }, { value: 'coworker', label: 'Coworker' },
+  { value: 'boss', label: 'Boss' }, { value: 'manager', label: 'Manager' }, { value: 'report', label: 'Report' },
+  { value: 'mentor', label: 'Mentor' }, { value: 'mentee', label: 'Mentee' },
+  { value: 'neighbor', label: 'Neighbor' }, { value: 'roommate', label: 'Roommate' }, { value: 'acquaintance', label: 'Acquaintance' },
+  { value: 'introduced_by', label: 'Introduced by' },
+  // Generic
+  { value: 'family', label: 'Family' }, { value: 'other', label: 'Other' },
 ];
 
 const GIFT_STATUSES = [
@@ -1215,9 +1243,24 @@ async function renderAddressMiniMap(el, addresses, contact) {
 
   const pts = geocoded.map((a) => [Number(a.latitude), Number(a.longitude)]);
   const map = createMap(mapEl, { center: pts[0], zoom: 13, zoomControl: false, attributionControl: false });
+  // Fold addresses that geocode to the (near-)identical point (~1m, 5 dp) into
+  // one marker so overlapping pins don't stack invisibly; the popup lists every
+  // address label at that spot.
+  const byPoint = new Map();
   for (const a of geocoded) {
+    const lat = Number(a.latitude), lng = Number(a.longitude);
+    const key = `${lat.toFixed(5)}:${lng.toFixed(5)}`;
+    if (!byPoint.has(key)) byPoint.set(key, { lat, lng, labels: [] });
     const label = [a.label, [a.street, a.city].filter(Boolean).join(', ')].filter(Boolean).join(' — ');
-    L.marker([Number(a.latitude), Number(a.longitude)], { title: label || 'Address', icon: avatarPin(L, contact) }).addTo(map);
+    byPoint.get(key).labels.push(label || 'Address');
+  }
+  for (const g of byPoint.values()) {
+    const title = g.labels.join(' · ');
+    const marker = L.marker([g.lat, g.lng], { title, icon: avatarPin(L, contact) }).addTo(map);
+    if (g.labels.length > 1) {
+      marker.bindPopup(`<div class="map-popup">${g.labels.map((l) =>
+        `<div class="map-popup-label">${esc(l)}</div>`).join('')}</div>`, { maxWidth: 260 });
+    }
   }
   const refit = () => {
     map.invalidateSize({ animate: false });

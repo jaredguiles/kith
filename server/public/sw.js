@@ -3,7 +3,7 @@
 // network pass-through.
 //
 // Deploys MUST bump VERSION so old caches are purged on activate.
-const VERSION = 'v15';
+const VERSION = 'v17';
 const CACHE = `kith-${VERSION}`;
 
 const SHELL = [
@@ -79,6 +79,12 @@ self.addEventListener('activate', (event) => {
       .then((keys) => Promise.all(keys.filter((k) => k.startsWith('kith-') && k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
+});
+
+// Allow the page to activate a waiting worker immediately (settings.js enable
+// flow posts this so the push handler in the new SW goes live before subscribe).
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('fetch', (event) => {

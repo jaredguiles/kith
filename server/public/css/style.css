@@ -1979,6 +1979,15 @@ a.btn, a.btn:hover { text-decoration: none; }
   border-radius: 0;
   overflow: hidden;
   border: 1px solid var(--rule);
+  /* Contain Leaflet's internal 400–700 pane/control z-indexes in a stacking
+     context capped at z-index:0 — same containment the map PAGE uses on
+     .map-canvas-wrap — so tiles/controls/attribution can't punch through the
+     modal overlay (z-index:100), modals (~101), or the media lightbox (200).
+     Without isolation, Leaflet's positioned panes escape and render over
+     modals opened while on the contact-detail page. */
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
 }
 /* Leaflet writes an inline width on its container from the host's offsetWidth
    at init; constrain it so a mis-timed measure can't overflow the column. */

@@ -13,22 +13,112 @@ const router = express.Router();
 router.use(requireAuth);
 
 // relation_type (as stored, describing related_contact relative to contact)
-// → inverse label shown when rendering the row from the other side.
+// → the stored relation_type of the reverse-direction row shown on the other
+// side. The map is CLOSED: every value that appears as an inverse is also a
+// key with its own inverse, so the auto-computed reverse type is always a
+// valid RELATION_TYPE (and the duplicate-check lookup in the opposite
+// direction always resolves to a storable type).
 const INVERSE_MAP = {
-  spouse: 'spouse',
-  partner: 'partner',
+  // --- Immediate family: parents/children ---
   parent: 'child',
+  mother: 'child',
+  father: 'child',
   child: 'parent',
+  son: 'parent',
+  daughter: 'parent',
+  // --- Immediate family: siblings ---
   sibling: 'sibling',
-  friend: 'friend',
-  colleague: 'colleague',
-  introduced_by: 'introduced',
+  brother: 'sibling',
+  sister: 'sibling',
+  // --- Spouses / partners ---
+  spouse: 'spouse',
+  husband: 'spouse',
+  wife: 'spouse',
+  partner: 'partner',
   ex: 'ex',
+  // --- Grandparents / grandchildren ---
+  grandparent: 'grandchild',
+  grandmother: 'grandchild',
+  grandfather: 'grandchild',
+  grandchild: 'grandparent',
+  grandson: 'grandparent',
+  granddaughter: 'grandparent',
+  // --- Extended blood ---
+  aunt_uncle: 'niece_nephew',
+  aunt: 'niece_nephew',
+  uncle: 'niece_nephew',
+  niece_nephew: 'aunt_uncle',
+  niece: 'aunt_uncle',
+  nephew: 'aunt_uncle',
+  cousin: 'cousin',
+  // --- In-laws ---
+  parent_in_law: 'child_in_law',
+  mother_in_law: 'child_in_law',
+  father_in_law: 'child_in_law',
+  child_in_law: 'parent_in_law',
+  son_in_law: 'parent_in_law',
+  daughter_in_law: 'parent_in_law',
+  sibling_in_law: 'sibling_in_law',
+  brother_in_law: 'sibling_in_law',
+  sister_in_law: 'sibling_in_law',
+  // --- Step family ---
+  step_parent: 'step_child',
+  step_child: 'step_parent',
+  step_sibling: 'step_sibling',
+  // --- God family ---
+  godparent: 'godchild',
+  godchild: 'godparent',
+  // --- Social / professional ---
+  friend: 'friend',
+  best_friend: 'best_friend',
+  colleague: 'colleague',
+  coworker: 'colleague',
+  boss: 'report',
+  manager: 'report',
+  report: 'boss',
+  mentor: 'mentee',
+  mentee: 'mentor',
+  neighbor: 'neighbor',
+  roommate: 'roommate',
+  acquaintance: 'acquaintance',
+  introduced_by: 'introduced',
+  introduced: 'introduced_by',
+  // --- Generic ---
   family: 'family',
   other: 'other',
 };
 
 const RELATION_TYPES = Object.keys(INVERSE_MAP);
+
+// Human-readable labels for display (both directions). Falls back to a
+// title-cased version of the raw key when a label is not listed.
+const DISPLAY_LABELS = {
+  parent: 'Parent', mother: 'Mother', father: 'Father',
+  child: 'Child', son: 'Son', daughter: 'Daughter',
+  sibling: 'Sibling', brother: 'Brother', sister: 'Sister',
+  spouse: 'Spouse', husband: 'Husband', wife: 'Wife',
+  partner: 'Partner', ex: 'Ex',
+  grandparent: 'Grandparent', grandmother: 'Grandmother', grandfather: 'Grandfather',
+  grandchild: 'Grandchild', grandson: 'Grandson', granddaughter: 'Granddaughter',
+  aunt_uncle: 'Aunt/Uncle', aunt: 'Aunt', uncle: 'Uncle',
+  niece_nephew: 'Niece/Nephew', niece: 'Niece', nephew: 'Nephew',
+  cousin: 'Cousin',
+  parent_in_law: 'Parent-in-law', mother_in_law: 'Mother-in-law', father_in_law: 'Father-in-law',
+  child_in_law: 'Child-in-law', son_in_law: 'Son-in-law', daughter_in_law: 'Daughter-in-law',
+  sibling_in_law: 'Sibling-in-law', brother_in_law: 'Brother-in-law', sister_in_law: 'Sister-in-law',
+  step_parent: 'Step-parent', step_child: 'Step-child', step_sibling: 'Step-sibling',
+  godparent: 'Godparent', godchild: 'Godchild',
+  friend: 'Friend', best_friend: 'Best friend',
+  colleague: 'Colleague', coworker: 'Coworker',
+  boss: 'Boss', manager: 'Manager', report: 'Report',
+  mentor: 'Mentor', mentee: 'Mentee',
+  neighbor: 'Neighbor', roommate: 'Roommate', acquaintance: 'Acquaintance',
+  introduced_by: 'Introduced by', introduced: 'Introduced',
+  family: 'Family', other: 'Other',
+};
+
+const labelFor = (t) => DISPLAY_LABELS[t] || String(t || '')
+  .split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 
 // GET /api/contacts/:id/relationships — both directions
 router.get('/contacts/:id/relationships', requireContactAccess('id'), async (req, res, next) => {
@@ -58,7 +148,7 @@ router.get('/contacts/:id/relationships', requireContactAccess('id'), async (req
         id: r.id,
         other: { id: r.other_id, display_name: r.display_name, photo_url: r.photo_url },
         relation_type: r.relation_type,
-        display_label: r.relation_type,
+        display_label: labelFor(r.relation_type),
         inverse: false,
         notes: r.notes,
         created_at: r.created_at,
@@ -67,7 +157,7 @@ router.get('/contacts/:id/relationships', requireContactAccess('id'), async (req
         id: r.id,
         other: { id: r.other_id, display_name: r.display_name, photo_url: r.photo_url },
         relation_type: r.relation_type,
-        display_label: INVERSE_MAP[r.relation_type] || r.relation_type,
+        display_label: labelFor(INVERSE_MAP[r.relation_type] || r.relation_type),
         inverse: true,
         notes: r.notes,
         created_at: r.created_at,
@@ -146,3 +236,4 @@ router.delete('/relationships/:id', async (req, res, next) => {
 
 module.exports = router;
 module.exports.INVERSE_MAP = INVERSE_MAP;
+module.exports.DISPLAY_LABELS = DISPLAY_LABELS;

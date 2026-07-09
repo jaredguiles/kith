@@ -559,7 +559,7 @@ const TABLES = [
   `CREATE TABLE IF NOT EXISTS push_subscriptions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT NOT NULL,
-    endpoint VARCHAR(500) NOT NULL,
+    endpoint VARCHAR(1024) NOT NULL,
     p256dh VARCHAR(255) NOT NULL,
     auth VARCHAR(255) NOT NULL,
     user_agent VARCHAR(255) NULL,
@@ -666,6 +666,21 @@ async function ensureColumn(table, column, definition) {
   }
 }
 
+// Idempotently widen a VARCHAR column: only ALTER if its current
+// CHARACTER_MAXIMUM_LENGTH is below the target. The endpoint UNIQUE KEY uses a
+// prefix index (endpoint(255)), which stays valid when the column is widened.
+async function ensureVarcharWidth(table, column, minLength, definition) {
+  const rows = await query(
+    `SELECT CHARACTER_MAXIMUM_LENGTH AS len FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [table, column]
+  );
+  if (rows.length && rows[0].len != null && Number(rows[0].len) < minLength) {
+    await query(`ALTER TABLE \`${table}\` MODIFY \`${column}\` ${definition}`);
+    console.log(`[init] widened column ${table}.${column} to ${definition}`);
+  }
+}
+
 async function ensureColumns() {
   // JWT token-version invalidation (logout / password change kills old tokens)
   await ensureColumn('users', 'token_version', 'INT NOT NULL DEFAULT 0');
@@ -708,6 +723,11 @@ async function ensureColumns() {
   await ensureColumn('users', 'nudge_reminders', 'BOOLEAN NOT NULL DEFAULT 1');
   await ensureColumn('users', 'nudge_out_of_touch', 'BOOLEAN NOT NULL DEFAULT 1');
   await ensureColumn('users', 'notify_channel', "ENUM('email','push','both','none') NOT NULL DEFAULT 'email'");
+
+  // Web Push endpoints can exceed 500 chars (Firefox/Edge/Mozilla autopush
+  // URLs). Widen the guard so those subscriptions persist. Prefix UNIQUE KEY
+  // uq_endpoint (endpoint(255)) is unaffected by the wider column.
+  await ensureVarcharWidth('push_subscriptions', 'endpoint', 1024, 'VARCHAR(1024) NOT NULL');
 }
 
 // ---------------------------------------------------------------------------

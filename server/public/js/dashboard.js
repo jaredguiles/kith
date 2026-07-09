@@ -185,10 +185,12 @@ async function renderNotifications(el) {
   const items = data.notifications || [];
 
   el.innerHTML = `
-  <div class="page-inner" style="max-width:720px">
-    <div class="page-header">
-      <div><h1 class="page-title">Notifications</h1><div class="page-subtitle">${items.length} item${items.length === 1 ? '' : 's'}</div></div>
+  <div class="page-inner">
+    <div class="rec-toolbar">
+      <span class="rec-crumb"><span>Notifications</span></span>
     </div>
+    <div class="rec-rule-strong"></div>
+    <div class="rec-count-serif">${items.length} item${items.length === 1 ? '' : 's'} in your feed.</div>
     <div class="card" style="padding:0">
       ${items.length ? items.map((n) => `
         <div class="notif-item ${n.unread ? 'unread' : ''}" data-notif="${esc(String(n.id))}" data-derived="${n.derived ? '1' : '0'}">
