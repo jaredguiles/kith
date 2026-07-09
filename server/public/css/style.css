@@ -2376,47 +2376,34 @@ a.rec-log-who:hover { color: var(--accent); text-decoration: none; }
 .data-table .rec-age { font-size: 12px; }
 
 /* --------------------------------------------------------- family tree */
-.ft-wrap {
-  position: relative;
-  overflow: auto;
-  padding: 18px 6px 26px;
-}
-/* sized via inline style from JS (scrollWidth×scrollHeight) so the global
-   aria-hidden icon floor can never clamp it */
-.ft-lines { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }
-.ft-line { fill: none; stroke: var(--rule-strong); stroke-width: 1.25; }
-.ft-line-partner { stroke: var(--accent); stroke-width: 1.25; }
-.ft-line-step { stroke-dasharray: 3 3; }
-.ft-row { display: flex; align-items: flex-start; gap: 14px; padding: 26px 0; }
-.ft-row + .ft-row { border-top: 1px dotted var(--rule); }
-.ft-row-label {
-  font-family: var(--font-mono);
-  font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
-  color: var(--muted);
-  width: 92px; flex: none;
-  padding-top: 10px;
-}
-.ft-row-nodes { display: flex; flex-wrap: wrap; gap: 22px 26px; min-width: 0; position: relative; z-index: 1; }
-.ft-node {
-  display: flex; align-items: center; gap: 9px;
-  padding: 8px 10px;
-  background: var(--panel);
+/* family-chart (f3) themed to The Record: paper canvas, ink text, palette
+   accents for gendered cards. The vendored CSS scopes everything under .f3
+   and reads these custom properties. */
+.ft-chart {
+  width: 100%;
+  height: calc(100vh - 210px);
+  min-height: 420px;
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-sm);
-  cursor: pointer;
-  min-width: 0;
+  overflow: hidden;
+  background: var(--panel);
 }
-.ft-node:hover { border-color: var(--accent); }
-.ft-node.ft-root { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
-.ft-node.ft-deceased { opacity: 0.72; }
-.ft-node.ft-deceased .av { filter: grayscale(1); }
-.ft-node-meta { min-width: 0; display: flex; flex-direction: column; }
-.ft-node-name {
-  font-family: var(--font-serif); font-size: 14px; color: var(--ink);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+.f3.ft-chart {
+  --background-color: var(--panel);
+  --text-color: var(--ink);
+  --male-color: rgba(43, 85, 102, 0.28);     /* ink-blue wash */
+  --female-color: rgba(138, 47, 43, 0.24);   /* red wash */
+  --genderless-color: rgba(111, 104, 91, 0.22);
+  font-family: var(--font-sans, sans-serif);
 }
-.ft-cross { color: var(--muted); font-size: 11px; }
-.ft-node-dates { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted); }
+[data-theme="dark"] .f3.ft-chart {
+  --male-color: rgba(127, 168, 184, 0.30);
+  --female-color: rgba(207, 138, 132, 0.28);
+  --genderless-color: rgba(139, 130, 113, 0.26);
+}
+.f3.ft-chart div.card { font-size: 13px; }
+.f3.ft-chart div.card-inner { border-radius: var(--radius-sm); border: 1px solid var(--rule-strong); }
+.f3.ft-chart .card-main .card-inner { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
 .ft-search-results {
   position: absolute; top: 100%; left: 0; right: 0;
   z-index: 30;

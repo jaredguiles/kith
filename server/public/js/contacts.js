@@ -20,9 +20,12 @@ import {
 import { pageRenderers } from './pages.js';
 import { state, navigate, refreshSidebarLists, isSpicyOn } from './app.js';
 
-const SEX_OPTIONS = ['', 'Male', 'Female', 'Intersex', 'Non-binary', 'Other', 'Prefer not to say'];
-const PRONOUN_OPTIONS = ['', 'he/him', 'she/her', 'they/them', 'he/they', 'she/they', 'other'];
-const ORIENTATION_OPTIONS = ['', 'Straight', 'Gay', 'Lesbian', 'Bisexual', 'Pansexual', 'Queer', 'Asexual', 'Transgender', 'Non-binary', 'Other'];
+// Sex = assigned at birth (GEDCOM SEX maps here); gender identity is its own
+// field so a transition is a recorded field change, not an overwrite of sex.
+const SEX_OPTIONS = ['', 'Male', 'Female', 'Intersex', 'Other', 'Prefer not to say'];
+const GENDER_IDENTITY_OPTIONS = ['', 'Man', 'Woman', 'Trans man', 'Trans woman', 'Non-binary', 'Genderqueer', 'Genderfluid', 'Agender', 'Bigender', 'Two-Spirit', 'Questioning', 'Other', 'Prefer not to say'];
+const PRONOUN_OPTIONS = ['', 'he/him', 'she/her', 'they/them', 'he/they', 'she/they', 'ze/zir', 'xe/xem', 'it/its', 'any pronouns', 'ask me', 'other'];
+const ORIENTATION_OPTIONS = ['', 'Straight', 'Gay', 'Lesbian', 'Bisexual', 'Pansexual', 'Queer', 'Asexual', 'Aromantic', 'Demisexual', 'Omnisexual', 'Polysexual', 'Questioning', 'Other'];
 const REL_STATUS_OPTIONS = ['', 'Single', 'In a relationship', 'Married', 'Engaged', 'Divorced', 'Widowed', 'Separated', "It's complicated", 'Open relationship', 'Domestic partnership'];
 const SOCIAL_PLATFORMS = ['Instagram', 'Twitter/X', 'LinkedIn', 'Facebook', 'TikTok', 'Snapchat', 'YouTube', 'GitHub', 'Sniffies', 'Grindr', 'Scruff', 'Feeld', 'Hinge', 'Tinder', 'Bumble', 'Website', 'Other'];
 
@@ -54,8 +57,10 @@ const RELATION_TYPES = [
   { value: 'parent_in_law', label: 'Parent-in-law' }, { value: 'mother_in_law', label: 'Mother-in-law' }, { value: 'father_in_law', label: 'Father-in-law' },
   { value: 'child_in_law', label: 'Child-in-law' }, { value: 'son_in_law', label: 'Son-in-law' }, { value: 'daughter_in_law', label: 'Daughter-in-law' },
   { value: 'sibling_in_law', label: 'Sibling-in-law' }, { value: 'brother_in_law', label: 'Brother-in-law' }, { value: 'sister_in_law', label: 'Sister-in-law' },
-  // Step / god family
+  // Step / adoptive / foster / god family
   { value: 'step_parent', label: 'Step-parent' }, { value: 'step_child', label: 'Step-child' }, { value: 'step_sibling', label: 'Step-sibling' },
+  { value: 'adoptive_parent', label: 'Adoptive parent' }, { value: 'adopted_child', label: 'Adopted child' },
+  { value: 'foster_parent', label: 'Foster parent' }, { value: 'foster_child', label: 'Foster child' },
   { value: 'godparent', label: 'Godparent' }, { value: 'godchild', label: 'Godchild' },
   // Social / professional
   { value: 'friend', label: 'Friend' }, { value: 'best_friend', label: 'Best friend' },
@@ -569,10 +574,13 @@ export async function renderContactDetail(el, id) {
   const ieDefs = {
     name: { type: 'name', label: 'Name', values: { first_name: c.first_name, middle_name: c.middle_name, last_name: c.last_name } },
     nickname: { type: 'text', label: 'Nickname', value: c.nickname },
+    maiden_name: { type: 'text', label: 'Maiden name', value: c.maiden_name, placeholder: 'Name before marriage' },
     middle_name: { type: 'text', label: 'Middle name', value: c.middle_name },
     birthday: { type: 'date', label: 'Birthday', value: (c.birthday || '').slice(0, 10) },
+    place_of_birth: { type: 'text', label: 'Place of birth', value: c.place_of_birth },
     is_deceased: { type: 'select', label: 'Living status', value: c.is_deceased ? '1' : '0', options: [{ value: '0', label: 'Living' }, { value: '1', label: 'Deceased' }] },
     date_of_death: { type: 'date', label: 'Date of death', value: (c.date_of_death || '').slice(0, 10) },
+    place_of_death: { type: 'text', label: 'Place of death', value: c.place_of_death },
     location: { type: 'text', label: 'Location', value: c.location },
     occupation: { type: 'text', label: 'Occupation', value: c.occupation },
     company: { type: 'text', label: 'Company', value: c.company },
@@ -581,12 +589,15 @@ export async function renderContactDetail(el, id) {
     phone: { type: 'text', label: 'Primary phone', value: c.phone, placeholder: '+1 555 000 0000' },
     languages: { type: 'langs', label: 'Languages', value: c.languages },
     ethnicity: { type: 'text', label: 'Ethnicity', value: c.ethnicity },
+    religion: { type: 'text', label: 'Religion', value: c.religion },
+    nationality: { type: 'text', label: 'Nationality', value: c.nationality },
     how_we_met: { type: 'text', label: 'How we met', value: c.how_we_met },
     met_date: { type: 'date', label: 'Met date', value: (c.met_date || '').slice(0, 10) },
     bio: { type: 'textarea', label: 'Bio', value: c.bio },
     notes_text: { type: 'textarea', label: 'Notes', value: c.notes_text },
     pronouns: { type: 'select', label: 'Pronouns', value: c.pronouns, options: PRONOUN_OPTIONS },
-    sex: { type: 'select', label: 'Sex', value: c.sex, options: SEX_OPTIONS },
+    sex: { type: 'select', label: 'Sex assigned at birth', value: c.sex, options: SEX_OPTIONS },
+    gender_identity: { type: 'select', label: 'Gender identity', value: c.gender_identity, options: GENDER_IDENTITY_OPTIONS },
     orientation: { type: 'select', label: 'Orientation', value: c.orientation, options: ORIENTATION_OPTIONS },
     relationship_status: { type: 'select', label: 'Relationship status', value: c.relationship_status, options: REL_STATUS_OPTIONS },
     relationship_type: { type: 'select', label: 'Relationship type', value: c.relationship_type, options: relTypes },
@@ -720,11 +731,15 @@ export async function renderContactDetail(el, id) {
         <div class="rec-section">
           ${sectionHeader('01', 'Particulars')}
           ${infoRow('Full name', [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' '))}
+          ${ieRow('Maiden name', 'maiden_name', c.maiden_name)}
           ${ieRow('Birthday', 'birthday', c.birthday ? `${fmtDate(c.birthday)}${age != null ? ` (${age})` : ''}` : '')}
+          ${ieRow('Place of birth', 'place_of_birth', c.place_of_birth)}
           ${ieRow('Living status', 'is_deceased', c.is_deceased ? 'Deceased' : (editMode ? 'Living' : ''))}
           ${c.is_deceased || (canInline && editMode) ? ieRow('Date of death', 'date_of_death', c.date_of_death ? fmtDate(c.date_of_death) : '') : ''}
+          ${c.is_deceased || (canInline && editMode) ? ieRow('Place of death', 'place_of_death', c.place_of_death) : ''}
           ${ieRow('Pronouns', 'pronouns', c.pronouns)}
-          ${ieRow('Sex', 'sex', c.sex)}
+          ${ieRow('Gender identity', 'gender_identity', c.gender_identity)}
+          ${ieRow('Sex at birth', 'sex', c.sex)}
           ${ieRow('Orientation', 'orientation', c.orientation)}
           ${ieRow('Relation', 'relationship_type', c.relationship_type)}
           ${ieRow('Location', 'location', c.location)}
@@ -739,6 +754,8 @@ export async function renderContactDetail(el, id) {
             : c.website ? `<div class="rec-leader"><span class="rec-part-key">Website</span><span class="rec-dots"></span><span class="rec-part-val"><a href="${escUrl(c.website)}" target="_blank" rel="noopener noreferrer">${esc(c.website)}</a></span></div>` : ''}
           ${ieRow('Languages', 'languages', c.languages)}
           ${ieRow('Ethnicity', 'ethnicity', c.ethnicity)}
+          ${ieRow('Religion', 'religion', c.religion)}
+          ${ieRow('Nationality', 'nationality', c.nationality)}
           ${ieRow('How we met', 'how_we_met', c.how_we_met)}
           ${ieRow('Met', 'met_date', c.met_date ? fmtDate(c.met_date) : '')}
           ${ieRow('Keep in touch', 'keep_in_touch_days', c.keep_in_touch_days ?? '')}
@@ -782,7 +799,9 @@ export async function renderContactDetail(el, id) {
 
     ${!isBasic ? `
     <div class="rec-section mt-6" id="relationships-card">
-      ${sectionHeader('07', 'Relationships', canEdit ? `<button class="rec-head-action" data-action="add-relationship">+ Add</button>` : '')}
+      ${sectionHeader('07', 'Relationships',
+        `<a class="rec-head-action" href="#/family?id=${encodeURIComponent(c.id)}&view=family">Family tree</a>` +
+        (canEdit ? `<button class="rec-head-action" data-action="add-relationship">+ Add</button>` : ''))}
       <div id="contact-relationships"><div class="text-sm text-muted">Loading…</div></div>
       ${canEdit ? '<div class="text-xs text-muted mt-2">Linking here updates both people’s profiles.</div>' : ''}
     </div>
@@ -1344,6 +1363,10 @@ export function openContactForm(existing = null, onSaved = null) {
       ${formGroup('Living status', selectInput('is_deceased', [{ value: '0', label: 'Living' }, { value: '1', label: 'Deceased' }], c.is_deceased ? '1' : '0'))}
       ${formGroup('Date of death (optional)', textInput('date_of_death', (c.date_of_death || '').slice(0, 10), 'type="date"'))}
     </div>
+    <div class="form-row">
+      ${formGroup('Place of birth', textInput('place_of_birth', c.place_of_birth))}
+      ${formGroup('Maiden name', textInput('maiden_name', c.maiden_name))}
+    </div>
     <div class="form-group" id="rel-link-group">
       <label class="form-label">Related to… (optional)</label>
       <div class="flex gap-1 flex-wrap mb-1" id="rel-picked"></div>
@@ -1355,12 +1378,16 @@ export function openContactForm(existing = null, onSaved = null) {
       <div class="form-hint">Linking updates both people’s profiles.</div>
     </div>
     <div class="form-row">
-      ${formGroup('Sex', selectInput('sex', SEX_OPTIONS, c.sex))}
+      ${formGroup('Gender identity', selectInput('gender_identity', GENDER_IDENTITY_OPTIONS, c.gender_identity))}
       ${formGroup('Pronouns', selectInput('pronouns', PRONOUN_OPTIONS, c.pronouns))}
     </div>
     <div class="form-row">
+      ${formGroup('Sex assigned at birth', selectInput('sex', SEX_OPTIONS, c.sex))}
       ${formGroup('Orientation', selectInput('orientation', ORIENTATION_OPTIONS, c.orientation))}
+    </div>
+    <div class="form-row">
       ${formGroup('Relationship status', selectInput('relationship_status', REL_STATUS_OPTIONS, c.relationship_status))}
+      ${formGroup('Nationality', textInput('nationality', c.nationality))}
     </div>
     <div class="form-row">
       ${formGroup('Location', textInput('location', c.location))}
@@ -1374,6 +1401,7 @@ export function openContactForm(existing = null, onSaved = null) {
       ${formGroup('Languages', languageFieldHtml('languages', c.languages))}
       ${formGroup('Ethnicity', textInput('ethnicity', c.ethnicity))}
     </div>
+    ${formGroup('Religion', textInput('religion', c.religion))}
     <div class="form-row">
       ${formGroup('How we met', textInput('how_we_met', c.how_we_met))}
       ${formGroup('Met date', textInput('met_date', (c.met_date || '').slice(0, 10), 'type="date"'))}

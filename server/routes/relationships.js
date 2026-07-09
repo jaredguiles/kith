@@ -61,10 +61,14 @@ const INVERSE_MAP = {
   sibling_in_law: 'sibling_in_law',
   brother_in_law: 'sibling_in_law',
   sister_in_law: 'sibling_in_law',
-  // --- Step family ---
+  // --- Step / adoptive / foster family ---
   step_parent: 'step_child',
   step_child: 'step_parent',
   step_sibling: 'step_sibling',
+  adoptive_parent: 'adopted_child',
+  adopted_child: 'adoptive_parent',
+  foster_parent: 'foster_child',
+  foster_child: 'foster_parent',
   // --- God family ---
   godparent: 'godchild',
   godchild: 'godparent',
@@ -107,6 +111,8 @@ const DISPLAY_LABELS = {
   child_in_law: 'Child-in-law', son_in_law: 'Son-in-law', daughter_in_law: 'Daughter-in-law',
   sibling_in_law: 'Sibling-in-law', brother_in_law: 'Brother-in-law', sister_in_law: 'Sister-in-law',
   step_parent: 'Step-parent', step_child: 'Step-child', step_sibling: 'Step-sibling',
+  adoptive_parent: 'Adoptive parent', adopted_child: 'Adopted child',
+  foster_parent: 'Foster parent', foster_child: 'Foster child',
   godparent: 'Godparent', godchild: 'Godchild',
   friend: 'Friend', best_friend: 'Best friend',
   colleague: 'Colleague', coworker: 'Coworker',
@@ -214,8 +220,8 @@ router.post('/contacts/:id/relationships', requireContactAccess('id', { edit: tr
 // ------------------------------------------------------------- family tree
 // Normalized family edge types. A stored relation_type describes
 // related_contact relative to contact: (A, B, 'mother') → B is A's parent.
-const REL_PARENT = ['parent', 'mother', 'father', 'step_parent'];  // related IS contact's parent
-const REL_CHILD = ['child', 'son', 'daughter', 'step_child'];      // related IS contact's child
+const REL_PARENT = ['parent', 'mother', 'father', 'step_parent', 'adoptive_parent', 'foster_parent'];  // related IS contact's parent
+const REL_CHILD = ['child', 'son', 'daughter', 'step_child', 'adopted_child', 'foster_child'];         // related IS contact's child
 const REL_SIBLING = ['sibling', 'brother', 'sister', 'step_sibling'];
 const REL_PARTNER = ['spouse', 'husband', 'wife', 'partner'];
 const FAMILY_TYPES = [...REL_PARENT, ...REL_CHILD, ...REL_SIBLING, ...REL_PARTNER];
@@ -269,7 +275,8 @@ router.get('/contacts/:id/family-tree', requireContactAccess('id'), async (req, 
            SELECT 1 FROM shared_contacts sc WHERE sc.contact_id = c.id AND sc.shared_with_user_id = ${Number(req.user.id)}))`;
     const people = await query(
       `SELECT c.id, c.display_name, c.first_name, c.last_name, c.photo_url,
-              c.birthday, c.is_deceased, c.date_of_death, c.orientation
+              c.birthday, c.is_deceased, c.date_of_death, c.orientation,
+              c.sex, c.gender_identity
        FROM contacts c
        WHERE c.id IN (${idPh}) AND c.deleted_at IS NULL ${scope}`,
       ids

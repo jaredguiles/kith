@@ -31,6 +31,32 @@ const MIGRATIONS = [
       }
     },
   },
+  {
+    version: 3,
+    name: 'contacts-identity-genealogy-fields',
+    up: async (query) => {
+      // Inclusive identity + genealogy metadata. gender_identity is separate
+      // from `sex` (assigned at birth) so transitions are representable —
+      // changes to it are recorded in the per-field change log like any edit.
+      const want = {
+        gender_identity: "ADD COLUMN gender_identity VARCHAR(50) NULL AFTER sex",
+        maiden_name: "ADD COLUMN maiden_name VARCHAR(100) NULL AFTER nickname",
+        place_of_birth: "ADD COLUMN place_of_birth VARCHAR(255) NULL AFTER birthday",
+        place_of_death: "ADD COLUMN place_of_death VARCHAR(255) NULL AFTER date_of_death",
+        religion: "ADD COLUMN religion VARCHAR(100) NULL AFTER ethnicity",
+        nationality: "ADD COLUMN nationality VARCHAR(100) NULL AFTER religion",
+      };
+      const cols = await query(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'contacts'
+           AND COLUMN_NAME IN (${Object.keys(want).map((c) => `'${c}'`).join(',')})`
+      );
+      const have = new Set(cols.map((c) => c.COLUMN_NAME));
+      for (const [col, ddl] of Object.entries(want)) {
+        if (!have.has(col)) await query(`ALTER TABLE contacts ${ddl}`);
+      }
+    },
+  },
 ];
 
 async function ensureVersionTable() {

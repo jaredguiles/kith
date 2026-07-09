@@ -17,6 +17,7 @@ const parsers = {
   google_contacts: require('./parsers/google'),
   vcard: require('./parsers/vcard'),
   csv: require('./parsers/csv'),
+  gedcom: require('./parsers/gedcom'),
 };
 const { findBestMatch } = require('./matcher');
 const { encryptField } = require('../lib/crypto');
@@ -178,7 +179,7 @@ function cleanupJobFiles(job) {
 }
 
 function platformLabel(p) {
-  return { facebook: 'Facebook', instagram: 'Instagram', twitter: 'Twitter/X', google_contacts: 'Google Contacts', vcard: 'vCard', csv: 'CSV' }[p] || p;
+  return { facebook: 'Facebook', instagram: 'Instagram', twitter: 'Twitter/X', google_contacts: 'Google Contacts', vcard: 'vCard', csv: 'CSV', gedcom: 'GEDCOM' }[p] || p;
 }
 
 async function notify(userId, type, title, body, link) {

@@ -12,6 +12,7 @@ import { state, navigate, isSpicyOn, refreshSidebarLists, refreshNotifCount } fr
 
 const PLATFORMS = [
   { value: 'vcard', label: 'vCard (.vcf)', hint: 'Standard contact cards — Apple, Google, Monica exports' },
+  { value: 'gedcom', label: 'GEDCOM (.ged)', hint: 'Family tree files — Ancestry, MyHeritage, FamilySearch, Gramps. People AND their family links import together.' },
   { value: 'csv', label: 'CSV', hint: 'Spreadsheet with a header row; columns mapped before import' },
   { value: 'google_contacts', label: 'Google Contacts / Takeout', hint: '.vcf, .csv, or Takeout .zip' },
   { value: 'facebook', label: 'Facebook export', hint: '.zip from Download Your Information (JSON format)' },
@@ -21,17 +22,18 @@ const PLATFORMS = [
 
 const PLATFORM_LABELS = {
   vcard: 'vCard', csv: 'CSV', google_contacts: 'Google Contacts',
-  facebook: 'Facebook', instagram: 'Instagram', twitter: 'Twitter/X',
+  facebook: 'Facebook', instagram: 'Instagram', twitter: 'Twitter/X', gedcom: 'GEDCOM',
 };
 
 // ------------------------------------------------------------ upload modal
-export function openImportModal() {
+export function openImportModal(preselect = 'vcard') {
+  const initial = PLATFORMS.find((p) => p.value === preselect) || PLATFORMS[0];
   const content = `
-    ${formGroup('Source', selectInput('source_platform', PLATFORMS, 'vcard', 'id="import-platform"'))}
-    <div class="form-hint mb-3" id="platform-hint">${esc(PLATFORMS[0].hint)}</div>
+    ${formGroup('Source', selectInput('source_platform', PLATFORMS, initial.value, 'id="import-platform"'))}
+    <div class="form-hint mb-3" id="platform-hint">${esc(initial.hint)}</div>
     <div class="form-group">
       <label class="form-label">Files</label>
-      <input type="file" id="import-files" class="form-input" multiple accept=".zip,.vcf,.vcard,.csv,.json" style="padding:12px">
+      <input type="file" id="import-files" class="form-input" multiple accept=".zip,.vcf,.vcard,.csv,.json,.ged" style="padding:12px">
     </div>
     <div id="csv-mapping" class="hidden"></div>
     ${isSpicyOn() ? `

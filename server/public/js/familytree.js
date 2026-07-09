@@ -1,88 +1,46 @@
-// Family page — renders the connected family around a root person as a
-// generational tree (ancestors above, descendants below, partners beside).
-// Data: GET /api/contacts/:id/family-tree → { root, people, edges }.
-// Layout is computed client-side (generation rows + barycenter ordering);
-// connectors are drawn into an SVG overlay after the DOM settles.
+// Family page — interactive family tree rendered with family-chart (f3),
+// vendored UMD + d3 v7 (loaded on demand, same pattern as Leaflet).
+// Data: GET /api/contacts/:id/family-tree → { root, people, edges } with
+// normalized edges (parent → child, partner, sibling). Transformed here into
+// f3's datum format: { id, data: {...display}, rels: { parents, spouses,
+// children } } — all ids strings, all links bidirectional.
 
 import { api, qs } from './api.js';
 import { esc, initials, avatarColorIndex, parseDate, debounce } from './utils.js';
 import { icon } from './icons.js';
-import { emptyState } from './components.js';
+import { emptyState, filterPills } from './components.js';
 import { pageRenderers, pageTitles } from './pages.js';
 import { state, navigate } from './app.js';
+import { openImportModal } from './import.js';
 
 pageTitles.family = 'Family';
 
-const NODE_W = 168;
-
-// ------------------------------------------------------------- layout
-/** Assign a generation (depth) to every reachable person. Root = 0; parents
- * are depth-1, children depth+1, partners/siblings equal depth. */
-function assignDepths(rootId, people, edges) {
-  const depth = new Map([[rootId, 0]]);
-  const adj = new Map(); // id → [{ other, delta }]
-  const add = (a, b, delta) => {
-    if (!adj.has(a)) adj.set(a, []);
-    adj.get(a).push({ other: b, delta });
-  };
-  for (const e of edges) {
-    if (e.type === 'parent') { add(e.from, e.to, +1); add(e.to, e.from, -1); }
-    else { add(e.from, e.to, 0); add(e.to, e.from, 0); }
-  }
-  const queue = [rootId];
-  while (queue.length) {
-    const id = queue.shift();
-    for (const { other, delta } of adj.get(id) || []) {
-      if (!depth.has(other)) {
-        depth.set(other, depth.get(id) + delta);
-        queue.push(other);
-      }
-    }
-  }
-  // anyone unreachable through visible edges sits on the root's row
-  for (const p of people) if (!depth.has(p.id)) depth.set(p.id, 0);
-  return depth;
+// ------------------------------------------------------------ vendor loader
+// d3 must be a global BEFORE family-chart's UMD factory runs.
+let f3Promise = null;
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => { s.remove(); reject(new Error(`Couldn't load ${src}`)); };
+    document.head.appendChild(s);
+  });
+}
+export function loadFamilyChart() {
+  if (window.f3) return Promise.resolve(window.f3);
+  if (f3Promise) return f3Promise;
+  f3Promise = (window.d3 ? Promise.resolve() : loadScript('/vendor/d3/d3.min.js'))
+    .then(() => loadScript('/vendor/family-chart/family-chart.min.js'))
+    .then(() => {
+      if (!window.f3) throw new Error('family-chart failed to initialize');
+      return window.f3;
+    })
+    .catch((err) => { f3Promise = null; throw err; });
+  return f3Promise;
 }
 
-/** Order each generation row so people sit near their relatives (a few
- * barycenter sweeps over parent/child/partner neighbors). */
-function orderRows(rows, edges) {
-  const neighbors = new Map();
-  const add = (a, b) => {
-    if (!neighbors.has(a)) neighbors.set(a, []);
-    neighbors.get(a).push(b);
-  };
-  for (const e of edges) { add(e.from, e.to); add(e.to, e.from); }
-  const pos = new Map();
-  const sync = () => rows.forEach((row) => row.forEach((id, i) => pos.set(id, i)));
-  sync();
-  for (let sweep = 0; sweep < 4; sweep++) {
-    for (const row of rows) {
-      row.sort((a, b) => {
-        const bary = (id) => {
-          const ns = (neighbors.get(id) || []).filter((n) => pos.has(n));
-          return ns.length ? ns.reduce((s, n) => s + pos.get(n), 0) / ns.length : pos.get(id);
-        };
-        return bary(a) - bary(b) || pos.get(a) - pos.get(b);
-      });
-      sync();
-    }
-  }
-  // partners always adjacent: pull each partner next to the first one
-  const partnerOf = new Map();
-  for (const e of edges) if (e.type === 'partner') { partnerOf.set(e.from, e.to); partnerOf.set(e.to, e.from); }
-  for (const row of rows) {
-    for (let i = 0; i < row.length; i++) {
-      const mate = partnerOf.get(row[i]);
-      if (mate === undefined) continue;
-      const j = row.indexOf(mate);
-      if (j > i + 1) { row.splice(j, 1); row.splice(i + 1, 0, mate); }
-    }
-  }
-  sync();
-}
-
-// ------------------------------------------------------------ rendering
+// --------------------------------------------------------- data transform
 function lifeDates(p) {
   const b = p.birthday ? parseDate(p.birthday)?.getFullYear() : null;
   const d = p.is_deceased ? (p.date_of_death ? parseDate(p.date_of_death)?.getFullYear() : '') : null;
@@ -91,114 +49,122 @@ function lifeDates(p) {
   return `b. ${b}`;
 }
 
-function nodeHtml(p, isRoot) {
-  const img = p.photo_url ? `<img src="${esc(p.photo_url)}" alt="">` : '';
-  const dates = lifeDates(p);
-  return `
-  <div class="ft-node ${isRoot ? 'ft-root' : ''} ${p.is_deceased ? 'ft-deceased' : ''}" data-ft-id="${Number(p.id)}" style="width:${NODE_W}px">
-    <span class="av sm avc-${avatarColorIndex(p.display_name)}">${esc(initials(p.display_name))}${img}</span>
-    <span class="ft-node-meta">
-      <span class="ft-node-name">${esc(p.display_name)}${p.is_deceased ? ' <span class="ft-cross" title="Deceased">✝</span>' : ''}</span>
-      ${dates ? `<span class="ft-node-dates">${esc(dates)}</span>` : ''}
-    </span>
-  </div>`;
+/** contact sex → f3 gender ('M'/'F'; anything else renders genderless). */
+function f3Gender(p) {
+  const s = String(p.sex || '').toLowerCase();
+  if (s === 'male') return 'M';
+  if (s === 'female') return 'F';
+  return '';
 }
 
-/** Draw parent/partner connectors into the SVG overlay from DOM positions. */
-function drawLines(wrap, edges) {
-  const svg = wrap.querySelector('.ft-lines');
-  if (!svg) return;
-  const wrapRect = wrap.getBoundingClientRect();
-  const rectOf = (id) => {
-    const el = wrap.querySelector(`[data-ft-id="${id}"]`);
-    if (!el) return null;
-    const r = el.getBoundingClientRect();
-    return {
-      cx: r.left - wrapRect.left + wrap.scrollLeft + r.width / 2,
-      cy: r.top - wrapRect.top + wrap.scrollTop + r.height / 2,
-      top: r.top - wrapRect.top + wrap.scrollTop,
-      bottom: r.bottom - wrapRect.top + wrap.scrollTop,
-      left: r.left - wrapRect.left + wrap.scrollLeft,
-      right: r.right - wrapRect.left + wrap.scrollLeft,
-    };
+/**
+ * { people, edges } → f3 datum array. Sibling edges render via shared
+ * parents: when one sibling has known parents, the other attaches to them
+ * (view-only); when neither does, a shared "Unknown" placeholder parent is
+ * synthesized so the pair still renders side by side.
+ */
+export function toF3Data(data) {
+  const persons = new Map();
+  for (const p of data.people) {
+    persons.set(String(p.id), {
+      id: String(p.id),
+      data: {
+        name: `${p.display_name || 'Unnamed'}${p.is_deceased ? ' ✝' : ''}`,
+        dates: lifeDates(p),
+        gender: f3Gender(p),
+      },
+      rels: { parents: [], spouses: [], children: [] },
+    });
+  }
+  const pushOnce = (arr, v) => { if (!arr.includes(v)) arr.push(v); };
+  const addParent = (parentId, childId) => {
+    const par = persons.get(parentId), ch = persons.get(childId);
+    if (!par || !ch || parentId === childId) return;
+    pushOnce(ch.rels.parents, parentId);
+    pushOnce(par.rels.children, childId);
   };
-  svg.setAttribute('width', wrap.scrollWidth);
-  svg.setAttribute('height', wrap.scrollHeight);
-  // inline style so the global aria-hidden icon size floor can't clamp it
-  svg.style.width = `${wrap.scrollWidth}px`;
-  svg.style.height = `${wrap.scrollHeight}px`;
-  let html = '';
-  for (const e of edges) {
-    const a = rectOf(e.from), b = rectOf(e.to);
-    if (!a || !b) continue;
-    if (e.type === 'parent') {
-      const midY = (a.bottom + b.top) / 2;
-      html += `<path d="M ${a.cx} ${a.bottom} V ${midY} H ${b.cx} V ${b.top}" class="ft-line ${e.step ? 'ft-line-step' : ''}"/>`;
-    } else if (e.type === 'partner') {
-      const [l, r] = a.cx <= b.cx ? [a, b] : [b, a];
-      html += `<path d="M ${l.right} ${l.cy} H ${r.left}" class="ft-line ft-line-partner"/>`;
+
+  for (const e of data.edges) {
+    const a = String(e.from), b = String(e.to);
+    if (e.type === 'parent') addParent(a, b);
+    else if (e.type === 'partner') {
+      const pa = persons.get(a), pb = persons.get(b);
+      if (pa && pb) { pushOnce(pa.rels.spouses, b); pushOnce(pb.rels.spouses, a); }
     }
-    // sibling edges are implied by shared parents; drawn only when neither
-    // sibling has a parent in the tree (otherwise it doubles the ink)
   }
-  const hasParent = new Set(edges.filter((e) => e.type === 'parent').map((e) => e.to));
-  for (const e of edges) {
-    if (e.type !== 'sibling' || hasParent.has(e.from) || hasParent.has(e.to)) continue;
-    const a = rectOf(e.from), b = rectOf(e.to);
+
+  // sibling post-pass (after all real parent edges exist)
+  let phNo = 0;
+  for (const e of data.edges) {
+    if (e.type !== 'sibling') continue;
+    const a = persons.get(String(e.from)), b = persons.get(String(e.to));
     if (!a || !b) continue;
-    const y = Math.min(a.top, b.top) - 8;
-    html += `<path d="M ${a.cx} ${a.top} V ${y} H ${b.cx} V ${b.top}" class="ft-line ft-line-step"/>`;
+    if (a.rels.parents.some((p) => b.rels.parents.includes(p))) continue; // already siblings
+    if (a.rels.parents.length) {
+      for (const p of [...a.rels.parents]) addParent(p, b.id);
+    } else if (b.rels.parents.length) {
+      for (const p of [...b.rels.parents]) addParent(p, a.id);
+    } else {
+      const ph = {
+        id: `ph:${phNo++}`,
+        data: { name: 'Unknown parent', dates: '', gender: '', placeholder: true },
+        rels: { parents: [], spouses: [], children: [] },
+      };
+      persons.set(ph.id, ph);
+      addParent(ph.id, a.id);
+      addParent(ph.id, b.id);
+    }
   }
-  svg.innerHTML = html;
+  return [...persons.values()];
 }
 
-function renderTree(host, data) {
-  const byId = new Map(data.people.map((p) => [p.id, p]));
-  const depth = assignDepths(data.root, data.people, data.edges);
-  const rowsByDepth = new Map();
-  for (const [id, d] of depth) {
-    if (!byId.has(id)) continue;
-    if (!rowsByDepth.has(d)) rowsByDepth.set(d, []);
-    rowsByDepth.get(d).push(id);
+// --------------------------------------------------------------- rendering
+/**
+ * Two lenses over the same family graph:
+ *   'family'   — the close family around a person: parents, siblings,
+ *                partner(s), children (one generation up + down).
+ *   'ancestry' — the full multi-generation tree, unlimited depth.
+ * Both render with family-chart; only the depth limits differ.
+ */
+function renderChart(host, data, rootId, view) {
+  const f3 = window.f3;
+  host.innerHTML = `<div class="f3 ft-chart ${view === 'family' ? 'ft-chart-close' : ''}" id="ft-f3"></div>`;
+  const el = host.querySelector('#ft-f3');
+
+  const f3Data = toF3Data(data);
+  const mainId = String(rootId);
+  if (!f3Data.some((d) => d.id === mainId)) return;
+
+  const chart = f3.createChart('#ft-f3', f3Data)
+    .setTransitionTime(600)
+    .setCardXSpacing(215)
+    .setCardYSpacing(130)
+    .setShowSiblingsOfMain(true)
+    .setSingleParentEmptyCard(false);
+
+  if (view === 'family') {
+    // close family: one generation in each direction (siblings ride along
+    // via setShowSiblingsOfMain; partners always render beside the person)
+    chart.setAncestryDepth(1).setProgenyDepth(1);
   }
-  const depths = [...rowsByDepth.keys()].sort((x, y) => x - y);
-  const rows = depths.map((d) => rowsByDepth.get(d));
-  orderRows(rows, data.edges);
 
-  const genLabel = (d) =>
-    d === 0 ? 'This generation' :
-    d === -1 ? 'Parents' : d === -2 ? 'Grandparents' : d < -2 ? `${'Great-'.repeat(-d - 2)}grandparents` :
-    d === 1 ? 'Children' : d === 2 ? 'Grandchildren' : `${'Great-'.repeat(d - 2)}grandchildren`;
+  chart.setCardHtml()
+    .setCardDisplay([['name'], ['dates']])
+    .setOnCardClick((e, d) => {
+      const id = d?.data?.id;
+      if (!id || String(id).startsWith('ph:')) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) {
+        navigate(`/family?id=${encodeURIComponent(id)}&view=${view}`);
+      } else {
+        navigate(`/contacts/${encodeURIComponent(id)}`);
+      }
+    });
 
-  host.innerHTML = `
-  <div class="ft-wrap" id="ft-wrap">
-    <svg class="ft-lines" aria-hidden="true"></svg>
-    ${depths.map((d, i) => `
-      <div class="ft-row" data-ft-depth="${d}">
-        <span class="ft-row-label">${esc(genLabel(d))}</span>
-        <div class="ft-row-nodes">${rows[i].map((id) => nodeHtml(byId.get(id), id === data.root)).join('')}</div>
-      </div>`).join('')}
-  </div>
-  ${data.truncated ? '<div class="text-xs text-muted mt-2">Tree truncated — showing the closest 400 people.</div>' : ''}`;
-
-  const wrap = host.querySelector('#ft-wrap');
-  // node click: navigate to the person; alt/ctrl-click recenters the tree
-  wrap.addEventListener('click', (e) => {
-    const node = e.target.closest('[data-ft-id]');
-    if (!node) return;
-    const id = node.dataset.ftId;
-    if (e.altKey || e.ctrlKey || e.metaKey) navigate(`/family?id=${encodeURIComponent(id)}`);
-    else navigate(`/contacts/${encodeURIComponent(id)}`);
-  });
-
-  const redraw = () => drawLines(wrap, data.edges);
-  requestAnimationFrame(redraw);
-  [150, 400].forEach((t) => setTimeout(redraw, t));
-  if (typeof ResizeObserver !== 'undefined') {
-    const ro = new ResizeObserver(() => drawLines(wrap, data.edges));
-    ro.observe(wrap);
-    setTimeout(() => ro.disconnect(), 8000);
-  }
+  chart.updateMainId(mainId);
+  chart.updateTree({ initial: true });
+  // container was just injected — sizes settle a tick later
+  requestAnimationFrame(() => { if (el.isConnected) chart.updateTree({ initial: true }); });
+  return chart;
 }
 
 // ------------------------------------------------------------ root picker
@@ -220,28 +186,64 @@ function bindRootSearch(el) {
   }, 250));
 }
 
+/** Cookie-auth download via temp anchor (same pattern as contacts.js). */
+function triggerDownload(url) {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = '';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 // --------------------------------------------------------------- the page
+// Two distinct uses of the same graph, picked via ?view=:
+//   family   — "who is around this person": parents, siblings, partner(s),
+//              children. The lens for looking at a friend's family.
+//   ancestry — the deep multi-generation genealogy tree.
+const VIEWS = [
+  { value: 'family', label: 'Close family' },
+  { value: 'ancestry', label: 'Full ancestry' },
+];
+
 async function renderFamilyPage(el, params) {
   const rootId = Number(params.id) || Number(state.user?.self_contact_id) || null;
+  const view = params.view === 'ancestry' ? 'ancestry' : 'family';
 
   el.innerHTML = `
   <div class="page-inner">
     <div class="rec-toolbar">
-      <span class="rec-crumb"><span>Family</span></span>
+      <span class="rec-crumb"><span>Family</span><span id="ft-crumb-name"></span></span>
       <span class="rec-actions">
-        <span class="search-input-wrap" style="width:240px;position:relative">
+        <span class="search-input-wrap" style="width:220px;position:relative">
           ${icon('search')}
-          <input class="form-input" id="ft-search" placeholder="View someone's tree…" autocomplete="off" aria-label="Pick a person">
+          <input class="form-input" id="ft-search" placeholder="View someone's family…" autocomplete="off" aria-label="Pick a person">
           <div id="ft-search-results" class="ft-search-results"></div>
         </span>
+        <button class="rec-act" data-action="ged-import">Import GEDCOM</button>
+        <button class="rec-act" data-action="ged-export">Export .ged</button>
       </span>
     </div>
     <div class="rec-rule-strong"></div>
-    <div id="ft-host" class="mt-4"><div class="text-sm text-muted">Loading family…</div></div>
-    <div class="text-xs text-muted mt-3">Click a person to open their record · Ctrl/⌘-click to recenter the tree on them. Family links are managed in each person's Relationships section (parent, child, sibling, spouse/partner).</div>
+    <div class="toolbar mt-2" id="ft-view-pills">${filterPills(VIEWS, view, 'view')}</div>
+    <div id="ft-host" class="mt-2"><div class="text-sm text-muted">Loading family…</div></div>
+    <div class="text-xs text-muted mt-2" id="ft-hint"></div>
   </div>`;
 
   bindRootSearch(el);
+  el.querySelector('[data-action="ged-import"]')?.addEventListener('click', () => openImportModal('gedcom'));
+  el.querySelector('[data-action="ged-export"]')?.addEventListener('click', () => triggerDownload('/api/export/gedcom?all=1'));
+  el.querySelectorAll('#ft-view-pills .filter-pill').forEach((p) =>
+    p.addEventListener('click', () => {
+      if (p.dataset.view === view) return;
+      navigate(`/family?${rootId ? `id=${encodeURIComponent(rootId)}&` : ''}view=${encodeURIComponent(p.dataset.view)}`);
+    }));
+
+  const hint = el.querySelector('#ft-hint');
+  hint.textContent = view === 'family'
+    ? 'Parents, siblings, partners and children of this person. Click a card to open their record · Ctrl/⌘-click to move the view to them. Family links are managed in each person\u2019s Relationships section.'
+    : 'Every generation linked in the records — ancestors above, descendants below. Click a card to open their record · Ctrl/⌘-click to recenter. Grow the tree via Relationships or a GEDCOM import.';
+
   const host = el.querySelector('#ft-host');
 
   if (!rootId) {
@@ -251,21 +253,39 @@ async function renderFamilyPage(el, params) {
 
   let data;
   try {
-    data = await api.get(`/api/contacts/${rootId}/family-tree`);
+    const [, treeData] = await Promise.all([
+      loadFamilyChart(),
+      api.get(`/api/contacts/${rootId}/family-tree`),
+    ]);
+    data = treeData;
   } catch (err) {
     host.innerHTML = emptyState('alert-circle', "Couldn't load the family tree", err?.message || 'Try again shortly.');
     return;
   }
   if (!el.isConnected) return;
 
-  if (!data.people?.length || data.people.length === 1 && !data.edges?.length) {
-    const rootName = data.people?.[0]?.display_name || 'this person';
+  const rootPerson = (data.people || []).find((p) => p.id === data.root);
+  if (rootPerson) {
+    el.querySelector('#ft-crumb-name').innerHTML = ` <span>/</span> <span>${esc(rootPerson.display_name)}</span>`;
+  }
+
+  if (!data.people?.length || (data.people.length === 1 && !data.edges?.length)) {
+    const rootName = rootPerson?.display_name || 'this person';
     host.innerHTML = emptyState('users', 'No family linked yet',
-      `Add family relationships (parent, child, sibling, spouse) on ${rootName}'s record and the tree grows from there.`);
+      `Add family relationships (parent, child, sibling, spouse) on ${rootName}'s record and the tree grows from there. Or import a GEDCOM file from Ancestry, MyHeritage, Gramps…`);
     return;
   }
 
-  renderTree(host, data);
+  try {
+    renderChart(host, data, data.root, view);
+  } catch (err) {
+    console.error('[family-chart]', err);
+    host.innerHTML = emptyState('alert-circle', "Couldn't render the tree", err?.message || '');
+    return;
+  }
+  if (view === 'ancestry' && data.truncated) {
+    host.insertAdjacentHTML('beforeend', '<div class="text-xs text-muted mt-2">Tree truncated — showing the closest 400 people.</div>');
+  }
 }
 
 pageRenderers.family = renderFamilyPage;

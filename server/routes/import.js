@@ -19,8 +19,8 @@ router.use(requireAuth);
 
 const UPLOAD_PATH = process.env.UPLOAD_PATH || '/app/uploads';
 const IMPORT_MAX = Number(process.env.IMPORT_MAX_UPLOAD_SIZE || 2147483648);
-const PLATFORMS = ['facebook', 'instagram', 'twitter', 'google_contacts', 'vcard', 'csv'];
-const ALLOWED_EXT = ['.zip', '.vcf', '.vcard', '.csv', '.json'];
+const PLATFORMS = ['facebook', 'instagram', 'twitter', 'google_contacts', 'vcard', 'csv', 'gedcom'];
+const ALLOWED_EXT = ['.zip', '.vcf', '.vcard', '.csv', '.json', '.ged'];
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -280,7 +280,11 @@ router.put('/review/:id', async (req, res, next) => {
 });
 
 // Contact columns an import record can set
-const IMPORT_CONTACT_FIELDS = ['display_name', 'first_name', 'last_name', 'nickname', 'email', 'phone', 'birthday', 'location', 'bio', 'occupation', 'company', 'website', 'sex'];
+const IMPORT_CONTACT_FIELDS = [
+  'display_name', 'first_name', 'middle_name', 'last_name', 'nickname', 'maiden_name',
+  'email', 'phone', 'birthday', 'place_of_birth', 'is_deceased', 'date_of_death', 'place_of_death',
+  'location', 'bio', 'occupation', 'company', 'website', 'sex', 'religion', 'nationality',
+];
 
 /** Create a brand-new contact from a normalized record. */
 async function createFromRecord(conn, rec, job) {
@@ -385,6 +389,62 @@ function platformKey(p) {
   return p === 'google_contacts' ? 'google' : p;
 }
 
+/**
+ * GEDCOM relationship post-pass. Staging rows whose normalized record carries
+ * `relationships: [{ source_ref, relation_type }]` (source_ref = another
+ * record's source_id within the same job) get real contact_relationships rows
+ * once both sides resolved to a final_contact_id. Duplicate-safe in both
+ * directions (same check as POST /contacts/:id/relationships). Returns the
+ * number of links created.
+ */
+async function applyImportRelationships(job) {
+  const { INVERSE_MAP } = require('./relationships');
+  const staged = await query(
+    `SELECT id, source_id, final_contact_id, normalized_data
+     FROM import_staging WHERE import_job_id = ? AND final_contact_id IS NOT NULL`,
+    [job.id]
+  );
+  if (!staged.length) return 0;
+
+  const bySourceRef = new Map(); // '@I1@' → contact id
+  for (const row of staged) {
+    if (row.source_id) bySourceRef.set(row.source_id, row.final_contact_id);
+  }
+
+  let linked = 0;
+  for (const row of staged) {
+    const rec = decodeNormalizedData(row.normalized_data, Boolean(job.is_spicy_source));
+    for (const rel of rec.relationships || []) {
+      const relatedId = bySourceRef.get(rel.source_ref);
+      const type = rel.relation_type;
+      if (!relatedId || !type || !(type in INVERSE_MAP)) continue;
+      if (relatedId === row.final_contact_id) continue;
+      const dupes = await query(
+        `SELECT id FROM contact_relationships
+         WHERE (contact_id = ? AND related_contact_id = ? AND relation_type = ?)
+            OR (contact_id = ? AND related_contact_id = ? AND relation_type = ?)`,
+        [row.final_contact_id, relatedId, type,
+         relatedId, row.final_contact_id, INVERSE_MAP[type] || type]
+      );
+      if (dupes.length) continue;
+      try {
+        await query(
+          'INSERT INTO contact_relationships (contact_id, related_contact_id, relation_type) VALUES (?, ?, ?)',
+          [row.final_contact_id, relatedId, type]
+        );
+        linked += 1;
+      } catch (err) {
+        if (err?.code !== 'ER_DUP_ENTRY') throw err;
+      }
+    }
+  }
+  if (linked) {
+    auditWrite(job.user_id, null, 'import', 'relationship', null, null,
+      { job_id: job.id, linked }, `Linked ${linked} family relationships from import`);
+  }
+  return linked;
+}
+
 // POST /api/import/jobs/:id/finalize
 router.post('/jobs/:id/finalize', loadJob, async (req, res, next) => {
   // Atomic claim: only one finalize can move the job out of awaiting_review.
@@ -449,6 +509,18 @@ router.post('/jobs/:id/finalize', loadJob, async (req, res, next) => {
       }
     }
 
+    // Relationship post-pass (GEDCOM): records carry family links that
+    // reference other records in the SAME job by source_ref (@Ixx@ xref).
+    // They can only be resolved once every row has a final_contact_id, so
+    // this runs after the create/merge loop. Skipped-row references are
+    // silently dropped; existing relationships (either direction) are kept.
+    let linked = 0;
+    try {
+      linked = await applyImportRelationships(req.job);
+    } catch (err) {
+      console.error(`[import] relationship post-pass failed:`, err.message);
+    }
+
     // search-index rebuild is best-effort — an index error must not abort a
     // finalize whose per-record commits already happened
     for (const id of touched) {
@@ -471,7 +543,7 @@ router.post('/jobs/:id/finalize', loadJob, async (req, res, next) => {
 
     await query('INSERT INTO notifications (user_id, type, title, body, link) VALUES (?, ?, ?, ?, ?)', [
       req.job.user_id, 'import_complete',
-      `Import finalized — ${created} new, ${merged} merged, ${skipped} skipped`,
+      `Import finalized — ${created} new, ${merged} merged, ${skipped} skipped${linked ? `, ${linked} family links` : ''}`,
       null, '#/contacts',
     ]);
     auditWrite(req.user.id, null, 'import', 'import_job', req.job.id, null,
