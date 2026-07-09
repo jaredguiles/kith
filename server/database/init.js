@@ -45,6 +45,8 @@ const TABLES = [
     email VARCHAR(255) NULL,
     phone VARCHAR(30) NULL,
     birthday DATE NULL,
+    is_deceased BOOLEAN NOT NULL DEFAULT 0,
+    date_of_death DATE NULL,
     age INT NULL,
     sex VARCHAR(30) NULL,
     pronouns VARCHAR(50) NULL,

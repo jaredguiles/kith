@@ -280,7 +280,6 @@ async function loadTable(el) {
       <th class="sortable" data-sort="name">Name ${sortArrow('name')}</th>
       <th>Tags</th>
       <th class="sortable" data-sort="location">Location ${sortArrow('location')}</th>
-      <th class="sortable" data-sort="last_contacted_at">Last contact ${sortArrow('last_contacted_at')}</th>
       <th class="sortable" data-sort="updated">Updated ${sortArrow('updated')}</th>
       <th></th>
     </tr></thead>
@@ -293,14 +292,13 @@ async function loadTable(el) {
             <span class="rec-tbl-no">${recNo(c.id)}</span>
             ${avatar(c, 'sm')}
             <div>
-              <div class="font-medium">${esc(c.display_name)} ${c.is_shared_in ? '<span class="badge neutral">Shared</span>' : ''} ${c.out_of_touch ? '<span class="badge amber">Out of touch</span>' : ''}</div>
+              <div class="font-medium">${esc(c.display_name)}${(() => { const a = c.is_deceased ? null : (c.age ?? ageFromBirthday(c.birthday)); return a != null ? ` <span class="td-muted rec-age">(${esc(a)})</span>` : ''; })()} ${c.is_deceased ? '<span class="badge neutral" title="Deceased">✝ Deceased</span>' : ''} ${c.is_shared_in ? '<span class="badge neutral">Shared</span>' : ''} ${c.out_of_touch ? '<span class="badge amber">Out of touch</span>' : ''}</div>
               ${c.email ? `<div class="td-muted">${esc(c.email)}</div>` : c.phone ? `<div class="td-muted">${esc(formatPhoneSafe(c.phone))}</div>` : ''}
             </div>
           </div>
         </td>
         <td><div class="flex gap-1 flex-wrap">${(c.tags || []).slice(0, 3).map((t) => tagPill(t)).join('')}</div></td>
         <td class="td-secondary">${esc(c.location || '')}</td>
-        <td class="td-muted">${c.last_contacted_at ? esc(timeAgo(c.last_contacted_at)) : '—'}</td>
         <td class="td-muted">${timeAgo(c.updated_at)}</td>
         <td>
           ${c.is_shared_in ? '' : `
@@ -551,7 +549,10 @@ export async function renderContactDetail(el, id) {
   const editMode = canEdit && detailEdit.on;
   const refresh = () => renderContactDetail(el, id);
   const flag = prideFlagGradient(c.orientation);
-  const age = c.age ?? ageFromBirthday(c.birthday);
+  // deceased → age at death (when we know the date), not a still-ticking age
+  const age = c.is_deceased
+    ? (c.date_of_death ? ageFromBirthday(c.birthday, c.date_of_death) : null)
+    : (c.age ?? ageFromBirthday(c.birthday));
 
   // detail route returns raw columns — compute out-of-touch client-side
   const lastContacted = parseDate(c.last_contacted_at);
@@ -570,6 +571,8 @@ export async function renderContactDetail(el, id) {
     nickname: { type: 'text', label: 'Nickname', value: c.nickname },
     middle_name: { type: 'text', label: 'Middle name', value: c.middle_name },
     birthday: { type: 'date', label: 'Birthday', value: (c.birthday || '').slice(0, 10) },
+    is_deceased: { type: 'select', label: 'Living status', value: c.is_deceased ? '1' : '0', options: [{ value: '0', label: 'Living' }, { value: '1', label: 'Deceased' }] },
+    date_of_death: { type: 'date', label: 'Date of death', value: (c.date_of_death || '').slice(0, 10) },
     location: { type: 'text', label: 'Location', value: c.location },
     occupation: { type: 'text', label: 'Occupation', value: c.occupation },
     company: { type: 'text', label: 'Company', value: c.company },
@@ -607,13 +610,12 @@ export async function renderContactDetail(el, id) {
     </div>`;
   };
 
-  // dossier meta line: pronouns · zodiac · location · b. date · orientation
+  // dossier meta line — glance-only info that is NOT repeated in Particulars
+  // (pronouns/location/orientation live there; listing them twice was noise).
   const metaLine = [
-    c.pronouns,
     c.zodiac_sign || zodiacFromBirthday(c.birthday),
-    c.location,
     c.birthday ? `b. ${fmtDate(c.birthday)}${age != null ? ` (${age})` : ''}` : '',
-    c.orientation,
+    c.is_deceased ? `✝ ${c.date_of_death ? `d. ${fmtDate(c.date_of_death)}` : 'deceased'}` : '',
   ].filter(Boolean).map(esc).join(' · ');
 
   // mono contact key/value row (satellite rows keep data-sat/data-sat-id)
@@ -718,8 +720,9 @@ export async function renderContactDetail(el, id) {
         <div class="rec-section">
           ${sectionHeader('01', 'Particulars')}
           ${infoRow('Full name', [c.first_name, c.middle_name, c.last_name].filter(Boolean).join(' '))}
-          ${ieRow('Middle name', 'middle_name', c.middle_name)}
           ${ieRow('Birthday', 'birthday', c.birthday ? `${fmtDate(c.birthday)}${age != null ? ` (${age})` : ''}` : '')}
+          ${ieRow('Living status', 'is_deceased', c.is_deceased ? 'Deceased' : (editMode ? 'Living' : ''))}
+          ${c.is_deceased || (canInline && editMode) ? ieRow('Date of death', 'date_of_death', c.date_of_death ? fmtDate(c.date_of_death) : '') : ''}
           ${ieRow('Pronouns', 'pronouns', c.pronouns)}
           ${ieRow('Sex', 'sex', c.sex)}
           ${ieRow('Orientation', 'orientation', c.orientation)}
@@ -1074,15 +1077,14 @@ async function loadImportantDates(container, contact, canEdit, refresh) {
     return;
   }
   container.innerHTML = dates.map((d) => `
-    <div class="flex-between" style="padding:6px 0;border-bottom:1px solid var(--border)" data-date-id="${d.id}">
-      <span class="flex items-center gap-2 text-sm min-w-0">
-        ${icon('calendar')}
-        <span class="font-medium truncate">${esc(d.label)}</span>
-        <span class="text-secondary">${esc(fmtDate(d.date))}</span>
+    <div class="rec-date-row" data-date-id="${d.id}">
+      <span class="rec-date-main">
+        <span class="rec-date-label">${esc(d.label)}</span>
+        <span class="rec-date-when">${esc(fmtDate(d.date))}</span>
         ${d.recurring ? '<span class="badge neutral">yearly</span>' : ''}
       </span>
       ${canEdit ? `
-      <span class="flex gap-1">
+      <span class="rec-date-actions">
         <button class="btn btn-icon" data-edit-date="${d.id}" aria-label="Edit date">${icon('edit')}</button>
         <button class="btn btn-icon" data-del-date="${d.id}" aria-label="Delete date">${icon('x')}</button>
       </span>` : ''}
@@ -1337,6 +1339,10 @@ export function openContactForm(existing = null, onSaved = null) {
     <div class="form-row">
       ${formGroup('Birthday', textInput('birthday', (c.birthday || '').slice(0, 10), 'type="date"'))}
       ${formGroup('Relationship type', selectInput('relationship_type', relTypes, c.relationship_type))}
+    </div>
+    <div class="form-row">
+      ${formGroup('Living status', selectInput('is_deceased', [{ value: '0', label: 'Living' }, { value: '1', label: 'Deceased' }], c.is_deceased ? '1' : '0'))}
+      ${formGroup('Date of death (optional)', textInput('date_of_death', (c.date_of_death || '').slice(0, 10), 'type="date"'))}
     </div>
     <div class="form-group" id="rel-link-group">
       <label class="form-label">Related to… (optional)</label>

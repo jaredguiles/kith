@@ -1295,6 +1295,25 @@ a.btn, a.btn:hover { text-decoration: none; }
 }
 .av.sm { width: 28px; height: 28px; font-size: 12px; }
 .av.lg { width: 64px; height: 64px; font-size: 24px; }
+/* Letter-avatar palette: muted editorial inks drawn from the design tokens.
+   The slot is a stable hash of the display name (utils.avatarColorIndex), so
+   a person keeps their color across reloads. Photos cover the letters. */
+.avc-0 { color: #2b5566; background: rgba(43, 85, 102, 0.10); }   /* ink-blue */
+.avc-1 { color: #47694d; background: rgba(71, 105, 77, 0.10); }   /* green */
+.avc-2 { color: #8a6524; background: rgba(138, 101, 36, 0.10); }  /* amber */
+.avc-3 { color: #8a2f2b; background: rgba(138, 47, 43, 0.10); }   /* red */
+.avc-4 { color: #6b4d7a; background: rgba(107, 77, 122, 0.10); }  /* plum */
+.avc-5 { color: #34676f; background: rgba(52, 103, 111, 0.10); }  /* teal */
+.avc-6 { color: #7a1f2b; background: rgba(122, 31, 43, 0.10); }   /* oxblood */
+.avc-7 { color: #5a6238; background: rgba(90, 98, 56, 0.10); }    /* olive */
+[data-theme="dark"] .avc-0 { color: #7fa8b8; background: rgba(127, 168, 184, 0.14); }
+[data-theme="dark"] .avc-1 { color: #8fb996; background: rgba(143, 185, 150, 0.14); }
+[data-theme="dark"] .avc-2 { color: #cfa96a; background: rgba(207, 169, 106, 0.14); }
+[data-theme="dark"] .avc-3 { color: #cf8a84; background: rgba(207, 138, 132, 0.14); }
+[data-theme="dark"] .avc-4 { color: #b195c2; background: rgba(177, 149, 194, 0.14); }
+[data-theme="dark"] .avc-5 { color: #86b7bf; background: rgba(134, 183, 191, 0.14); }
+[data-theme="dark"] .avc-6 { color: #d0808a; background: rgba(208, 128, 138, 0.14); }
+[data-theme="dark"] .avc-7 { color: #adb583; background: rgba(173, 181, 131, 0.14); }
 .av .flag { display: none; } /* pride rings not used in The Record */
 .av-stack { display: flex; }
 .av-stack .av { margin-left: -8px; border: 1px solid var(--rule-strong); box-shadow: 0 0 0 2px var(--paper); }
@@ -2326,3 +2345,99 @@ a.rec-log-who:hover { color: var(--accent); text-decoration: none; }
   color: var(--ink);
   border-bottom: 1px solid var(--ink);
 }
+
+/* ------------------------------------------------------- icon size safety */
+/* Inline lucide SVGs carry no width/height attributes; any icon rendered in
+   a context without a dedicated size rule ballooned to the SVG default
+   (300×150) — e.g. the Correspondence/social external-link icons. Zero-
+   specificity floor (:where) so every existing sized rule still wins. */
+:where(.page, .modal, .popover) :where(svg[aria-hidden="true"]) {
+  width: 13px; height: 13px;
+  flex-shrink: 0;
+  vertical-align: -2px;
+}
+
+/* social/correspondence rows: link icon inline with the value, small */
+.rec-leader .rec-part-val a svg,
+.rec-leader .rec-part-val svg { width: 12px; height: 12px; vertical-align: -1px; }
+
+/* ----------------------------------------------- important dates rows */
+/* The label used to be a nowrap-truncated flex child squeezed by the date +
+   badge, leaving "An…" style stubs. Let it wrap instead of ellipsizing and
+   keep date/badge on their own non-shrinking cluster. */
+.rec-date-row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.rec-date-row .rec-date-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1 1 auto; flex-wrap: wrap; }
+.rec-date-row .rec-date-label { font-family: var(--font-serif); font-size: 15px; color: var(--ink); overflow-wrap: anywhere; }
+.rec-date-row .rec-date-when { font-family: var(--font-mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.rec-date-row .rec-date-actions { display: flex; gap: 1px; flex-shrink: 0; }
+.rec-date-row svg { width: 12px; height: 12px; }
+
+/* list age next to the name */
+.data-table .rec-age { font-size: 12px; }
+
+/* --------------------------------------------------------- family tree */
+.ft-wrap {
+  position: relative;
+  overflow: auto;
+  padding: 18px 6px 26px;
+}
+/* sized via inline style from JS (scrollWidth×scrollHeight) so the global
+   aria-hidden icon floor can never clamp it */
+.ft-lines { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }
+.ft-line { fill: none; stroke: var(--rule-strong); stroke-width: 1.25; }
+.ft-line-partner { stroke: var(--accent); stroke-width: 1.25; }
+.ft-line-step { stroke-dasharray: 3 3; }
+.ft-row { display: flex; align-items: flex-start; gap: 14px; padding: 26px 0; }
+.ft-row + .ft-row { border-top: 1px dotted var(--rule); }
+.ft-row-label {
+  font-family: var(--font-mono);
+  font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted);
+  width: 92px; flex: none;
+  padding-top: 10px;
+}
+.ft-row-nodes { display: flex; flex-wrap: wrap; gap: 22px 26px; min-width: 0; position: relative; z-index: 1; }
+.ft-node {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-width: 0;
+}
+.ft-node:hover { border-color: var(--accent); }
+.ft-node.ft-root { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.ft-node.ft-deceased { opacity: 0.72; }
+.ft-node.ft-deceased .av { filter: grayscale(1); }
+.ft-node-meta { min-width: 0; display: flex; flex-direction: column; }
+.ft-node-name {
+  font-family: var(--font-serif); font-size: 14px; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ft-cross { color: var(--muted); font-size: 11px; }
+.ft-node-dates { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted); }
+.ft-search-results {
+  position: absolute; top: 100%; left: 0; right: 0;
+  z-index: 30;
+  background: var(--panel);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-sm);
+}
+.ft-search-results:empty { display: none; }
+
+/* palette colors win on map pins too (.map-avatar-pin .pin-av sets its own
+   color/background at higher specificity than a bare .avc-N) */
+.map-avatar-pin .pin-av[class*="avc-"] { background: var(--panel); }
+.map-avatar-pin .pin-av.avc-0 { color: #2b5566; } .map-avatar-pin .pin-av.avc-1 { color: #47694d; }
+.map-avatar-pin .pin-av.avc-2 { color: #8a6524; } .map-avatar-pin .pin-av.avc-3 { color: #8a2f2b; }
+.map-avatar-pin .pin-av.avc-4 { color: #6b4d7a; } .map-avatar-pin .pin-av.avc-5 { color: #34676f; }
+.map-avatar-pin .pin-av.avc-6 { color: #7a1f2b; } .map-avatar-pin .pin-av.avc-7 { color: #5a6238; }
+[data-theme="dark"] .map-avatar-pin .pin-av.avc-0 { color: #7fa8b8; }
+[data-theme="dark"] .map-avatar-pin .pin-av.avc-1 { color: #8fb996; }
+[data-theme="dark"] .map-avatar-pin .pin-av.avc-2 { color: #cfa96a; }
+[data-theme="dark"] .map-avatar-pin .pin-av.avc-3 { color: #cf8a84; }
+[data-theme="dark"] .map-avatar-pin .pin-av.avc-4 { color: #b195c2; }
+[data-theme="dark"] .map-avatar-pin .pin-av.avc-5 { color: #86b7bf; }
+[data-theme="dark"] .map-avatar-pin .pin-av.avc-6 { color: #d0808a; }
+[data-theme="dark"] .map-avatar-pin .pin-av.avc-7 { color: #adb583; }

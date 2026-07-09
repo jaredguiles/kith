@@ -6,7 +6,7 @@
 
 const express = require('express');
 const { query } = require('../database/connection');
-const { requireAuth, requireContactAccess, contactAccess } = require('../middleware/auth');
+const { requireAuth, requireContactAccess, contactAccess, isAdmin } = require('../middleware/auth');
 const { auditWrite } = require('../lib/audit');
 
 const router = express.Router();
@@ -208,6 +208,98 @@ router.post('/contacts/:id/relationships', requireContactAccess('id', { edit: tr
     auditWrite(req.user.id, req.contact.id, 'create', 'relationship', result.insertId, null,
       { related_contact_id: relatedId, relation_type }, 'Added relationship');
     res.status(201).json({ id: result.insertId });
+  } catch (err) { next(err); }
+});
+
+// ------------------------------------------------------------- family tree
+// Normalized family edge types. A stored relation_type describes
+// related_contact relative to contact: (A, B, 'mother') → B is A's parent.
+const REL_PARENT = ['parent', 'mother', 'father', 'step_parent'];  // related IS contact's parent
+const REL_CHILD = ['child', 'son', 'daughter', 'step_child'];      // related IS contact's child
+const REL_SIBLING = ['sibling', 'brother', 'sister', 'step_sibling'];
+const REL_PARTNER = ['spouse', 'husband', 'wife', 'partner'];
+const FAMILY_TYPES = [...REL_PARENT, ...REL_CHILD, ...REL_SIBLING, ...REL_PARTNER];
+
+// GET /api/contacts/:id/family-tree — the connected family component around
+// a person: people + normalized edges (parent → child, partner, sibling).
+// BFS over family-typed relationship rows, depth/size capped; every included
+// person passes the same access rule as the contacts list (own/shared/admin).
+router.get('/contacts/:id/family-tree', requireContactAccess('id'), async (req, res, next) => {
+  try {
+    const rootId = req.contact.id;
+    const MAX_PEOPLE = 400, MAX_DEPTH = 10;
+    const visited = new Set([rootId]);
+    let frontier = [rootId];
+    const rawEdges = [];
+    const seenEdge = new Set();
+
+    for (let depth = 0; depth < MAX_DEPTH && frontier.length && visited.size < MAX_PEOPLE; depth++) {
+      const ph = frontier.map(() => '?').join(',');
+      const tph = FAMILY_TYPES.map(() => '?').join(',');
+      const rows = await query(
+        `SELECT cr.id, cr.contact_id, cr.related_contact_id, cr.relation_type
+         FROM contact_relationships cr
+         JOIN contacts a ON a.id = cr.contact_id AND a.deleted_at IS NULL
+         JOIN contacts b ON b.id = cr.related_contact_id AND b.deleted_at IS NULL
+         WHERE cr.relation_type IN (${tph})
+           AND (cr.contact_id IN (${ph}) OR cr.related_contact_id IN (${ph}))`,
+        [...FAMILY_TYPES, ...frontier, ...frontier]
+      );
+      const next = [];
+      for (const r of rows) {
+        if (seenEdge.has(r.id)) continue;
+        seenEdge.add(r.id);
+        rawEdges.push(r);
+        for (const cid of [r.contact_id, r.related_contact_id]) {
+          if (!visited.has(cid) && visited.size < MAX_PEOPLE) {
+            visited.add(cid);
+            next.push(cid);
+          }
+        }
+      }
+      frontier = next;
+    }
+
+    // Access filter — same rule as the contacts list (own + shared-in, or admin).
+    const ids = [...visited];
+    const idPh = ids.map(() => '?').join(',');
+    const scope = isAdmin(req.user)
+      ? ''
+      : `AND (c.owner_user_id = ${Number(req.user.id)} OR EXISTS (
+           SELECT 1 FROM shared_contacts sc WHERE sc.contact_id = c.id AND sc.shared_with_user_id = ${Number(req.user.id)}))`;
+    const people = await query(
+      `SELECT c.id, c.display_name, c.first_name, c.last_name, c.photo_url,
+              c.birthday, c.is_deceased, c.date_of_death, c.orientation
+       FROM contacts c
+       WHERE c.id IN (${idPh}) AND c.deleted_at IS NULL ${scope}`,
+      ids
+    );
+    const allowed = new Set(people.map((p) => p.id));
+
+    // Normalize edges: parent → child direction; partner/sibling symmetric.
+    const edges = [];
+    const dedupe = new Set();
+    const pushEdge = (type, from, to, step) => {
+      const key = type === 'parent' ? `par:${from}:${to}` : `${type}:${Math.min(from, to)}:${Math.max(from, to)}`;
+      if (dedupe.has(key)) return;
+      dedupe.add(key);
+      edges.push({ type, from, to, ...(step ? { step: true } : {}) });
+    };
+    for (const r of rawEdges) {
+      if (!allowed.has(r.contact_id) || !allowed.has(r.related_contact_id)) continue;
+      const step = r.relation_type.startsWith('step_');
+      if (REL_PARENT.includes(r.relation_type)) pushEdge('parent', r.related_contact_id, r.contact_id, step);
+      else if (REL_CHILD.includes(r.relation_type)) pushEdge('parent', r.contact_id, r.related_contact_id, step);
+      else if (REL_SIBLING.includes(r.relation_type)) pushEdge('sibling', r.contact_id, r.related_contact_id, step);
+      else if (REL_PARTNER.includes(r.relation_type)) pushEdge('partner', r.contact_id, r.related_contact_id, false);
+    }
+
+    res.json({
+      root: rootId,
+      people: people.map((p) => ({ ...p, is_deceased: Boolean(p.is_deceased) })),
+      edges,
+      truncated: visited.size >= MAX_PEOPLE,
+    });
   } catch (err) { next(err); }
 });
 

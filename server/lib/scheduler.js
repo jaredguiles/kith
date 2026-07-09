@@ -43,7 +43,7 @@ async function birthdaysWithin(userId, days) {
     `SELECT c.id, c.display_name, c.birthday,
        DATEDIFF(DATE_ADD(c.birthday, INTERVAL YEAR(CURDATE()) - YEAR(c.birthday) + IF(DATE_FORMAT(c.birthday,'%m-%d') < DATE_FORMAT(CURDATE(),'%m-%d'), 1, 0) YEAR), CURDATE()) AS days_until
      FROM contacts c
-     WHERE c.deleted_at IS NULL AND c.birthday IS NOT NULL AND c.owner_user_id = ?
+     WHERE c.deleted_at IS NULL AND c.birthday IS NOT NULL AND c.is_deceased = 0 AND c.owner_user_id = ?
      HAVING days_until BETWEEN 0 AND ? ORDER BY days_until LIMIT 50`,
     [userId, days]
   );

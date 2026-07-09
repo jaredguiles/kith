@@ -11,6 +11,26 @@ const { query } = require('./connection');
 // so its `up` is a no-op marker recorded after ensureSchema succeeds.
 const MIGRATIONS = [
   { version: 1, name: 'v1-full-schema', up: async () => { /* applied by init.js ensureSchema() */ } },
+  {
+    version: 2,
+    name: 'contacts-deceased-status',
+    up: async (query) => {
+      // Alive/deceased status so people who have passed can stay in the
+      // record (family/ancestry) without polluting birthday nudges etc.
+      const cols = await query(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'contacts'
+           AND COLUMN_NAME IN ('is_deceased', 'date_of_death')`
+      );
+      const have = new Set(cols.map((c) => c.COLUMN_NAME));
+      if (!have.has('is_deceased')) {
+        await query('ALTER TABLE contacts ADD COLUMN is_deceased BOOLEAN NOT NULL DEFAULT 0 AFTER birthday');
+      }
+      if (!have.has('date_of_death')) {
+        await query('ALTER TABLE contacts ADD COLUMN date_of_death DATE NULL AFTER is_deceased');
+      }
+    },
+  },
 ];
 
 async function ensureVersionTable() {

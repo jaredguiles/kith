@@ -3,7 +3,7 @@
 // contact-detail mini-maps.
 
 import { api, qs } from './api.js';
-import { esc, initials, loadLeaflet } from './utils.js';
+import { esc, initials, avatarColorIndex, loadLeaflet } from './utils.js';
 import { icon } from './icons.js';
 import { emptyState, toast } from './components.js';
 import { pageRenderers } from './pages.js';
@@ -36,7 +36,7 @@ export function avatarPin(L, contact) {
   const img = contact?.photo_url ? `<img src="${esc(contact.photo_url)}" alt="">` : '';
   return L.divIcon({
     className: 'map-avatar-pin',
-    html: `<span class="av pin-av">${esc(initials(contact?.display_name))}${img}</span>`,
+    html: `<span class="av pin-av avc-${avatarColorIndex(contact?.display_name)}">${esc(initials(contact?.display_name))}${img}</span>`,
     iconSize: [36, 44],
     iconAnchor: [18, 44],
     popupAnchor: [0, -42],
@@ -75,7 +75,7 @@ function setMapStyle(map, styleId, attribution) {
   map._kithStyle = styleId;
 }
 
-// Group pins that sit within ~0.02° of each other (light clustering, no plugin).
+// Group pins whose cells (in degrees) collide at the given cell size.
 function clusterPins(pins, cell = 0.02) {
   const buckets = new Map();
   for (const p of pins) {
@@ -85,7 +85,16 @@ function clusterPins(pins, cell = 0.02) {
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push({ ...p, lat, lng });
   }
-  return [...buckets.values()];
+  return [...buckets.values()].map(dedupeByContact);
+}
+
+// Zoom-adaptive cell size: pins closer than ~CLUSTER_PX pixels at the current
+// zoom merge into one numbered cluster. Zooming in shrinks the cell, so
+// clusters split apart and reveal individual people progressively.
+const CLUSTER_PX = 56;
+function cellForZoom(zoom) {
+  // degrees of longitude per pixel at the equator × desired pixel separation
+  return (360 / (256 * Math.pow(2, zoom))) * CLUSTER_PX;
 }
 
 // Group ONLY pins at the (near-)identical coordinate. Used even when broad
@@ -123,7 +132,7 @@ function pinPopupHtml(p) {
   return `
   <div class="map-popup">
     <a class="map-popup-contact" href="#/contacts/${encodeURIComponent(p.contact_id)}">
-      <span class="av sm">${esc(initials(p.display_name))}${img}</span>
+      <span class="av sm avc-${avatarColorIndex(p.display_name)}">${esc(initials(p.display_name))}${img}</span>
       <span class="map-popup-name">${esc(p.display_name)}</span>
     </a>
     ${p.label ? `<div class="map-popup-label">${esc(p.label)}</div>` : ''}
@@ -136,7 +145,7 @@ function clusterPopupHtml(group) {
     <div class="map-popup-label" style="margin-bottom:6px">${group.length} people here</div>
     ${group.map((p) => `
       <a class="map-popup-contact" href="#/contacts/${encodeURIComponent(p.contact_id)}">
-        <span class="av sm">${esc(initials(p.display_name))}${p.photo_url ? `<img src="${esc(p.photo_url)}" alt="">` : ''}</span>
+        <span class="av sm avc-${avatarColorIndex(p.display_name)}">${esc(initials(p.display_name))}${p.photo_url ? `<img src="${esc(p.photo_url)}" alt="">` : ''}</span>
         <span class="map-popup-name">${esc(p.display_name)}</span>
       </a>`).join('')}
   </div>`;
@@ -223,36 +232,50 @@ async function renderMapPage(el) {
   const map = createMap(canvas, { center: [20, 0], zoom: 2 });
   renderStyleSwitcher(el, map);
 
-  const useClusters = pins.length > 50;
-  // Broad clustering above the threshold; otherwise still fold EXACT-coordinate
-  // duplicates so co-located contacts render as one clickable multi-person
-  // marker instead of stacking invisibly.
-  const groups = useClusters ? clusterPins(pins) : groupExactPins(pins);
-  const allLatLngs = [];
-
-  for (const group of groups) {
-    if (group.length === 1) {
-      const p = group[0];
-      allLatLngs.push([p.lat, p.lng]);
-      L.marker([p.lat, p.lng], { title: p.display_name, icon: avatarPin(L, p) })
-        .addTo(map)
-        .bindPopup(pinPopupHtml(p), { maxWidth: 260 });
-    } else {
-      const lat = group.reduce((s, p) => s + p.lat, 0) / group.length;
-      const lng = group.reduce((s, p) => s + p.lng, 0) / group.length;
-      allLatLngs.push([lat, lng]);
-      const badge = L.divIcon({
-        className: 'map-cluster-icon',
-        html: `<span class="map-cluster-badge">${group.length}</span>`,
-        iconSize: [32, 32],
-        iconAnchor: [16, 16],
-      });
-      L.marker([lat, lng], { icon: badge, title: `${group.length} people` })
-        .addTo(map)
-        .bindPopup(clusterPopupHtml(group), { maxWidth: 260 });
+  // Zoom-adaptive clustering: nearby pins (e.g. two people in one city plus
+  // one in the town next door) collapse into a numbered badge instead of
+  // overlapping; zooming in re-buckets with a smaller cell so the badge
+  // splits and individual avatar pins appear. Clicking a badge zooms in.
+  const markerLayer = L.layerGroup().addTo(map);
+  const renderMarkers = () => {
+    markerLayer.clearLayers();
+    const zoom = map.getZoom();
+    // at street zoom stop broad clustering; only fold exact-coordinate stacks
+    const groups = zoom >= 15 ? groupExactPins(pins) : clusterPins(pins, cellForZoom(zoom));
+    for (const group of groups) {
+      if (group.length === 1) {
+        const p = group[0];
+        L.marker([p.lat, p.lng], { title: p.display_name, icon: avatarPin(L, p) })
+          .addTo(markerLayer)
+          .bindPopup(pinPopupHtml(p), { maxWidth: 260 });
+      } else {
+        const lat = group.reduce((s, p) => s + p.lat, 0) / group.length;
+        const lng = group.reduce((s, p) => s + p.lng, 0) / group.length;
+        const badge = L.divIcon({
+          className: 'map-cluster-icon',
+          html: `<span class="map-cluster-badge">${group.length}</span>`,
+          iconSize: [32, 32],
+          iconAnchor: [16, 16],
+        });
+        const m = L.marker([lat, lng], { icon: badge, title: `${group.length} people` }).addTo(markerLayer);
+        if (map.getZoom() >= 15) {
+          // exact-coordinate stack — can't be split by zooming; list the people
+          m.bindPopup(clusterPopupHtml(group), { maxWidth: 260 });
+        } else {
+          // spread cluster — zoom toward it to reveal the individuals
+          m.on('click', () => {
+            const b = L.latLngBounds(group.map((p) => [p.lat, p.lng]));
+            if (b.getNorthEast().equals(b.getSouthWest())) map.setView(b.getCenter(), Math.min(map.getZoom() + 3, 17));
+            else map.flyToBounds(b, { padding: [60, 60], maxZoom: 16, duration: 0.6 });
+          });
+        }
+      }
     }
-  }
+  };
+  map.on('zoomend', renderMarkers);
+  renderMarkers();
 
+  const allLatLngs = pins.map((p) => [Number(p.lat), Number(p.lng)]);
   if (allLatLngs.length === 1) map.setView(allLatLngs[0], 11);
   else map.fitBounds(L.latLngBounds(allLatLngs), { padding: [40, 40], maxZoom: 13 });
 

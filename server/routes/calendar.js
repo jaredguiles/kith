@@ -53,7 +53,7 @@ router.get('/', async (req, res, next) => {
       // birthdays: match month-of-year, project into the requested year
       query(
         `SELECT c.id AS contact_id, c.display_name, c.birthday FROM contacts c
-         WHERE c.birthday IS NOT NULL AND MONTH(c.birthday) = ? AND ${contactScope.clause}
+         WHERE c.birthday IS NOT NULL AND c.is_deceased = 0 AND MONTH(c.birthday) = ? AND ${contactScope.clause}
          ORDER BY DAY(c.birthday)`,
         [month, ...contactScope.params]
       ),

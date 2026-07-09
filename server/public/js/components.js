@@ -1,7 +1,7 @@
 // Reusable UI widget render functions. All return HTML strings; every
 // interpolated value passes through esc() (§7.11).
 
-import { esc, initials, prideFlagGradient } from './utils.js';
+import { esc, initials, prideFlagGradient, avatarColorIndex } from './utils.js';
 import { icon } from './icons.js';
 
 /** Avatar with optional photo, pride-flag overlay. size: sm|md|lg
@@ -9,11 +9,12 @@ import { icon } from './icons.js';
  * a global capture 'error' listener (app.js) removes broken imgs (CSP forbids
  * inline onerror handlers). */
 export function avatar(contact, size = 'md') {
-  const cls = size === 'md' ? 'av' : `av ${size}`;
+  const name = contact?.display_name;
+  const cls = `av ${size === 'md' ? '' : size} avc-${avatarColorIndex(name)}`.replace(/\s+/g, ' ').trim();
   const flag = prideFlagGradient(contact?.orientation);
   const flagHtml = flag ? `<span class="flag" style="background:${flag}"></span>` : '';
   const img = contact?.photo_url ? `<img src="${esc(contact.photo_url)}" alt="">` : '';
-  return `<span class="${cls}">${esc(initials(contact?.display_name))}${img}${flagHtml}</span>`;
+  return `<span class="${cls}">${esc(initials(name))}${img}${flagHtml}</span>`;
 }
 
 export function tagPill(tag, { removable = false } = {}) {

@@ -24,7 +24,7 @@ router.get('/dashboard', async (req, res, next) => {
         `SELECT c.id, c.display_name, c.birthday, c.photo_url, c.orientation,
            DATEDIFF(DATE_ADD(c.birthday, INTERVAL YEAR(CURDATE()) - YEAR(c.birthday) + IF(DATE_FORMAT(c.birthday,'%m-%d') < DATE_FORMAT(CURDATE(),'%m-%d'), 1, 0) YEAR), CURDATE()) AS days_until
          FROM contacts c
-         WHERE c.deleted_at IS NULL AND c.birthday IS NOT NULL ${scope}
+         WHERE c.deleted_at IS NULL AND c.birthday IS NOT NULL AND c.is_deceased = 0 ${scope}
          HAVING days_until BETWEEN 0 AND 30 ORDER BY days_until LIMIT 10`
       ),
       query(
@@ -58,7 +58,7 @@ router.get('/dashboard', async (req, res, next) => {
       // out-of-touch: keep_in_touch_days set + overdue (never-contacted counts)
       query(
         `SELECT c.id, c.display_name, c.photo_url, c.last_contacted_at, c.keep_in_touch_days FROM contacts c
-         WHERE c.deleted_at IS NULL AND c.keep_in_touch_days IS NOT NULL AND c.keep_in_touch_days > 0 ${scope}
+         WHERE c.deleted_at IS NULL AND c.is_deceased = 0 AND c.keep_in_touch_days IS NOT NULL AND c.keep_in_touch_days > 0 ${scope}
            AND (c.last_contacted_at IS NULL OR c.last_contacted_at < DATE_SUB(NOW(), INTERVAL c.keep_in_touch_days DAY))
          ORDER BY c.last_contacted_at IS NOT NULL, c.last_contacted_at ASC LIMIT 10`
       ),

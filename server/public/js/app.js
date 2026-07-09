@@ -33,7 +33,7 @@ document.addEventListener('error', (e) => {
 }, true);
 
 // ---------------------------------------------------------------- router
-const ROUTES = ['home', 'contacts', 'events', 'calendar', 'map', 'journal', 'notifications', 'settings', 'review', 'groups', 'trash'];
+const ROUTES = ['home', 'contacts', 'family', 'events', 'calendar', 'map', 'journal', 'notifications', 'settings', 'review', 'groups', 'trash'];
 
 export function navigate(hash, { replace = false } = {}) {
   if (replace) location.replace(`#${hash}`);
@@ -234,12 +234,13 @@ function shellHtml() {
       <nav class="sidebar-nav" aria-label="Pages">
         ${navItem('01', 'home', 'Home')}
         ${navItem('02', 'contacts', 'People')}
-        ${navItem('03', 'calendar', 'Calendar')}
-        ${navItem('04', 'map', 'Map')}
-        ${navItem('05', 'events', 'Events')}
-        <a class="nav-item" data-nav="notifications" href="#/notifications"><span class="nav-num">06</span><span class="nav-label">Notices</span><span class="nav-count" id="notif-count"></span></a>
-        ${isAdmin ? navItem('07', 'settings', 'Settings') : ''}
-        ${navItem(isAdmin ? '08' : '07', 'journal', 'Journal')}
+        ${navItem('03', 'family', 'Family')}
+        ${navItem('04', 'calendar', 'Calendar')}
+        ${navItem('05', 'map', 'Map')}
+        ${navItem('06', 'events', 'Events')}
+        <a class="nav-item" data-nav="notifications" href="#/notifications"><span class="nav-num">07</span><span class="nav-label">Notices</span><span class="nav-count" id="notif-count"></span></a>
+        ${isAdmin ? navItem('08', 'settings', 'Settings') : ''}
+        ${navItem(isAdmin ? '09' : '08', 'journal', 'Journal')}
       </nav>
       <div class="sidebar-scroll">
         <button class="sidebar-section-label" data-collapse="favorites" aria-expanded="true">

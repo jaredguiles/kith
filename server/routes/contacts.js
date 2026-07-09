@@ -18,8 +18,14 @@ const { getSetting } = require('./settings');
 const router = express.Router();
 router.use(requireAuth);
 
+/** Boolean-ish body value → 0/1 ('0'/'false'/''/null are false). */
+const toBool = (v) => (v === false || v === 0 || v == null || v === '' || v === '0' || v === 'false') ? 0 : 1;
+
 const SORTABLE = {
-  name: 'c.display_name',
+  // ALPHA = surname order: structured last_name first, falling back to the
+  // last word of display_name for contacts without one. Single expression so
+  // the ASC/DESC direction applies to the whole key.
+  name: "COALESCE(NULLIF(c.last_name, ''), TRIM(SUBSTRING_INDEX(c.display_name, ' ', -1)))",
   created: 'c.created_at',
   updated: 'c.updated_at',
   rating: 'c.rating',
@@ -62,7 +68,7 @@ router.get('/', async (req, res, next) => {
 
     // keep-in-touch: overdue contacts only
     if (filter === 'out_of_touch') {
-      where.push(`(c.keep_in_touch_days IS NOT NULL AND
+      where.push(`(c.is_deceased = 0 AND c.keep_in_touch_days IS NOT NULL AND
         (c.last_contacted_at IS NULL OR c.last_contacted_at < NOW() - INTERVAL c.keep_in_touch_days DAY))`);
     }
 
@@ -131,10 +137,10 @@ router.get('/', async (req, res, next) => {
     const rows = await query(
       `SELECT c.*, sc.share_scope AS shared_scope, sc.permissions AS shared_permissions,
               (c.owner_user_id != ${Number(req.user.id)}) AS is_shared_in,
-              (c.keep_in_touch_days IS NOT NULL AND
+              (c.is_deceased = 0 AND c.keep_in_touch_days IS NOT NULL AND
                (c.last_contacted_at IS NULL OR c.last_contacted_at < NOW() - INTERVAL c.keep_in_touch_days DAY)) AS out_of_touch
        ${fromWhere}
-       ORDER BY ${orderCol} ${dir}, c.id ASC
+       ORDER BY ${orderCol} ${dir}, c.display_name ${dir}, c.id ASC
        LIMIT ${lim} OFFSET ${off}`,
       params
     );
@@ -347,10 +353,10 @@ router.post('/', async (req, res, next) => {
     for (const f of CONTACT_FIELDS) if (f in body) data[f] = body[f];
 
     data.display_name = buildDisplayName(data);
-    for (const df of ['birthday', 'met_date']) {
+    for (const df of ['birthday', 'met_date', 'date_of_death']) {
       if (data[df] === '') data[df] = null;
       if (data[df] != null && !isValidDate(data[df])) {
-        return res.status(400).json({ error: `Invalid ${df === 'birthday' ? 'birthday' : 'met date'} — use YYYY-MM-DD` });
+        return res.status(400).json({ error: `Invalid ${df.replace(/_/g, ' ')} — use YYYY-MM-DD` });
       }
     }
     if (data.birthday && !data.zodiac_sign) data.zodiac_sign = zodiacFromBirthday(data.birthday);
@@ -363,7 +369,7 @@ router.post('/', async (req, res, next) => {
         data.keep_in_touch_days = kd;
       }
     }
-    for (const b of ['is_favorite', 'is_spicy', 'is_anonymous']) if (b in data) data[b] = data[b] ? 1 : 0;
+    for (const b of ['is_favorite', 'is_spicy', 'is_anonymous', 'is_deceased']) if (b in data) data[b] = toBool(data[b]);
 
     // spicy flag only settable when spicy visible
     if (data.is_spicy && !(await spicyVisible(req.user))) data.is_spicy = 0;
@@ -392,11 +398,11 @@ router.put('/:id', requireContactAccess('id', { edit: true }), async (req, res, 
     for (const f of CONTACT_FIELDS) if (f in body) data[f] = body[f];
     if (Object.keys(data).length === 0) return res.status(400).json({ error: 'Nothing to update' });
 
-    for (const df of ['birthday', 'met_date']) {
+    for (const df of ['birthday', 'met_date', 'date_of_death']) {
       if (df in data) {
         if (data[df] === '') data[df] = null;
         if (data[df] != null && !isValidDate(data[df])) {
-          return res.status(400).json({ error: `Invalid ${df === 'birthday' ? 'birthday' : 'met date'} — use YYYY-MM-DD` });
+          return res.status(400).json({ error: `Invalid ${df.replace(/_/g, ' ')} — use YYYY-MM-DD` });
         }
       }
     }
@@ -416,7 +422,7 @@ router.put('/:id', requireContactAccess('id', { edit: true }), async (req, res, 
         data.keep_in_touch_days = kd;
       }
     }
-    for (const b of ['is_favorite', 'is_spicy', 'is_anonymous']) if (b in data) data[b] = data[b] ? 1 : 0;
+    for (const b of ['is_favorite', 'is_spicy', 'is_anonymous', 'is_deceased']) if (b in data) data[b] = toBool(data[b]);
     if ('is_spicy' in data && data.is_spicy && !(await spicyVisible(req.user))) delete data.is_spicy;
 
     const cols = Object.keys(data);

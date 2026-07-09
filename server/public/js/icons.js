@@ -79,6 +79,9 @@ const ICONS = {
   'rotate-ccw': P('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>'),
 };
 
+// NOTE: these SVGs carry no width/height attributes — sizing comes from CSS.
+// A zero-specificity safety net in style.css (`:where(svg…)`) keeps any icon
+// without a dedicated rule at text size instead of the 300×150 SVG default.
 export function icon(name, cls = '') {
   const svg = ICONS[name] || ICONS['alert-circle'];
   return cls ? svg.replace('<svg ', `<svg class="${cls}" `) : svg;

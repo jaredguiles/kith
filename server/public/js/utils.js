@@ -88,10 +88,13 @@ export function fromLocalInput(v) {
     `${p(local.getUTCHours())}:${p(local.getUTCMinutes())}:${p(local.getUTCSeconds())}`;
 }
 
-export function ageFromBirthday(birthday) {
+/** Age in whole years. `asOf` (optional) computes age at that date — used for
+ * deceased contacts (age at death). */
+export function ageFromBirthday(birthday, asOf = null) {
   const b = parseDate(birthday);
   if (!b) return null;
-  const now = new Date();
+  const now = asOf ? parseDate(asOf) : new Date();
+  if (!now) return null;
   let age = now.getFullYear() - b.getFullYear();
   if (now.getMonth() < b.getMonth() || (now.getMonth() === b.getMonth() && now.getDate() < b.getDate())) age--;
   return age;
@@ -151,6 +154,18 @@ export function initials(name) {
   if (!name) return '?';
   const parts = String(name).trim().split(/\s+/);
   return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || '?';
+}
+
+/** Stable palette slot (0–7) for letter avatars: hashed from the name so the
+ * color never changes across reloads. Colors themselves live in CSS
+ * (.avc-0 … .avc-7) and follow the light/dark theme palettes. */
+export const AVATAR_PALETTE_SIZE = 8;
+export function avatarColorIndex(name) {
+  const s = String(name || '').trim().toLowerCase();
+  if (!s) return 0;
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % AVATAR_PALETTE_SIZE;
 }
 
 export function fmtBytes(n) {
