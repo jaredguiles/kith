@@ -232,8 +232,20 @@ function queryHash(text) {
 }
 
 /**
- * Full geocode with geo_cache: remote (street precision) → local.
- * Caches hits AND misses (source 'none') so repeated lookups stay cheap.
+ * City-level query? No digits (street numbers/ZIPs) and ≤3 comma segments —
+ * e.g. "Portland, OR" / "Berlin, Germany". These resolve via the local
+ * geonames index FIRST: its qualifier matching (state code/name, country)
+ * is exact, whereas remote free-text ranking has mis-placed "City, ST".
+ */
+function looksCityLevel(text) {
+  const s = String(text);
+  return !/\d/.test(s) && s.split(',').length <= 3;
+}
+
+/**
+ * Full geocode with geo_cache: city-level → local first (exact qualifier
+ * match), street-level → remote first (Photon precision). Caches hits AND
+ * misses (source 'none') so repeated lookups stay cheap.
  * Returns {lat, lng, label, source} or null.
  */
 async function geocode(text) {
@@ -253,7 +265,9 @@ async function geocode(text) {
     console.error('[geo] cache read failed:', err.message);
   }
 
-  const result = (await geocodeRemote(text)) || geocodeLocal(text);
+  const result = looksCityLevel(text)
+    ? (geocodeLocal(text) || await geocodeRemote(text))
+    : ((await geocodeRemote(text)) || geocodeLocal(text));
 
   try {
     await query(
@@ -271,4 +285,4 @@ async function geocode(text) {
   return result;
 }
 
-module.exports = { geocode, geocodeLocal, geocodeRemote, queryHash };
+module.exports = { geocode, geocodeLocal, geocodeRemote, queryHash, looksCityLevel };

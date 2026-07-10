@@ -27,7 +27,9 @@ const KINDS = {
   },
   addresses: {
     table: 'contact_addresses',
-    fields: ['label', 'street', 'city', 'state', 'zip', 'country', 'is_primary'],
+    // start_date/end_date = residency window ("moved in / moved out");
+    // NULL end_date marks the current home. Enables move-history tracking.
+    fields: ['label', 'street', 'city', 'state', 'zip', 'country', 'is_primary', 'start_date', 'end_date'],
     required: [],
     entity: 'address',
   },

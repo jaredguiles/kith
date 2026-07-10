@@ -139,6 +139,7 @@ app.use('/api/notes', notesRouter);
 app.use('/api/reminders', remindersRouter);
 app.use('/api/messages', messagesRouter);
 app.use('/api/media', require('./routes/media'));
+app.use('/api/immich', require('./routes/immich'));
 app.use('/api/contacts/:id/spicy', require('./routes/spicy'));
 const { shareRouter, mergeRouter, auditRouter, changelogRouter } = require('./routes/sharing');
 app.use('/api/contacts/:id/share', shareRouter);

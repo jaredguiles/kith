@@ -32,6 +32,78 @@ const MIGRATIONS = [
     },
   },
   {
+    version: 4,
+    name: 'journal-immich-moves-education',
+    up: async (query) => {
+      const colExists = async (table, col) => {
+        const rows = await query(
+          `SELECT 1 FROM information_schema.COLUMNS
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, [table, col]);
+        return rows.length > 0;
+      };
+      // contacts: hometown + education (schooling/college free text)
+      if (!(await colExists('contacts', 'hometown'))) {
+        await query("ALTER TABLE contacts ADD COLUMN hometown VARCHAR(255) NULL AFTER place_of_birth");
+      }
+      if (!(await colExists('contacts', 'education'))) {
+        await query("ALTER TABLE contacts ADD COLUMN education VARCHAR(500) NULL AFTER occupation");
+      }
+      // addresses: residency window → move history ("moved in / moved out";
+      // NULL end_date = current home)
+      if (!(await colExists('contact_addresses', 'start_date'))) {
+        await query('ALTER TABLE contact_addresses ADD COLUMN start_date DATE NULL AFTER is_primary');
+      }
+      if (!(await colExists('contact_addresses', 'end_date'))) {
+        await query('ALTER TABLE contact_addresses ADD COLUMN end_date DATE NULL AFTER start_date');
+      }
+      // media: Immich-backed assets (file_path becomes nullable; immich rows
+      // carry instance + asset id and are proxied, never stored locally)
+      await query('ALTER TABLE media_assets MODIFY file_path VARCHAR(500) NULL');
+      if (!(await colExists('media_assets', 'immich_instance_id'))) {
+        await query('ALTER TABLE media_assets ADD COLUMN immich_instance_id INT NULL AFTER thumbnail_path');
+      }
+      if (!(await colExists('media_assets', 'immich_asset_id'))) {
+        await query('ALTER TABLE media_assets ADD COLUMN immich_asset_id VARCHAR(64) NULL AFTER immich_instance_id');
+      }
+      // personal diary — distinct from the contact timeline
+      await query(`CREATE TABLE IF NOT EXISTS journal_entries (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        owner_user_id INT NOT NULL,
+        kind VARCHAR(20) NOT NULL DEFAULT 'entry',
+        title VARCHAR(255) NULL,
+        content TEXT NULL,
+        location VARCHAR(255) NULL,
+        latitude DECIMAL(10,7) NULL,
+        longitude DECIMAL(10,7) NULL,
+        event_id INT NULL,
+        is_spicy BOOLEAN NOT NULL DEFAULT 0,
+        occurred_at TIMESTAMP NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        deleted_at TIMESTAMP NULL,
+        CONSTRAINT fk_journal_owner FOREIGN KEY (owner_user_id) REFERENCES users(id),
+        CONSTRAINT fk_journal_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE SET NULL,
+        INDEX idx_journal_owner_occurred (owner_user_id, occurred_at)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+      // City-level lookups are now local-first (exact state/country
+      // qualifier matching) — drop remote-sourced cache rows so previously
+      // mis-placed "City, ST" locations recompute correctly.
+      await query("DELETE FROM geo_cache WHERE source IN ('photon','none')");
+      // per-user Immich connections (api_key stored field-encrypted)
+      await query(`CREATE TABLE IF NOT EXISTS immich_instances (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        owner_user_id INT NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        base_url VARCHAR(500) NOT NULL,
+        api_key TEXT NOT NULL,
+        is_spicy BOOLEAN NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT fk_immich_owner FOREIGN KEY (owner_user_id) REFERENCES users(id),
+        INDEX idx_immich_owner (owner_user_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+    },
+  },
+  {
     version: 3,
     name: 'contacts-identity-genealogy-fields',
     up: async (query) => {

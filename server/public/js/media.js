@@ -2,10 +2,23 @@
 // upload + lightbox + set-profile-photo.
 
 import { api, qs } from './api.js';
-import { esc, fmtDate } from './utils.js';
+import { esc, fmtDate, debounce } from './utils.js';
 import { icon } from './icons.js';
 import { emptyState, modalShell, formGroup, toast, openModal, confirmModal, filterPills } from './components.js';
 import { isSpicyOn } from './app.js';
+
+// Immich instances — fetched once per session (also gates the picker button).
+let immichInstancesCache = null;
+async function getImmichInstances() {
+  if (immichInstancesCache === null) {
+    try {
+      immichInstancesCache = (await api.get('/api/immich/instances')).instances || [];
+    } catch {
+      immichInstancesCache = [];
+    }
+  }
+  return immichInstancesCache;
+}
 
 const UPLOAD_ACCEPT = [
   'image/jpeg', 'image/png', 'image/gif', 'image/webp',
@@ -27,12 +40,14 @@ async function renderContactMedia(container, contact, canEdit, refresh, typeFilt
     return;
   }
   const media = data.media || [];
+  const immichInstances = canEdit ? await getImmichInstances() : [];
 
   container.innerHTML = `
     ${canEdit ? `
     <div class="flex gap-2 mb-3 flex-wrap">
       <input type="file" id="media-file" accept="${UPLOAD_ACCEPT}" multiple class="hidden">
       <button class="btn btn-secondary" id="upload-media">${icon('upload')} Upload</button>
+      ${immichInstances.length ? `<button class="btn btn-secondary" id="immich-pick">${icon('image')} Immich</button>` : ''}
       ${isSpicyOn() ? `<button type="button" class="btn-flame" id="media-spicy" aria-label="Mark upload spicy" aria-pressed="false">${icon('lock')}<span class="conf-label">private</span></button>` : ''}
       <span class="text-xs text-muted flex items-center" id="upload-status"></span>
     </div>` : ''}
@@ -56,6 +71,11 @@ async function renderContactMedia(container, contact, canEdit, refresh, typeFilt
       spicyBtn.setAttribute('aria-pressed', uploadSpicy ? 'true' : 'false');
     });
     container.querySelector('#upload-media')?.addEventListener('click', () => fileInput.click());
+    container.querySelector('#immich-pick')?.addEventListener('click', () =>
+      openImmichPicker({
+        contactId: contact.id,
+        onPicked: () => renderContactMedia(container, contact, canEdit, refresh, typeFilter),
+      }));
     fileInput?.addEventListener('change', async () => {
       if (!fileInput.files.length) return;
       const statusEl = container.querySelector('#upload-status');
@@ -108,7 +128,7 @@ function mediaTileHtml(m) {
     <button class="media-tile ${m.is_spicy ? 'is-spicy' : ''}" data-media-id="${m.id}" data-media-type="${esc(m.type)}" aria-label="View media">
       ${m.type === 'video' && !m.has_thumbnail
         ? `<span class="media-tile-placeholder">${icon('video')}</span>`
-        : `<img src="/api/media/${m.id}/${m.type === 'video' ? 'thumbnail' : 'file'}" alt="${esc(m.caption || '')}" loading="lazy">`}
+        : `<img src="/api/media/${m.id}/${m.type === 'video' || m.is_immich ? 'thumbnail' : 'file'}" alt="${esc(m.caption || '')}" loading="lazy">`}
       ${m.type === 'video' ? `<span class="media-type">${icon('video')}</span>` : ''}
       <span class="media-tile-cap">${esc(m.caption || `Plate ${String(Number(m.id) || 0).padStart(3, '0')}`)}</span>
     </button>`;
@@ -167,6 +187,134 @@ function openLightbox(m, contact, canEdit, reload, refreshDetail) {
           reload?.();
         } catch (err) { toast(err.message, 'error'); }
       });
+    },
+  });
+}
+
+// ---------------------------------------------------------------- Immich picker
+// Modal photo picker for connected Immich libraries. Thumbnails proxy through
+// the server (/api/immich/...), so cookie auth rides along — the browser
+// never talks to Immich or sees an API key. Multi-pick: stays open, marks
+// picked tiles.
+export function openImmichPicker({ contactId = null, onPicked } = {}) {
+  const body = `
+    <div id="immich-picker-controls" class="flex gap-2 mb-3 flex-wrap">
+      <select class="form-select" id="immich-instance" style="max-width:200px" aria-label="Library"></select>
+      <select class="form-select" id="immich-album" style="max-width:200px" aria-label="Album"><option value="">All photos</option></select>
+      <div class="search-input-wrap flex-1" style="min-width:180px">${icon('search')}<input class="form-input" id="immich-search" placeholder="Search photos… (semantic)" autocomplete="off"></div>
+    </div>
+    <div class="text-xs text-muted mb-2 hidden" id="immich-fallback-hint">Semantic search unavailable — showing recent photos</div>
+    <div id="immich-grid-wrap"><div class="text-sm text-muted">Loading…</div></div>
+    <div class="text-center mt-3 hidden" id="immich-more-wrap">
+      <button class="btn btn-secondary btn-sm" id="immich-more">Load more</button>
+    </div>`;
+
+  openModal(modalShell('immich-picker', 'Attach from Immich', body, '', { size: 'modal-lg' }), {
+    onMount: async (overlay) => {
+      const instances = await getImmichInstances();
+      const controls = overlay.querySelector('#immich-picker-controls');
+      const gridWrap = overlay.querySelector('#immich-grid-wrap');
+      const moreWrap = overlay.querySelector('#immich-more-wrap');
+      const hintEl = overlay.querySelector('#immich-fallback-hint');
+
+      if (!instances.length) {
+        controls.classList.add('hidden');
+        gridWrap.innerHTML = emptyState('image', 'No Immich libraries', 'Add an Immich library in Settings to attach photos from your photo server.');
+        return;
+      }
+
+      const instSel = overlay.querySelector('#immich-instance');
+      const albumSel = overlay.querySelector('#immich-album');
+      const searchInput = overlay.querySelector('#immich-search');
+      instSel.innerHTML = instances
+        .map((i) => `<option value="${esc(String(i.id))}">${esc(i.name)}${i.is_spicy ? ' 🔒' : ''}</option>`)
+        .join('');
+
+      const picked = new Set();
+      let items = [];
+      let nextPage = null;
+      let loading = false;
+
+      const tileHtml = (a) => `
+        <button class="immich-tile ${picked.has(a.id) ? 'picked' : ''}" data-asset-id="${esc(a.id)}" aria-label="Attach ${esc(a.originalFileName || 'photo')}" title="${esc(a.originalFileName || '')}">
+          <img src="/api/immich/${esc(instSel.value)}/assets/${esc(a.id)}/thumbnail?size=thumbnail" alt="${esc(a.originalFileName || '')}" loading="lazy">
+          ${a.type === 'VIDEO' ? `<span class="media-type">${icon('video')}</span>` : ''}
+          <span class="immich-picked-check">${icon('check')}</span>
+        </button>`;
+
+      const bindTiles = () => {
+        gridWrap.querySelectorAll('.immich-tile').forEach((tile) =>
+          tile.addEventListener('click', async () => {
+            const assetId = tile.dataset.assetId;
+            if (picked.has(assetId) || tile.disabled) return;
+            tile.disabled = true;
+            try {
+              const res = await api.post('/api/media/immich', {
+                instance_id: Number(instSel.value),
+                asset_id: assetId,
+                contact_id: contactId || undefined,
+              });
+              picked.add(assetId);
+              tile.classList.add('picked');
+              toast('Photo attached.');
+              onPicked?.(res.id);
+            } catch (err) {
+              toast(err.message, 'error');
+            }
+            tile.disabled = false;
+          }));
+      };
+
+      const renderGrid = () => {
+        gridWrap.innerHTML = items.length
+          ? `<div class="immich-grid">${items.map(tileHtml).join('')}</div>`
+          : emptyState('image', 'No photos found', 'Try a different search or album.');
+        moreWrap.classList.toggle('hidden', nextPage === null);
+        bindTiles();
+      };
+
+      const search = async (append = false) => {
+        if (loading) return;
+        loading = true;
+        if (!append) {
+          gridWrap.innerHTML = '<div class="text-sm text-muted">Loading…</div>';
+          moreWrap.classList.add('hidden');
+        }
+        try {
+          const res = await api.post(`/api/immich/${instSel.value}/search`, {
+            query: searchInput.value.trim() || undefined,
+            album_id: albumSel.value || undefined,
+            page: append && nextPage ? Number(nextPage) : 1,
+            size: 40,
+          });
+          items = append ? items.concat(res.items || []) : (res.items || []);
+          nextPage = res.nextPage ?? null;
+          hintEl.classList.toggle('hidden', !res.fallback);
+          renderGrid();
+        } catch (err) {
+          gridWrap.innerHTML = emptyState('alert-circle', "Couldn't reach Immich", err?.message || 'Check the library connection in Settings.');
+          moreWrap.classList.add('hidden');
+        }
+        loading = false;
+      };
+
+      const loadAlbums = async () => {
+        albumSel.innerHTML = '<option value="">All photos</option>';
+        try {
+          const res = await api.get(`/api/immich/${instSel.value}/albums`);
+          albumSel.innerHTML = '<option value="">All photos</option>' + (res.albums || [])
+            .map((a) => `<option value="${esc(a.id)}">${esc(a.name)} (${Number(a.count) || 0})</option>`)
+            .join('');
+        } catch { /* albums are optional — keep "All photos" */ }
+      };
+
+      instSel.addEventListener('change', () => { loadAlbums(); search(); });
+      albumSel.addEventListener('change', () => search());
+      searchInput.addEventListener('input', debounce(() => search(), 350));
+      overlay.querySelector('#immich-more').addEventListener('click', () => search(true));
+
+      loadAlbums();
+      search();
     },
   });
 }

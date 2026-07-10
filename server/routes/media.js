@@ -16,6 +16,7 @@ const { requireAuth, contactAccess, isAdmin } = require('../middleware/auth');
 const { auditWrite } = require('../lib/audit');
 const { spicyVisible } = require('./contacts');
 const { encryptField, decryptField } = require('../lib/crypto');
+const immich = require('./immich');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -168,7 +169,9 @@ router.get('/', async (req, res, next) => {
         ...m,
         caption: m.is_spicy ? decryptField(m.caption) : m.caption,
         file_path: undefined, thumbnail_path: undefined, // never expose fs paths
-        has_thumbnail: Boolean(m.thumbnail_path),
+        immich_instance_id: undefined, immich_asset_id: undefined, // nor upstream ids
+        is_immich: Boolean(m.immich_instance_id),
+        has_thumbnail: Boolean(m.thumbnail_path) || Boolean(m.immich_instance_id),
       })),
     });
   } catch (err) { next(err); }
@@ -246,10 +249,78 @@ function generateThumbnail(videoPath, mediaId) {
     });
 }
 
+// POST /api/media/immich — attach an Immich asset as a media row
+// body: { instance_id, asset_id, contact_id?, caption? }
+router.post('/immich', async (req, res, next) => {
+  try {
+    const b = req.body || {};
+    const assetId = String(b.asset_id || '').trim();
+    if (!b.instance_id || !assetId) return res.status(400).json({ error: 'instance_id and asset_id are required' });
+    if (!/^[0-9a-f-]{36}$/.test(assetId)) return res.status(400).json({ error: 'Invalid asset id' });
+
+    const spicyOk = await spicyVisible(req.user);
+    const instance = await immich.getInstanceForUser(req.user.id, b.instance_id, spicyOk);
+    if (!instance) return res.status(404).json({ error: 'Immich library not found' });
+
+    let contactId = null;
+    if (b.contact_id) {
+      const found = await contactAccess(req.user, Number(b.contact_id));
+      if (!found) return res.status(404).json({ error: 'Contact not found' });
+      if (found.access === 'shared' && found.share.permissions !== 'edit') {
+        return res.status(403).json({ error: 'Read-only access to this contact' });
+      }
+      contactId = found.contact.id;
+    }
+
+    // verify the asset exists upstream (also tells us its type/name)
+    let upstream;
+    try {
+      upstream = await immich.immichFetch(`${instance.base_url}/api/assets/${assetId}`, {
+        headers: { 'x-api-key': instance.api_key },
+      });
+    } catch {
+      return res.status(502).json({ error: 'Immich unreachable' });
+    }
+    if (upstream.status === 404 || upstream.status === 400) return res.status(404).json({ error: 'Asset not found on Immich' });
+    if (!upstream.ok) return res.status(502).json({ error: 'Immich unreachable' });
+    const asset = await upstream.json().catch(() => null);
+    if (!asset || !asset.id) return res.status(502).json({ error: 'Immich unreachable' });
+
+    const mediaType = asset.type === 'VIDEO' ? 'video' : 'photo';
+    const spicyFlag = instance.is_spicy ? 1 : 0;
+    const caption = b.caption ? String(b.caption) : null;
+    const storedCaption = spicyFlag && caption ? encryptField(caption) : caption;
+
+    const result = await query(
+      `INSERT INTO media_assets (contact_id, owner_user_id, type, file_path, immich_instance_id, immich_asset_id, caption, is_spicy, is_profile_eligible, original_name)
+       VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`,
+      [contactId, req.user.id, mediaType, instance.id, assetId, storedCaption, spicyFlag,
+       mediaType === 'photo' ? 1 : 0,
+       asset.originalFileName ? safeFilename(asset.originalFileName) : null]
+    );
+    auditWrite(req.user.id, contactId, 'create', 'media', result.insertId, null,
+      { type: mediaType, is_spicy: spicyFlag, source: 'immich' }, 'Attached Immich photo');
+    res.status(201).json({ id: result.insertId });
+  } catch (err) { next(err); }
+});
+
+/** Serve an Immich-backed media row by proxying the upstream asset. */
+async function serveImmichMedia(req, res, variant) {
+  const instance = await immich.getInstanceById(req.media.immich_instance_id);
+  // No owner check here: loadMedia already enforced the media row's own ACL.
+  // But the instance must still exist (deleting one soft-deletes its media;
+  // guard against races anyway).
+  if (!instance) return res.status(404).json({ error: 'File missing' });
+  await immich.proxyAssetResponse(instance, req.media.immich_asset_id, variant, res);
+}
+
 // GET /api/media/:id/file — authenticated bytes; documents download with
 // their original filename (Content-Disposition: attachment)
-router.get('/:id/file', loadMedia, (req, res) => {
-  const abs = resolveMediaPath(req.media.file_path);
+router.get('/:id/file', loadMedia, (req, res, next) => {
+  if (req.media.immich_instance_id) {
+    return serveImmichMedia(req, res, 'original').catch(next);
+  }
+  const abs = req.media.file_path ? resolveMediaPath(req.media.file_path) : null;
   if (!abs || !fs.existsSync(abs)) return res.status(404).json({ error: 'File missing' });
   if (req.media.type === 'document') {
     res.setHeader('Content-Disposition', `attachment; filename="${safeFilename(req.media.original_name)}"`);
@@ -258,9 +329,12 @@ router.get('/:id/file', loadMedia, (req, res) => {
 });
 
 // GET /api/media/:id/thumbnail — authenticated thumbnail (videos)
-router.get('/:id/thumbnail', loadMedia, (req, res) => {
+router.get('/:id/thumbnail', loadMedia, (req, res, next) => {
+  if (req.media.immich_instance_id) {
+    return serveImmichMedia(req, res, 'preview').catch(next);
+  }
   const rel = req.media.thumbnail_path || req.media.file_path;
-  const abs = resolveMediaPath(rel);
+  const abs = rel ? resolveMediaPath(rel) : null;
   if (!abs || !fs.existsSync(abs)) return res.status(404).json({ error: 'File missing' });
   res.sendFile(abs);
 });

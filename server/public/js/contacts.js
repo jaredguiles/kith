@@ -13,7 +13,7 @@ import {
   textInput, selectInput, textarea, toast, openModal, confirmModal, readForm,
   filterPills, feedItem, sectionHeader, leaderRow, recNo,
 } from './components.js';
-import { formatPhoneSafe, attachPhoneInput, formatAddress, isUSCountry } from './phonefmt.js';
+import { formatPhoneSafe, attachPhoneInput, formatAddress, isUSCountry, normalizePhone } from './phonefmt.js';
 import {
   ieSpan, bindInlineEditor, languageFieldHtml, bindLanguageField,
 } from './inline-edit.js';
@@ -283,9 +283,9 @@ async function loadTable(el) {
     <thead><tr>
       ${listState.selectMode ? `<th style="width:34px"><input type="checkbox" class="bulk-check" data-select-page ${allPageSelected ? 'checked' : ''} aria-label="Select page"></th>` : ''}
       <th class="sortable" data-sort="name">Name ${sortArrow('name')}</th>
-      <th>Tags</th>
+      <th class="td-tags">Tags</th>
       <th class="sortable" data-sort="location">Location ${sortArrow('location')}</th>
-      <th class="sortable" data-sort="updated">Updated ${sortArrow('updated')}</th>
+      <th class="sortable td-updated" data-sort="updated">Updated ${sortArrow('updated')}</th>
       <th></th>
     </tr></thead>
     <tbody>
@@ -302,9 +302,9 @@ async function loadTable(el) {
             </div>
           </div>
         </td>
-        <td><div class="flex gap-1 flex-wrap">${(c.tags || []).slice(0, 3).map((t) => tagPill(t)).join('')}</div></td>
+        <td class="td-tags"><div class="flex gap-1 flex-wrap">${(c.tags || []).slice(0, 3).map((t) => tagPill(t)).join('')}</div></td>
         <td class="td-secondary">${esc(c.location || '')}</td>
-        <td class="td-muted">${timeAgo(c.updated_at)}</td>
+        <td class="td-muted td-updated">${timeAgo(c.updated_at)}</td>
         <td>
           ${c.is_shared_in ? '' : `
           <button class="btn btn-icon" data-fav="${c.id}" aria-label="${c.is_favorite ? 'Unfavorite' : 'Favorite'}">
@@ -578,10 +578,12 @@ export async function renderContactDetail(el, id) {
     middle_name: { type: 'text', label: 'Middle name', value: c.middle_name },
     birthday: { type: 'date', label: 'Birthday', value: (c.birthday || '').slice(0, 10) },
     place_of_birth: { type: 'text', label: 'Place of birth', value: c.place_of_birth },
+    hometown: { type: 'text', label: 'Hometown', value: c.hometown },
+    education: { type: 'text', label: 'Education', value: c.education, placeholder: 'School, college, degrees…' },
     is_deceased: { type: 'select', label: 'Living status', value: c.is_deceased ? '1' : '0', options: [{ value: '0', label: 'Living' }, { value: '1', label: 'Deceased' }] },
     date_of_death: { type: 'date', label: 'Date of death', value: (c.date_of_death || '').slice(0, 10) },
     place_of_death: { type: 'text', label: 'Place of death', value: c.place_of_death },
-    location: { type: 'text', label: 'Location', value: c.location },
+    location: { type: 'text', label: 'Location', value: c.location, placeholder: 'City, State — or add a full address below' },
     occupation: { type: 'text', label: 'Occupation', value: c.occupation },
     company: { type: 'text', label: 'Company', value: c.company },
     website: { type: 'text', label: 'Website', value: c.website, placeholder: 'https://' },
@@ -611,9 +613,11 @@ export async function renderContactDetail(el, id) {
   const infoRow = (label, value) => value
     ? `<div class="rec-leader"><span class="rec-part-key">${esc(label)}</span><span class="rec-dots"></span><span class="rec-part-val">${esc(value)}</span></div>`
     : '';
+  // View mode is READ-ONLY: plain text rows, empty rows hidden. The ieSpan
+  // click-to-edit affordance only exists while edit mode is active.
   const ieRow = (label, field, displayValue) => {
+    if (!canInline || !editMode) return infoRow(label, displayValue);
     const has = displayValue !== null && displayValue !== undefined && displayValue !== '';
-    if (!canInline) return infoRow(label, displayValue);
     return `<div class="rec-leader ${has || editMode ? '' : 'ie-hidden'}">
       <span class="rec-part-key">${esc(label)}</span>
       <span class="rec-dots"></span>
@@ -630,8 +634,8 @@ export async function renderContactDetail(el, id) {
   ].filter(Boolean).map(esc).join(' · ');
 
   // mono contact key/value row (satellite rows keep data-sat/data-sat-id)
-  const kvRow = (key, valueHtml, { attrs = '', actionsHtml = '' } = {}) => `
-    <div class="rec-kv" ${attrs}>
+  const kvRow = (key, valueHtml, { attrs = '', actionsHtml = '', cls = '' } = {}) => `
+    <div class="rec-kv ${cls}" ${attrs}>
       <span class="rec-kv-key">${esc(key)}</span>
       <span class="rec-kv-val">${valueHtml}</span>
       ${actionsHtml ? `<span class="rec-kv-actions">${actionsHtml}</span>` : ''}
@@ -644,34 +648,76 @@ export async function renderContactDetail(el, id) {
   const primaryDot = '<span class="rec-primary-dot" title="Primary"></span>';
   const canSat = canEdit && !isBasic;
 
-  // scalar contact.email/contact.phone ("primary" rows from the create form)
-  // get the same inline-edit affordance as particulars (sparse PUT).
-  const scalarKv = (key, field, displayValue) => kvRow(key,
-    canInline ? `${ieSpan(field, ieDefs[field], displayValue, editMode)}${displayValue ? primaryDot : ''}`
-      : `${esc(displayValue)}${primaryDot}`);
+  // view-mode contact links: mailto/tel (raw digits + leading '+' in href,
+  // pretty display text)
+  const emailLinkHtml = (em) => `<a href="${escUrl(`mailto:${em}`)}">${esc(em)}</a>`;
+  const phoneLinkHtml = (ph) => `<a href="${escUrl(`tel:${normalizePhone(ph)}`)}">${esc(formatPhoneSafe(ph))}</a>`;
+
+  // scalar contact.email/contact.phone ("primary" rows from the create form):
+  // inline-editable in edit mode, real mailto:/tel: links in view mode.
+  const scalarKv = (key, field, displayValue, linkHtml = null) => kvRow(key,
+    canInline && editMode
+      ? `${ieSpan(field, ieDefs[field], displayValue, editMode)}${displayValue ? primaryDot : ''}`
+      : `${linkHtml ?? esc(displayValue)}${displayValue ? primaryDot : ''}`);
+
+  // ---- addresses: residency window + current-first ordering (Task B)
+  const yr = (d) => (d ? String(d).slice(0, 4) : '');
+  const addrWindow = (a) => (a.start_date || a.end_date)
+    ? ` <span class="rec-addr-window">${esc(`${yr(a.start_date)} – ${yr(a.end_date)}`)}</span>`
+    : '';
+  const addrLabel = (a) => a.end_date
+    ? (a.label ? `Formerly ${a.label}` : 'Former home')
+    : (a.label || 'Address');
+  const addrSorted = [...(addresses || [])].sort((a, b) => {
+    const aCur = !a.end_date, bCur = !b.end_date;
+    if (aCur !== bCur) return aCur ? -1 : 1;
+    if (aCur) return (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0);
+    return String(b.end_date).localeCompare(String(a.end_date)); // former: latest first
+  });
+
+  // move history: ≥2 addresses carrying residency dates → tiny "Moves" list,
+  // chronological by start_date (unknown start last)
+  const datedAddrs = (addresses || []).filter((a) => a.start_date || a.end_date);
+  const movesHtml = datedAddrs.length >= 2 ? `
+    <div class="mt-2">
+      <div class="rec-part-key mb-1">Moves</div>
+      ${[...datedAddrs].sort((a, b) => {
+        if (!a.start_date && !b.start_date) return 0;
+        if (!a.start_date) return 1;
+        if (!b.start_date) return -1;
+        return String(a.start_date).localeCompare(String(b.start_date));
+      }).map((a) => {
+        const place = [a.city, a.state].filter(Boolean).join(', ') || a.street || 'Unknown';
+        return `<div class="rec-move-row">${esc(`${yr(a.start_date)}–${yr(a.end_date)}`)} · ${esc(place)}</div>`;
+      }).join('')}
+    </div>` : '';
 
   const contactRows = `
-    ${c.email && !emails.some((e) => e.email === c.email) ? scalarKv('Email', 'email', c.email) : ''}
-    ${c.phone && !phones.some((p) => p.phone === c.phone) ? scalarKv('Mobile', 'phone', formatPhoneSafe(c.phone)) : ''}
-    ${emails.map((e) => kvRow(e.label || 'Email', `${esc(e.email)}${e.is_primary ? primaryDot : ''}`, {
+    ${c.email && !emails.some((e) => e.email === c.email) ? scalarKv('Email', 'email', c.email, emailLinkHtml(c.email)) : ''}
+    ${c.phone && !phones.some((p) => p.phone === c.phone) ? scalarKv('Mobile', 'phone', formatPhoneSafe(c.phone), phoneLinkHtml(c.phone)) : ''}
+    ${emails.map((e) => kvRow(e.label || 'Email', `${editMode ? esc(e.email) : emailLinkHtml(e.email)}${e.is_primary ? primaryDot : ''}`, {
       attrs: `data-sat="emails" data-sat-id="${Number(e.id)}"`, actionsHtml: satActions(canSat),
     })).join('')}
-    ${phones.map((p) => kvRow(p.label || 'Phone', `${esc(formatPhoneSafe(p.phone))}${p.is_primary ? primaryDot : ''}`, {
+    ${phones.map((p) => kvRow(p.label || 'Phone', `${editMode ? esc(formatPhoneSafe(p.phone)) : phoneLinkHtml(p.phone)}${p.is_primary ? primaryDot : ''}`, {
       attrs: `data-sat="phones" data-sat-id="${Number(p.id)}"`, actionsHtml: satActions(canSat),
     })).join('')}
-    ${(addresses || []).map((a) => kvRow(a.label || 'Address', esc(formatAddress(a)), {
+    ${addrSorted.map((a) => kvRow(addrLabel(a), `${esc(formatAddress(a))}${addrWindow(a)}`, {
+      cls: a.end_date ? 'rec-kv-past' : '',
       attrs: `data-sat="addresses" data-sat-id="${Number(a.id)}"`,
       actionsHtml: canSat && editMode
         ? `${satActions(canSat)}<button class="btn btn-icon" data-locate-addr="${Number(a.id)}" aria-label="Locate on map" title="Locate on map">${icon('map-pin')}</button>`
         : '',
     })).join('')}
+    ${movesHtml}
     ${!c.email && !c.phone && !emails.length && !phones.length && !(addresses || []).length ? '<div class="text-sm text-muted" style="padding:6px 0">No contact details yet.</div>' : ''}`;
 
   const socialRows = (socials || []).length ? (socials || []).map((s) => `
     <div class="rec-leader" data-sat="socials" data-sat-id="${Number(s.id)}">
       <span class="rec-part-key">${esc(s.platform || 'Link')}</span>
       <span class="rec-dots"></span>
-      <span class="rec-part-val">${s.username ? `@${esc(s.username)}` : ''}${s.url ? ` <a href="${escUrl(s.url)}" target="_blank" rel="noopener noreferrer" aria-label="Open link">${icon('external-link')}</a>` : ''}</span>
+      <span class="rec-part-val">${s.url
+        ? `<a href="${escUrl(s.url)}" target="_blank" rel="noopener noreferrer">${s.username ? `@${esc(s.username)}` : esc(s.platform || 'Link')} ${icon('external-link')}</a>`
+        : s.username ? `@${esc(s.username)}` : ''}</span>
       ${canEdit && editMode ? `<button class="btn btn-icon" data-edit-sat aria-label="Edit">${icon('edit')}</button>
       <button class="btn btn-icon" data-del-sat aria-label="Remove">${icon('x')}</button>` : ''}
     </div>`).join('') : '<div class="text-sm text-muted" style="padding:6px 0">No social links yet.</div>';
@@ -706,14 +752,14 @@ export async function renderContactDetail(el, id) {
         ${canInline && editMode
           ? `<span class="ie-field ie-on" data-ie="name" role="button" tabindex="0" aria-label="Edit name"><h1 class="rec-name ie-val">${esc(c.display_name)}</h1></span>`
           : `<h1 class="rec-name">${esc(c.display_name)}</h1>`}
-        ${canInline ? `<div class="rec-nick">${ieSpan('nickname', ieDefs.nickname, c.nickname ? `“${c.nickname}”` : '', editMode)}</div>`
+        ${canInline && editMode ? `<div class="rec-nick">${ieSpan('nickname', ieDefs.nickname, c.nickname ? `“${c.nickname}”` : '', editMode)}</div>`
           : c.nickname ? `<div class="rec-nick">“${esc(c.nickname)}”</div>` : ''}
         ${metaLine ? `<div class="rec-meta-line">${metaLine}</div>` : ''}
         ${kitBadge ? `<div class="rec-meta-line">${kitBadge}</div>` : ''}
         <div class="rec-status-row">
           ${c.relationship_status || (canInline && editMode) ? `
           <div class="rec-status"><span class="rec-status-l">Status</span><span class="rec-status-v">${
-            canInline ? ieSpan('relationship_status', ieDefs.relationship_status, c.relationship_status, editMode) : esc(c.relationship_status || '')
+            canInline && editMode ? ieSpan('relationship_status', ieDefs.relationship_status, c.relationship_status, editMode) : esc(c.relationship_status || '')
           }</span></div>` : ''}
           ${!isBasic ? `
           <div class="rec-tags" id="detail-tags">
@@ -734,9 +780,10 @@ export async function renderContactDetail(el, id) {
           ${ieRow('Maiden name', 'maiden_name', c.maiden_name)}
           ${ieRow('Birthday', 'birthday', c.birthday ? `${fmtDate(c.birthday)}${age != null ? ` (${age})` : ''}` : '')}
           ${ieRow('Place of birth', 'place_of_birth', c.place_of_birth)}
+          ${ieRow('Hometown', 'hometown', c.hometown)}
           ${ieRow('Living status', 'is_deceased', c.is_deceased ? 'Deceased' : (editMode ? 'Living' : ''))}
-          ${c.is_deceased || (canInline && editMode) ? ieRow('Date of death', 'date_of_death', c.date_of_death ? fmtDate(c.date_of_death) : '') : ''}
-          ${c.is_deceased || (canInline && editMode) ? ieRow('Place of death', 'place_of_death', c.place_of_death) : ''}
+          ${c.is_deceased && (c.date_of_death || editMode) ? ieRow('Date of death', 'date_of_death', c.date_of_death ? fmtDate(c.date_of_death) : '') : ''}
+          ${c.is_deceased && (c.place_of_death || editMode) ? ieRow('Place of death', 'place_of_death', c.place_of_death) : ''}
           ${ieRow('Pronouns', 'pronouns', c.pronouns)}
           ${ieRow('Gender identity', 'gender_identity', c.gender_identity)}
           ${ieRow('Sex at birth', 'sex', c.sex)}
@@ -744,6 +791,7 @@ export async function renderContactDetail(el, id) {
           ${ieRow('Relation', 'relationship_type', c.relationship_type)}
           ${ieRow('Location', 'location', c.location)}
           ${ieRow('Occupation', 'occupation', c.occupation)}
+          ${ieRow('Education', 'education', c.education)}
           ${ieRow('Company', 'company', c.company)}
           ${canInline && editMode
             ? `<div class="rec-leader">
@@ -759,11 +807,11 @@ export async function renderContactDetail(el, id) {
           ${ieRow('How we met', 'how_we_met', c.how_we_met)}
           ${ieRow('Met', 'met_date', c.met_date ? fmtDate(c.met_date) : '')}
           ${ieRow('Keep in touch', 'keep_in_touch_days', c.keep_in_touch_days ?? '')}
-          ${canInline
-            ? `<div class="mt-2 ${c.bio || editMode ? '' : 'ie-hidden'}"><div class="rec-part-key mb-1">Bio</div><div class="rec-prose">${ieSpan('bio', ieDefs.bio, c.bio, editMode)}</div></div>`
+          ${canInline && editMode
+            ? `<div class="mt-2"><div class="rec-part-key mb-1">Bio</div><div class="rec-prose">${ieSpan('bio', ieDefs.bio, c.bio, editMode)}</div></div>`
             : c.bio ? `<div class="mt-2"><div class="rec-part-key mb-1">Bio</div><div class="rec-prose">${esc(c.bio)}</div></div>` : ''}
-          ${canInline
-            ? `<div class="mt-2 ${c.notes_text || editMode ? '' : 'ie-hidden'}"><div class="rec-part-key mb-1">Notes</div><div class="rec-prose">${ieSpan('notes_text', ieDefs.notes_text, c.notes_text, editMode)}</div></div>`
+          ${canInline && editMode
+            ? `<div class="mt-2"><div class="rec-part-key mb-1">Notes</div><div class="rec-prose">${ieSpan('notes_text', ieDefs.notes_text, c.notes_text, editMode)}</div></div>`
             : c.notes_text ? `<div class="mt-2"><div class="rec-part-key mb-1">Notes</div><div class="rec-prose">${esc(c.notes_text)}</div></div>` : ''}
         </div>
 
@@ -840,8 +888,8 @@ export async function renderContactDetail(el, id) {
     refresh();
   });
 
-  // ---- inline edit-in-place
-  if (canInline) {
+  // ---- inline edit-in-place (edit mode only — view mode is read-only)
+  if (canInline && editMode) {
     const saveField = async (payload) => {
       await api.put(`/api/contacts/${c.id}`, payload);
       // name/nickname changes ripple into sidebar favorites etc.
@@ -982,6 +1030,33 @@ export async function renderContactDetail(el, id) {
 }
 
 // ------------------------------------------------------ relationships card
+// Category derives from display_label (already direction-corrected on the
+// server — relation_type on inverse rows carries the OTHER side's meaning).
+const REL_FAMILY_WORDS = ['parent', 'mother', 'father', 'child', 'son', 'daughter',
+  'sibling', 'brother', 'sister', 'spouse', 'husband', 'wife', 'partner',
+  'grand', 'aunt', 'uncle', 'niece', 'nephew', 'cousin', 'in-law', 'in_law',
+  'step', 'adopt', 'foster', 'god', 'family', 'ex'];
+const REL_FRIEND_WORDS = ['friend', 'best_friend', 'roommate', 'neighbor', 'acquaintance', 'introduced'];
+const REL_WORK_WORDS = ['colleague', 'coworker', 'boss', 'manager', 'report', 'mentor', 'mentee'];
+
+function relCategory(label) {
+  const l = String(label || '').toLowerCase();
+  if (REL_FAMILY_WORDS.some((w) => l.includes(w))) return 'family';
+  if (REL_FRIEND_WORDS.some((w) => l.includes(w))) return 'friends';
+  if (REL_WORK_WORDS.some((w) => l.includes(w))) return 'work';
+  return 'other';
+}
+
+// Immediate-family bucket from the display label ('' → not immediate).
+function immFamilyBucket(label) {
+  const l = String(label || '').toLowerCase();
+  if (['parent', 'mother', 'father'].includes(l)) return 'Parents';
+  if (['sibling', 'brother', 'sister'].includes(l)) return 'Siblings';
+  if (['spouse', 'husband', 'wife', 'partner'].includes(l)) return 'Partner';
+  if (['child', 'son', 'daughter'].includes(l)) return 'Children';
+  return '';
+}
+
 async function loadRelationships(container, contact, canEdit, refresh) {
   let rels = [];
   try {
@@ -995,29 +1070,68 @@ async function loadRelationships(container, contact, canEdit, refresh) {
     return;
   }
   const label = (t) => (RELATION_TYPES.find((r) => r.value === t)?.label || t || '').toLowerCase();
-  container.innerHTML = rels.map((r) => `
-    <div class="flex-between" style="padding:6px 0;border-bottom:1px solid var(--border)" data-rel-id="${r.id}">
-      <a class="flex items-center gap-2" href="#/contacts/${encodeURIComponent(r.other.id)}" style="text-decoration:none;color:inherit;min-width:0">
-        ${avatar(r.other, 'sm')}
-        <span class="min-w-0">
-          <span class="text-sm font-medium">${esc(r.other.display_name)}</span>
-          <span class="text-sm ${r.inverse ? 'text-muted' : 'text-secondary'}"> · ${esc(label(r.display_label))}${r.inverse ? ' (inverse)' : ''}</span>
-          ${r.notes ? `<span class="text-xs text-muted truncate" style="display:block">${esc(r.notes)}</span>` : ''}
-        </span>
-      </a>
-      ${canEdit ? `<button class="btn btn-icon" data-del-rel="${r.id}" aria-label="Remove relationship">${icon('x')}</button>` : ''}
-    </div>`).join('');
+  for (const r of rels) r._cat = relCategory(r.display_label);
+  const counts = { family: 0, friends: 0, work: 0, other: 0 };
+  for (const r of rels) counts[r._cat]++;
+  let active = counts.family ? 'family' : 'all';
 
-  container.querySelectorAll('[data-del-rel]').forEach((btn) =>
-    btn.addEventListener('click', async () => {
-      const ok = await confirmModal('Remove relationship', 'Remove this relationship? The other person is not affected.', { confirmLabel: 'Remove' });
-      if (!ok) return;
-      try {
-        await api.del(`/api/relationships/${btn.dataset.delRel}`);
-        toast('Relationship removed.');
-        refresh?.();
-      } catch (err) { toast(err.message, 'error'); }
-    }));
+  // Immediate family chips (parents/siblings/partner/children), stable order
+  const immOrder = ['Parents', 'Siblings', 'Partner', 'Children'];
+  const imm = rels
+    .map((r) => ({ r, bucket: immFamilyBucket(r.display_label) }))
+    .filter((x) => x.bucket)
+    .sort((a, b) => immOrder.indexOf(a.bucket) - immOrder.indexOf(b.bucket));
+
+  const render = () => {
+    const shown = active === 'all' ? rels : rels.filter((r) => r._cat === active);
+    const pillItems = [
+      { value: 'family', label: `Family ${counts.family}` },
+      { value: 'friends', label: `Friends ${counts.friends}` },
+      { value: 'work', label: `Work ${counts.work}` },
+      { value: 'other', label: `Other ${counts.other}` },
+      { value: 'all', label: `All ${rels.length}` },
+    ];
+    const immHtml = imm.length && (active === 'family' || active === 'all') ? `
+      <div class="rec-imm-family">
+        <span class="rec-part-key">Immediate family:</span>
+        ${imm.map(({ r }) => `
+          <a class="rec-imm-chip" href="#/contacts/${encodeURIComponent(r.other.id)}" title="${esc(r.display_label)}">
+            ${avatar(r.other, 'sm')}<span class="rec-imm-name">${esc(r.other.display_name)}</span>
+          </a>`).join('')}
+        <a class="rec-imm-tree" href="#/family?id=${encodeURIComponent(contact.id)}&view=family">Family tree →</a>
+      </div>` : '';
+
+    container.innerHTML = `
+      <div class="rel-pills">${filterPills(pillItems, active, 'relcat')}</div>
+      ${immHtml}
+      ${shown.length ? shown.map((r) => `
+      <div class="flex-between" style="padding:6px 0;border-bottom:1px solid var(--border)" data-rel-id="${r.id}">
+        <a class="flex items-center gap-2" href="#/contacts/${encodeURIComponent(r.other.id)}" style="text-decoration:none;color:inherit;min-width:0">
+          ${avatar(r.other, 'sm')}
+          <span class="min-w-0">
+            <span class="text-sm font-medium">${esc(r.other.display_name)}</span>
+            <span class="text-sm ${r.inverse ? 'text-muted' : 'text-secondary'}"> · ${esc(label(r.display_label))}${r.inverse ? ' (inverse)' : ''}</span>
+            ${r.notes ? `<span class="text-xs text-muted truncate" style="display:block">${esc(r.notes)}</span>` : ''}
+          </span>
+        </a>
+        ${canEdit ? `<button class="btn btn-icon" data-del-rel="${r.id}" aria-label="Remove relationship">${icon('x')}</button>` : ''}
+      </div>`).join('') : '<div class="text-sm text-muted" style="padding:4px 0">Nothing in this category.</div>'}`;
+
+    container.querySelectorAll('[data-relcat]').forEach((p) =>
+      p.addEventListener('click', () => { active = p.dataset.relcat; render(); }));
+
+    container.querySelectorAll('[data-del-rel]').forEach((btn) =>
+      btn.addEventListener('click', async () => {
+        const ok = await confirmModal('Remove relationship', 'Remove this relationship? The other person is not affected.', { confirmLabel: 'Remove' });
+        if (!ok) return;
+        try {
+          await api.del(`/api/relationships/${btn.dataset.delRel}`);
+          toast('Relationship removed.');
+          refresh?.();
+        } catch (err) { toast(err.message, 'error'); }
+      }));
+  };
+  render();
 }
 
 function openRelationshipModal(contact, onSaved) {
@@ -1360,12 +1474,16 @@ export function openContactForm(existing = null, onSaved = null) {
       ${formGroup('Relationship type', selectInput('relationship_type', relTypes, c.relationship_type))}
     </div>
     <div class="form-row">
-      ${formGroup('Living status', selectInput('is_deceased', [{ value: '0', label: 'Living' }, { value: '1', label: 'Deceased' }], c.is_deceased ? '1' : '0'))}
-      ${formGroup('Date of death (optional)', textInput('date_of_death', (c.date_of_death || '').slice(0, 10), 'type="date"'))}
+      ${formGroup('Living status', selectInput('is_deceased', [{ value: '0', label: 'Living' }, { value: '1', label: 'Deceased' }], c.is_deceased ? '1' : '0', 'id="cf-is-deceased"'))}
+      <div id="cf-death-date-wrap" class="${c.is_deceased ? '' : 'hidden'}">${formGroup('Date of death (optional)', textInput('date_of_death', (c.date_of_death || '').slice(0, 10), 'type="date"'))}</div>
     </div>
     <div class="form-row">
       ${formGroup('Place of birth', textInput('place_of_birth', c.place_of_birth))}
       ${formGroup('Maiden name', textInput('maiden_name', c.maiden_name))}
+    </div>
+    <div class="form-row">
+      ${formGroup('Hometown', textInput('hometown', c.hometown))}
+      ${formGroup('Education', textInput('education', c.education, 'placeholder="School, college, degrees…"'))}
     </div>
     <div class="form-group" id="rel-link-group">
       <label class="form-label">Related to… (optional)</label>
@@ -1430,6 +1548,15 @@ export function openContactForm(existing = null, onSaved = null) {
       );
       attachPhoneInput(overlay.querySelector('[data-phone-input]'));
       bindLanguageField(overlay);
+
+      // date-of-death only makes sense for a deceased person
+      const deceasedSel = overlay.querySelector('#cf-is-deceased');
+      const deathWrap = overlay.querySelector('#cf-death-date-wrap');
+      deceasedSel?.addEventListener('change', () => {
+        const dead = deceasedSel.value === '1';
+        deathWrap?.classList.toggle('hidden', !dead);
+        if (!dead) { const i = deathWrap?.querySelector('[name="date_of_death"]'); if (i) i.value = ''; }
+      });
 
       // ---- optional relationship link (typeahead, same pattern as the
       // relationship modal) — POSTed right after the contact create succeeds.
@@ -1497,7 +1624,13 @@ function addressFieldsHtml(a = {}) {
     `<div class="form-row">${formGroup('City', textInput('city', a.city))}${formGroup('State', textInput('state', a.state, 'data-addr-state'))}</div>` +
     `<div class="form-row">${formGroup('ZIP', textInput('zip', a.zip))}${formGroup('Country', textInput('country', a.country))}</div>` +
     `<div class="addr-preview" data-addr-preview aria-live="polite"></div>` +
-    formGroup('Label', selectInput('label', ['home', 'work', 'vacation', 'other'], a.label || 'home'));
+    formGroup('Label', selectInput('label', ['home', 'work', 'vacation', 'other'], a.label || 'home')) +
+    // residency window — NULL end_date = current home (move-history tracking)
+    `<div class="form-row">${
+      formGroup('Moved in (optional)', textInput('start_date', (a.start_date || '').slice(0, 10), 'type="date"'))
+    }${
+      formGroup('Moved out (optional)', textInput('end_date', (a.end_date || '').slice(0, 10), 'type="date"'))
+    }</div>`;
 }
 
 /** Wire live preview + US-state auto-uppercase + ZIP trim inside `scope`. */

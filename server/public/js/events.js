@@ -10,6 +10,7 @@ import {
 } from './components.js';
 import { pageRenderers } from './pages.js';
 import { state, isSpicyOn } from './app.js';
+import { openImmichPicker } from './media.js';
 
 const EVENT_TYPES = ['meetup', 'date', 'hangout', 'hookup', 'party', 'trip', 'call', 'dinner', 'coffee', 'workout', 'other'];
 const TYPE_ICONS = {
@@ -133,6 +134,30 @@ function eventCard(ev) {
 }
 
 // --------------------------------------------------------- event detail
+
+/** Re-render the media grid inside an open event-detail modal. */
+async function refreshEventMedia(overlay, eventId) {
+  const wrap = overlay.querySelector('#event-media');
+  if (!wrap) return;
+  let data;
+  try {
+    data = await api.get(`/api/events/${eventId}`);
+  } catch { return; }
+  const media = data.media || [];
+  const gridHtml = media.length ? `
+    <div class="media-grid mb-2">
+      ${media.map((m) => `
+      <button class="media-tile ${m.is_spicy ? 'is-spicy' : ''}" data-ev-media="${Number(m.id)}" aria-label="View media">
+        ${m.type === 'video' && !m.has_thumbnail
+          ? `<span class="media-tile-placeholder">${icon('video')}</span>`
+          : `<img src="/api/media/${Number(m.id)}/${m.type === 'video' || m.has_thumbnail ? 'thumbnail' : 'file'}" alt="${esc(m.caption || '')}" loading="lazy">`}
+        ${m.type === 'video' ? `<span class="media-type">${icon('video')}</span>` : ''}
+      </button>`).join('')}
+    </div>` : '<div class="text-sm text-muted mb-2">No media attached.</div>';
+  const oldGrid = wrap.querySelector('.media-grid') || wrap.querySelector('.text-muted');
+  if (oldGrid) oldGrid.outerHTML = gridHtml;
+}
+
 async function openEventDetail(id, onChanged) {
   let data;
   try {
@@ -143,6 +168,7 @@ async function openEventDetail(id, onChanged) {
   }
   const ev = data.event;
   const contacts = data.contacts || [];
+  const media = data.media || [];
 
   const content = `
     <div class="flex items-center gap-3 mb-3">
@@ -162,7 +188,21 @@ async function openEventDetail(id, onChanged) {
     ${ev.status === 'completed' && (ev.followup_notes || ev.rating) ? `
       <div class="uppercase-label mb-1">Follow-up</div>
       ${ev.rating ? `<div class="mb-1">${starRating(ev.rating)}</div>` : ''}
-      ${ev.followup_notes ? `<p class="text-sm">${esc(ev.followup_notes)}</p>` : ''}` : ''}`;
+      ${ev.followup_notes ? `<p class="text-sm">${esc(ev.followup_notes)}</p>` : ''}` : ''}
+    <div class="uppercase-label mb-1 mt-3">Media</div>
+    <div id="event-media">
+      ${media.length ? `
+      <div class="media-grid mb-2">
+        ${media.map((m) => `
+        <button class="media-tile ${m.is_spicy ? 'is-spicy' : ''}" data-ev-media="${Number(m.id)}" aria-label="View media">
+          ${m.type === 'video' && !m.has_thumbnail
+            ? `<span class="media-tile-placeholder">${icon('video')}</span>`
+            : `<img src="/api/media/${Number(m.id)}/${m.type === 'video' || m.has_thumbnail ? 'thumbnail' : 'file'}" alt="${esc(m.caption || '')}" loading="lazy">`}
+          ${m.type === 'video' ? `<span class="media-type">${icon('video')}</span>` : ''}
+        </button>`).join('')}
+      </div>` : '<div class="text-sm text-muted mb-2">No media attached.</div>'}
+      <button class="btn btn-secondary btn-sm" data-action="attach-immich">${icon('image')} Attach from Immich</button>
+    </div>`;
 
   const footer = `
     <button class="btn btn-danger" data-action="delete-event">Delete</button>
@@ -172,6 +212,16 @@ async function openEventDetail(id, onChanged) {
 
   openModal(modalShell('event-detail', ev.title, content, footer, { size: 'modal-lg' }), {
     onMount: (overlay, close) => {
+      overlay.querySelector('[data-action="attach-immich"]')?.addEventListener('click', () => {
+        openImmichPicker({
+          onPicked: async (mediaId) => {
+            try {
+              await api.post(`/api/events/${ev.id}/media/${mediaId}`);
+              refreshEventMedia(overlay, ev.id);
+            } catch (err) { toast(err.message, 'error'); }
+          },
+        });
+      });
       overlay.querySelector('[data-action="delete-event"]').addEventListener('click', async () => {
         close();
         const ok = await confirmModal('Delete event', `Delete "${ev.title}"? This can't be undone.`);

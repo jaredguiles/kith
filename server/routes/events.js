@@ -85,7 +85,7 @@ router.get('/:id', loadEvent, async (req, res, next) => {
       [req.event.id]
     );
     const media = await query(
-      `SELECT m.id, m.type, m.thumbnail_path, m.caption, m.is_spicy FROM event_media em
+      `SELECT m.id, m.type, m.thumbnail_path, m.immich_instance_id, m.caption, m.is_spicy FROM event_media em
        JOIN media_assets m ON m.id = em.media_id AND m.deleted_at IS NULL WHERE em.event_id = ?
        ${(await spicyVisible(req.user)) ? '' : 'AND m.is_spicy = 0'}`,
       [req.event.id]
@@ -98,7 +98,7 @@ router.get('/:id', loadEvent, async (req, res, next) => {
         id: m.id, type: m.type,
         caption: m.is_spicy ? decryptField(m.caption) : m.caption,
         is_spicy: m.is_spicy,
-        has_thumbnail: Boolean(m.thumbnail_path),
+        has_thumbnail: Boolean(m.thumbnail_path) || Boolean(m.immich_instance_id),
       })),
     });
   } catch (err) { next(err); }

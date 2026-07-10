@@ -139,9 +139,9 @@ function filterContactByScope(contact, scope) {
 // Editable contact columns (whitelist — never accept arbitrary keys)
 const CONTACT_FIELDS = [
   'display_name', 'first_name', 'middle_name', 'last_name', 'nickname', 'maiden_name', 'email', 'phone',
-  'birthday', 'place_of_birth', 'is_deceased', 'date_of_death', 'place_of_death',
+  'birthday', 'place_of_birth', 'hometown', 'is_deceased', 'date_of_death', 'place_of_death',
   'age', 'sex', 'gender_identity', 'pronouns', 'orientation', 'relationship_status',
-  'location', 'photo_url', 'bio', 'occupation', 'company', 'website',
+  'location', 'photo_url', 'bio', 'occupation', 'education', 'company', 'website',
   'zodiac_sign', 'languages', 'ethnicity', 'religion', 'nationality', 'how_we_met', 'met_date', 'rating',
   'relationship_type', 'is_favorite', 'is_spicy', 'is_anonymous', 'notes_text',
   'keep_in_touch_days',

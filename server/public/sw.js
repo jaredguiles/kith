@@ -3,7 +3,7 @@
 // network pass-through.
 //
 // Deploys MUST bump VERSION so old caches are purged on activate.
-const VERSION = 'v20';
+const VERSION = 'v21';
 const CACHE = `kith-${VERSION}`;
 
 const SHELL = [
@@ -32,6 +32,7 @@ const SHELL = [
   '/js/map.js',
   '/js/calendarpage.js',
   '/js/journal.js',
+  '/js/timelinepage.js',
   '/js/trashpage.js',
   '/vendor/leaflet/leaflet.js',
   '/vendor/leaflet/leaflet.css',

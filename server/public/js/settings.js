@@ -9,7 +9,7 @@ import {
   toast, openModal, confirmModal, toggleSwitch, sectionHeader,
 } from './components.js';
 import { pageRenderers } from './pages.js';
-import { state, refreshSidebarLists, setThemePref, getThemePref, refreshUser } from './app.js';
+import { state, refreshSidebarLists, setThemePref, getThemePref, refreshUser, isSpicyOn } from './app.js';
 
 const THEME_OPTIONS = [
   { value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }, { value: 'system', label: 'System' },
@@ -24,10 +24,12 @@ async function renderSettings(el) {
       <div class="rec-rule-strong mb-4"></div>
       <div class="rec-section" id="account-section"><div class="text-sm text-muted">Loading…</div></div>
       <div class="rec-section" id="notifications-section"><div class="text-sm text-muted">Loading…</div></div>
+      <div class="rec-section" id="immich-section"><div class="text-sm text-muted">Loading…</div></div>
       <div class="mb-6"></div>
     </div>`;
     renderAccountSection(el.querySelector('#account-section'));
     renderNotificationsSection(el.querySelector('#notifications-section'));
+    renderImmichSection(el.querySelector('#immich-section'), '11');
     return;
   }
 
@@ -140,12 +142,14 @@ async function renderSettings(el) {
       </div>
       <div class="form-hint mt-2">Manage groups on the <a href="#/groups">Groups page</a>; tags from any contact. Deleted items live in the <a href="#/trash">Trash</a>.</div>
     </div>
+    <div class="rec-section" id="immich-section"><div class="text-sm text-muted">Loading…</div></div>
     <div class="mb-6"></div>
   </div>`;
 
   // ---- account & security (all users; admins see it atop settings)
   renderAccountSection(el.querySelector('#account-section'));
   renderNotificationsSection(el.querySelector('#notifications-section'));
+  renderImmichSection(el.querySelector('#immich-section'), '08');
 
   // ---- theme (per-user preference)
   el.querySelector('[data-theme-select]')?.addEventListener('change', (e) => setThemePref(e.target.value));
@@ -942,4 +946,109 @@ function bindCopyButtons(scope) {
         toast('Copied.');
       } catch { toast("Couldn't copy — select and copy manually.", 'error'); }
     }));
+}
+
+// ---------------------------------------------------------------------------
+// Photo libraries · Immich — per-user connections to self-hosted Immich
+// servers. API keys never reach the browser; everything proxies server-side.
+// ---------------------------------------------------------------------------
+
+async function renderImmichSection(container, sectionNo) {
+  if (!container) return;
+  let instances = [];
+  try {
+    instances = (await api.get('/api/immich/instances')).instances || [];
+  } catch (err) {
+    container.innerHTML = `${sectionHeader(sectionNo, 'Photo libraries · Immich')}<div class="text-sm text-muted">${esc(err?.message || "Couldn't load photo libraries.")}</div>`;
+    return;
+  }
+
+  container.innerHTML = `
+    ${sectionHeader(sectionNo, 'Photo libraries · Immich', `<button class="rec-head-action" data-immich-add>+ Add library</button>`)}
+    ${instances.length ? `
+    <div class="immich-instance-list">
+      ${instances.map((i) => `
+      <div class="immich-instance-row">
+        <div class="flex-1" style="min-width:0">
+          <div class="font-medium">${esc(i.name)} ${i.is_spicy ? '<span class="badge neutral">private</span>' : ''}</div>
+          <div class="td-muted immich-instance-url">${esc(i.base_url)}</div>
+        </div>
+        <div class="flex gap-1">
+          <button class="btn btn-icon" data-immich-edit="${Number(i.id)}" aria-label="Edit library">${icon('edit')}</button>
+          <button class="btn btn-icon" data-immich-del="${Number(i.id)}" aria-label="Delete library">${icon('x')}</button>
+        </div>
+      </div>`).join('')}
+    </div>` : `<div class="text-sm text-muted">No photo libraries connected. Add your Immich server to attach photos to people and events without re-uploading them.</div>`}`;
+
+  const reload = () => renderImmichSection(container, sectionNo);
+  container.querySelector('[data-immich-add]').addEventListener('click', () => openImmichForm(null, reload));
+  container.querySelectorAll('[data-immich-edit]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const inst = instances.find((x) => String(x.id) === b.dataset.immichEdit);
+      openImmichForm(inst, reload);
+    }));
+  container.querySelectorAll('[data-immich-del]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const ok = await confirmModal('Remove library',
+        'Remove this Immich library? All media attached from it will be deleted from Kith (the photos stay on your Immich server).');
+      if (!ok) return;
+      try {
+        await api.del(`/api/immich/instances/${b.dataset.immichDel}`);
+        toast('Library removed.');
+        reload();
+      } catch (err) { toast(err.message, 'error'); }
+    }));
+}
+
+function openImmichForm(existing, onSaved) {
+  const i = existing || {};
+  const content = `
+    ${formGroup('Name', textInput('name', i.name, 'placeholder="e.g. Home photos"'))}
+    ${formGroup('Base URL', textInput('base_url', i.base_url, 'placeholder="https://photos.example.com" type="url"'))}
+    ${formGroup('API key', `<input class="form-input" name="api_key" type="password" autocomplete="off" placeholder="${existing ? 'Leave blank to keep the current key' : ''}">`,
+      'Immich → Account Settings → API Keys → New API Key')}
+    ${isSpicyOn() ? `
+    <div class="toggle-row">
+      <div><div class="toggle-label">Private library</div><div class="toggle-desc">Only visible with spicy mode on; attached photos are marked spicy.</div></div>
+      ${toggleSwitch(Boolean(i.is_spicy), 'data-immich-spicy')}
+    </div>` : ''}`;
+
+  openModal(modalShell('immich-form', existing ? `Edit ${i.name}` : 'Add Immich library', content,
+    `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>
+     <button class="btn btn-primary" data-action="save">${existing ? 'Save' : 'Connect'}</button>`), {
+    onMount: (overlay, close) => {
+      const spicyToggle = overlay.querySelector('[data-immich-spicy]');
+      spicyToggle?.addEventListener('click', () => {
+        const on = !spicyToggle.classList.contains('on');
+        spicyToggle.classList.toggle('on', on);
+        spicyToggle.setAttribute('aria-checked', on ? 'true' : 'false');
+      });
+      overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
+        const btn = overlay.querySelector('[data-action="save"]');
+        const name = overlay.querySelector('[name="name"]').value.trim();
+        const base_url = overlay.querySelector('[name="base_url"]').value.trim();
+        const api_key = overlay.querySelector('[name="api_key"]').value.trim();
+        if (!name || !base_url || (!existing && !api_key)) {
+          toast('Name, base URL, and API key are required.', 'error');
+          return;
+        }
+        const body = { name, base_url };
+        if (api_key) body.api_key = api_key;
+        if (spicyToggle) body.is_spicy = spicyToggle.classList.contains('on');
+        btn.disabled = true;
+        btn.textContent = 'Verifying…';
+        try {
+          if (existing) await api.put(`/api/immich/instances/${i.id}`, body);
+          else await api.post('/api/immich/instances', body);
+          toast('Connected — pong received.');
+          close();
+          onSaved?.();
+        } catch (err) {
+          btn.disabled = false;
+          btn.textContent = existing ? 'Save' : 'Connect';
+          toast(err.message, 'error');
+        }
+      });
+    },
+  });
 }

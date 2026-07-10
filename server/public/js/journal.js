@@ -1,23 +1,38 @@
-// Journal page — reverse-chron feed of timeline items, notes, and events
-// across all contacts. GET /api/journal?page=&limit=. "New entry" posts a
-// manual timeline entry via POST /api/timeline.
+// Journal page — the user's personal diary. GET/POST/PUT/DELETE /api/journal.
+// Entries are the user's own (not per-contact): free-form entries,
+// reflections, travels (pinned on the Timeline map), dreams and memories,
+// optionally linked to an event.
 
 import { api, qs } from './api.js';
-import { esc, initials, parseDate, timeAgo, debounce, toLocalInput, fromLocalInput } from './utils.js';
+import { esc, parseDate, timeAgo, toLocalInput, fromLocalInput } from './utils.js';
 import { icon } from './icons.js';
-import { emptyState, modalShell, formGroup, textInput, textarea, toast, openModal } from './components.js';
+import {
+  emptyState, modalShell, formGroup, textInput, textarea, selectInput,
+  toast, openModal, confirmModal, filterPills,
+} from './components.js';
 import { pageRenderers } from './pages.js';
 import { isSpicyOn } from './app.js';
 
 const LIMIT = 30;
 
-const KIND_META = {
-  note: { icon: 'sticky-note', label: 'Note', badge: 'blue' },
-  event: { icon: 'calendar', label: 'Event', badge: '' },
-  timeline: { icon: 'clock', label: 'Timeline', badge: 'neutral' },
+export const JOURNAL_KIND_META = {
+  entry: { icon: 'book-open', label: 'Entry' },
+  reflection: { icon: 'moon', label: 'Reflection' },
+  travel: { icon: 'plane', label: 'Travel' },
+  dream: { icon: 'moon', label: 'Dream' },
+  memory: { icon: 'history', label: 'Memory' },
 };
 
-function dayLabel(dstr) {
+const KIND_FILTERS = [
+  { value: '', label: 'All' },
+  { value: 'entry', label: 'Entries' },
+  { value: 'reflection', label: 'Reflections' },
+  { value: 'travel', label: 'Travel' },
+  { value: 'dream', label: 'Dreams' },
+  { value: 'memory', label: 'Memories' },
+];
+
+export function dayLabel(dstr) {
   const d = parseDate(dstr);
   if (!d) return 'Undated';
   const now = new Date();
@@ -30,21 +45,31 @@ function dayLabel(dstr) {
   return d.toLocaleDateString(undefined, opts);
 }
 
+export function timeOfDay(dstr) {
+  const d = parseDate(dstr);
+  return d ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : timeAgo(dstr);
+}
+
 function entryHtml(e) {
-  const meta = KIND_META[e.kind] || KIND_META.timeline;
-  const c = e.contact || {};
+  const meta = JOURNAL_KIND_META[e.kind] || JOURNAL_KIND_META.entry;
   const spicy = e.is_spicy && isSpicyOn();
-  const snippet = (e.content || '').length > 240 ? `${e.content.slice(0, 240)}…` : (e.content || '');
-  const d = parseDate(e.occurred_at);
-  const when = d ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : timeAgo(e.occurred_at);
+  const text = e.content || '';
+  const snippet = text.length > 280 ? `${text.slice(0, 280)}…` : text;
   return `
-  <div class="rec-log-row journal-entry ${spicy ? 'has-spicy-data' : ''}">
-    <span class="rec-log-when" title="${esc(timeAgo(e.occurred_at))}">${esc(when)}</span>
+  <div class="rec-log-row journal-entry ${spicy ? 'has-spicy-data' : ''}" data-entry-id="${Number(e.id)}">
+    <span class="rec-log-when" title="${esc(timeAgo(e.occurred_at))}">${esc(timeOfDay(e.occurred_at))}</span>
     <span class="rec-log-body">
-      <span class="rec-log-kind">${esc(e.type || meta.label)}${spicy ? ' · private' : ''}</span>
-      ${c.id ? ` <a class="rec-log-who" href="#/contacts/${encodeURIComponent(c.id)}">${esc(c.display_name)}</a>` : ` <span class="rec-log-who">${esc(c.display_name || 'Someone')}</span>`}
+      <span class="jt-kind-chip jt-kind-${esc(e.kind)}">${icon(meta.icon)}${esc(meta.label)}${spicy ? ' · private' : ''}</span>
       ${e.title ? `<div class="rec-log-entry">${esc(e.title)}</div>` : ''}
       ${snippet ? `<div class="rec-log-what">${esc(snippet)}</div>` : ''}
+      <div class="jt-meta-row">
+        ${e.location ? `<span class="jt-meta">${icon('map-pin')}${esc(e.location)}</span>` : ''}
+        ${e.event ? `<span class="jt-meta">${icon('calendar')}${esc(e.event.title)}</span>` : ''}
+      </div>
+    </span>
+    <span class="jt-row-actions">
+      <button class="rec-act" data-action="edit-entry" data-id="${Number(e.id)}">Edit</button>
+      <button class="rec-act rec-act-danger" data-action="delete-entry" data-id="${Number(e.id)}">Delete</button>
     </span>
   </div>`;
 }
@@ -63,57 +88,60 @@ function groupedHtml(entries) {
   return out;
 }
 
-// ------------------------------------------------------------ new entry
-// POST /api/timeline { contact_id, type, title, description, is_spicy,
-// occurred_at } — type is free-form VARCHAR (defaults to 'note' server-side);
-// we send 'entry' for manual journal entries.
-function openJournalEntryModal(onSaved) {
+// -------------------------------------------------------- new/edit modal
+// The events list endpoint has no search/limit params, so we load the
+// user's events once and offer the 10 most recent in a plain <select>.
+async function recentEventOptions(currentEvent) {
+  let events = [];
+  try {
+    events = (await api.get('/api/events')).events || [];
+  } catch { /* events are optional decoration — the select just stays short */ }
+  events.sort((a, b) => String(b.starts_at || '').localeCompare(String(a.starts_at || '')));
+  let recent = events.slice(0, 10);
+  if (currentEvent && !recent.some((ev) => ev.id === currentEvent.id)) {
+    recent = [{ id: currentEvent.id, title: currentEvent.title, starts_at: null }, ...recent];
+  }
+  return [
+    { value: '', label: '— None —' },
+    ...recent.map((ev) => ({
+      value: String(ev.id),
+      label: `${ev.title}${ev.starts_at ? ` (${String(ev.starts_at).slice(0, 10)})` : ''}`,
+    })),
+  ];
+}
+
+// `entry` = existing entry for edit mode, or null for a fresh one.
+export function openJournalEntryModal(entry, onSaved) {
+  const isEdit = Boolean(entry?.id);
+  const kindOptions = Object.entries(JOURNAL_KIND_META).map(([value, m]) => ({ value, label: m.label }));
+  const occurred = entry?.occurred_at ? parseDate(entry.occurred_at) : new Date();
+
   const content = `
-    <div class="form-group">
-      <label class="form-label">Person</label>
-      <div class="flex gap-1 flex-wrap mb-1" id="je-picked"></div>
-      <div class="search-input-wrap">${icon('search')}<input class="form-input" id="je-search" placeholder="Type to find a person" autocomplete="off"></div>
-      <div id="je-results"></div>
-    </div>
-    ${formGroup('Title (optional)', textInput('title', '', 'placeholder="A few words to remember it by"'))}
-    ${formGroup('What happened?', textarea('description', '', 'placeholder="Write it down while it\u2019s fresh." style="min-height:90px"'))}
-    ${formGroup('When', `<input class="form-input" name="occurred_at" type="datetime-local" value="${esc(toLocalInput(new Date()))}">`)}
+    ${formGroup('Kind', selectInput('kind', kindOptions, entry?.kind || 'entry'))}
+    ${formGroup('Title (optional)', textInput('title', entry?.title || '', 'placeholder="A few words to remember it by"'))}
+    ${formGroup('What happened?', textarea('content', entry?.content || '', 'placeholder="Write it down while it\u2019s fresh." style="min-height:110px"'))}
+    ${formGroup('Location (optional)', textInput('location', entry?.location || '', 'placeholder="City, State" autocomplete="off"'),
+      'City, State — travels get pinned on your Timeline map')}
+    ${formGroup('Link an event (optional)', `<select class="form-select" name="event_id"><option value="">— None —</option></select>`)}
+    ${formGroup('When', `<input class="form-input" name="occurred_at" type="datetime-local" value="${esc(toLocalInput(occurred || new Date()))}">`)}
     ${isSpicyOn() ? `
     <div class="toggle-row">
       <div><div class="toggle-label">Spicy entry</div><div class="toggle-desc">Only visible while spicy mode is on.</div></div>
-      <button type="button" role="switch" aria-checked="false" class="toggle-switch" data-toggle="is_spicy"></button>
+      <button type="button" role="switch" aria-checked="${entry?.is_spicy ? 'true' : 'false'}" class="toggle-switch ${entry?.is_spicy ? 'on' : ''}" data-toggle="is_spicy"></button>
     </div>` : ''}`;
 
-  openModal(modalShell('journal-entry', 'New journal entry', content,
+  openModal(modalShell('journal-entry', isEdit ? 'Edit entry' : 'New journal entry', content,
     `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>
-     <button class="btn btn-primary" data-action="save">Add entry</button>`), {
+     <button class="btn btn-primary" data-action="save">${isEdit ? 'Save' : 'Add entry'}</button>`), {
     onMount: (overlay, close) => {
-      let picked = null; // { id, name }
-      const pickedEl = overlay.querySelector('#je-picked');
-      const renderPicked = () => {
-        pickedEl.innerHTML = picked
-          ? `<span class="tag-pill">${esc(picked.name)}<button class="tag-x" data-unpick aria-label="Remove">${icon('x')}</button></span>`
-          : '';
-        pickedEl.querySelector('[data-unpick]')?.addEventListener('click', () => { picked = null; renderPicked(); });
-      };
-      const searchInput = overlay.querySelector('#je-search');
-      const resultsEl = overlay.querySelector('#je-results');
-      searchInput.addEventListener('input', debounce(async () => {
-        const q = searchInput.value.trim();
-        if (!q) { resultsEl.innerHTML = ''; return; }
-        let found;
-        try { found = await api.get('/api/contacts' + qs({ search: q, limit: 6 })); } catch { return; }
-        resultsEl.innerHTML = (found.contacts || [])
-          .map((c) => `<button class="popover-item w-full" data-pick="${c.id}" data-name="${esc(c.display_name)}"><span class="av sm" style="width:22px;height:22px;font-size:9px">${esc(initials(c.display_name))}</span>${esc(c.display_name)}</button>`)
-          .join('') || '<div class="text-sm text-muted p-2">No matches.</div>';
-        resultsEl.querySelectorAll('[data-pick]').forEach((b) =>
-          b.addEventListener('click', () => {
-            picked = { id: Number(b.dataset.pick), name: b.dataset.name };
-            searchInput.value = '';
-            resultsEl.innerHTML = '';
-            renderPicked();
-          }));
-      }, 250));
+      // populate the event select asynchronously
+      const eventSelect = overlay.querySelector('[name="event_id"]');
+      recentEventOptions(entry?.event || null).then((opts) => {
+        if (!eventSelect.isConnected) return;
+        eventSelect.innerHTML = opts
+          .map((o) => `<option value="${esc(o.value)}" ${String(o.value) === String(entry?.event_id ?? '') ? 'selected' : ''}>${esc(o.label)}</option>`)
+          .join('');
+      });
 
       const spicyToggle = overlay.querySelector('[data-toggle="is_spicy"]');
       spicyToggle?.addEventListener('click', () => {
@@ -122,21 +150,28 @@ function openJournalEntryModal(onSaved) {
       });
 
       overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
-        const description = overlay.querySelector('[name="description"]').value.trim();
-        if (!picked) { toast('Pick a person first.', 'error'); return; }
-        if (!description) { toast('Write what happened first.', 'error'); return; }
+        const kind = overlay.querySelector('[name="kind"]').value;
+        const contentVal = overlay.querySelector('[name="content"]').value.trim();
+        const locationVal = overlay.querySelector('[name="location"]').value.trim();
+        if (!contentVal && !(kind === 'travel' && locationVal)) {
+          toast(kind === 'travel' ? 'Write something or add a location.' : 'Write something first.', 'error');
+          return;
+        }
         const saveBtn = overlay.querySelector('[data-action="save"]');
         saveBtn.disabled = true;
+        const body = {
+          kind,
+          title: overlay.querySelector('[name="title"]').value.trim() || null,
+          content: contentVal || null,
+          location: locationVal || null,
+          event_id: eventSelect.value ? Number(eventSelect.value) : null,
+          occurred_at: fromLocalInput(overlay.querySelector('[name="occurred_at"]').value),
+          is_spicy: Boolean(spicyToggle?.classList.contains('on')),
+        };
         try {
-          await api.post('/api/timeline', {
-            contact_id: picked.id,
-            type: 'entry',
-            title: overlay.querySelector('[name="title"]').value.trim() || null,
-            description,
-            occurred_at: fromLocalInput(overlay.querySelector('[name="occurred_at"]').value),
-            is_spicy: Boolean(spicyToggle?.classList.contains('on')),
-          });
-          toast('Entry added.');
+          if (isEdit) await api.put(`/api/journal/${encodeURIComponent(entry.id)}`, body);
+          else await api.post('/api/journal', body);
+          toast(isEdit ? 'Entry saved.' : 'Entry added.');
           close();
           onSaved?.();
         } catch (err) {
@@ -148,6 +183,7 @@ function openJournalEntryModal(onSaved) {
   });
 }
 
+// ------------------------------------------------------------------ page
 async function renderJournalPage(el) {
   el.innerHTML = `
   <div class="page-inner">
@@ -158,8 +194,9 @@ async function renderJournalPage(el) {
       </span>
     </div>
     <div class="rec-rule-strong"></div>
-    <div class="rec-count-serif">A ledger of notes, moments and completed events — newest first.</div>
-    <div id="journal-feed">${emptyState('clock', 'Loading…', 'Fetching your journal.')}</div>
+    <div class="rec-count-serif">Your private diary — entries, reflections, travels.</div>
+    <div class="jt-filters">${filterPills(KIND_FILTERS, '', 'kind')}</div>
+    <div id="journal-feed">${emptyState('book-open', 'Loading…', 'Fetching your journal.')}</div>
     <div id="journal-footer" class="text-center mt-3"></div>
   </div>`;
 
@@ -167,35 +204,65 @@ async function renderJournalPage(el) {
   const footer = el.querySelector('#journal-footer');
   let page = 1;
   let total = 0;
-  let loaded = 0;
+  let kind = '';
   let all = [];
+  const byId = new Map();
 
   const reload = () => {
-    page = 1; total = 0; loaded = 0; all = [];
-    feed.innerHTML = emptyState('clock', 'Loading…', 'Fetching your journal.');
+    page = 1; total = 0; all = []; byId.clear();
+    feed.innerHTML = emptyState('book-open', 'Loading…', 'Fetching your journal.');
     loadPage().catch((err) => {
       feed.innerHTML = emptyState('alert-circle', "Couldn't load the journal", err?.message || 'Try again shortly.');
       footer.innerHTML = '';
     });
   };
 
-  el.querySelector('[data-action="new-entry"]').addEventListener('click', () => openJournalEntryModal(reload));
+  el.querySelector('[data-action="new-entry"]').addEventListener('click', () => openJournalEntryModal(null, reload));
+
+  el.querySelectorAll('[data-kind]').forEach((pill) =>
+    pill.addEventListener('click', () => {
+      kind = pill.dataset.kind;
+      el.querySelectorAll('[data-kind]').forEach((p) => p.classList.toggle('active', p === pill));
+      reload();
+    }));
+
+  const wireRows = () => {
+    feed.querySelectorAll('[data-action="edit-entry"]').forEach((b) =>
+      b.addEventListener('click', () => {
+        const entry = byId.get(Number(b.dataset.id));
+        if (entry) openJournalEntryModal(entry, reload);
+      }));
+    feed.querySelectorAll('[data-action="delete-entry"]').forEach((b) =>
+      b.addEventListener('click', async () => {
+        const ok = await confirmModal('Delete entry?', 'This journal entry will be removed from your diary.');
+        if (!ok) return;
+        try {
+          await api.del(`/api/journal/${encodeURIComponent(b.dataset.id)}`);
+          toast('Entry deleted.');
+          reload();
+        } catch (err) {
+          toast(err.message, 'error');
+        }
+      }));
+  };
 
   const loadPage = async () => {
-    const data = await api.get('/api/journal' + qs({ page, limit: LIMIT }));
+    const data = await api.get('/api/journal' + qs({ page, limit: LIMIT, kind }));
     total = Number(data.total) || 0;
     const entries = data.entries || [];
-    loaded += entries.length;
+    for (const e of entries) byId.set(Number(e.id), e);
     all.push(...entries);
     if (all.length) {
       feed.innerHTML = groupedHtml(all);
+      wireRows();
     } else {
-      feed.innerHTML = emptyState('book-open', 'Your journal is empty',
-        'Notes, timeline moments, and completed events land here automatically — or write your first entry now.',
+      feed.innerHTML = emptyState('book-open', kind ? 'Nothing here yet' : 'Your journal is empty',
+        kind ? 'No entries of this kind yet — write one now.'
+             : 'Write your first entry — a thought, a trip, a dream worth keeping.',
         `<button class="btn btn-primary" data-action="empty-new-entry">${icon('plus')} New entry</button>`);
-      feed.querySelector('[data-action="empty-new-entry"]')?.addEventListener('click', () => openJournalEntryModal(reload));
+      feed.querySelector('[data-action="empty-new-entry"]')?.addEventListener('click', () => openJournalEntryModal(null, reload));
     }
-    footer.innerHTML = loaded < total && entries.length
+    footer.innerHTML = all.length < total && entries.length
       ? `<button class="btn btn-secondary" id="journal-more">${icon('chevron-down')} Load more</button>`
       : '';
     footer.querySelector('#journal-more')?.addEventListener('click', async () => {

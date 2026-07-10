@@ -202,13 +202,16 @@ function triggerDownload(url) {
 //              children. The lens for looking at a friend's family.
 //   ancestry — the deep multi-generation genealogy tree.
 const VIEWS = [
-  { value: 'family', label: 'Close family' },
   { value: 'ancestry', label: 'Full ancestry' },
+  { value: 'family', label: 'Close family' },
 ];
 
 async function renderFamilyPage(el, params) {
   const rootId = Number(params.id) || Number(state.user?.self_contact_id) || null;
-  const view = params.view === 'ancestry' ? 'ancestry' : 'family';
+  // Full ancestry is the default lens — the page opens showing everything
+  // linked in the records. 'family' (close family) is the explicit narrow
+  // view (used by contact-page "Family tree" links).
+  const view = params.view === 'family' ? 'family' : 'ancestry';
 
   el.innerHTML = `
   <div class="page-inner">

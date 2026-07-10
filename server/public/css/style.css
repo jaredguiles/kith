@@ -2428,3 +2428,285 @@ a.rec-log-who:hover { color: var(--accent); text-decoration: none; }
 [data-theme="dark"] .map-avatar-pin .pin-av.avc-5 { color: #86b7bf; }
 [data-theme="dark"] .map-avatar-pin .pin-av.avc-6 { color: #d0808a; }
 [data-theme="dark"] .map-avatar-pin .pin-av.avc-7 { color: #adb583; }
+
+/* -------------------------------------------------- journal + timeline */
+/* Kind chips: mono uppercase tag with an inline icon (entry/reflection/
+   travel/dream/memory on the Journal page; + event on the Timeline). */
+.jt-kind-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--accent);
+}
+.jt-kind-chip svg { width: 11px; height: 11px; flex: none; }
+.jt-kind-event { color: var(--muted); }
+
+/* row meta line: location pin, linked event, participants */
+.jt-meta-row { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-top: 3px; }
+.jt-meta {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.06em;
+  color: var(--muted);
+}
+.jt-meta svg { width: 11px; height: 11px; flex: none; }
+.jt-with a { color: var(--ink); }
+.jt-with a:hover { color: var(--accent); }
+
+/* per-row edit/delete on the Journal page (personal page — always visible) */
+.jt-row-actions { display: inline-flex; gap: 12px; flex: none; align-self: center; }
+
+/* filter row under the toolbar */
+.jt-filters { margin: 14px 0 6px; display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* Timeline map view */
+.jt-map-canvas {
+  height: calc(100vh - 260px); min-height: 380px;
+  border: 1px solid var(--rule); border-radius: var(--radius-sm);
+  overflow: hidden;
+  margin-top: 12px;
+}
+.jt-map-pin-wrap { background: none; border: none; }
+.jt-map-pin {
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: 50% 50% 50% 4px;
+  transform: rotate(0deg);
+  background: var(--surface, var(--bg)); color: var(--accent);
+  border: 1.5px solid var(--accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+.jt-map-pin svg { width: 13px; height: 13px; }
+.jt-pin-event { color: var(--muted); border-color: var(--muted); }
+.jt-popup-title { font-family: var(--font-serif); font-size: 14px; color: var(--ink); margin: 2px 0; }
+
+@media (max-width: 768px) {
+  .jt-filters { margin-top: 10px; }
+  .jt-filters .filter-pills { flex-wrap: wrap; width: 100%; }
+  .jt-filters .filter-pill { flex: 1 1 auto; }
+  .jt-map-canvas { height: 55vh; min-height: 300px; }
+  /* day rows stack: timestamp above the body, actions inline below */
+  .journal-entry.rec-log-row { flex-direction: column; align-items: stretch; gap: 2px; }
+  .journal-entry .rec-log-when { width: auto; }
+  .journal-entry .jt-row-actions { align-self: flex-end; }
+}
+
+/* ------------------------------------------------------------ immich picker */
+.immich-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 8px;
+}
+.immich-tile {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 0;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  cursor: pointer;
+  padding: 0;
+}
+.immich-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.immich-tile .media-type {
+  position: absolute; right: 5px; top: 5px;
+  width: 18px; height: 18px;
+  background: var(--ink);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--paper);
+}
+.immich-tile .media-type svg { width: 10px; height: 10px; }
+.immich-tile .immich-picked-check {
+  position: absolute; inset: 0;
+  display: none;
+  align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: #fff;
+}
+.immich-tile .immich-picked-check svg { width: 28px; height: 28px; stroke-width: 2.5; }
+.immich-tile.picked { border-color: var(--accent); }
+.immich-tile.picked .immich-picked-check { display: flex; }
+.immich-tile:disabled { opacity: 0.6; cursor: wait; }
+.immich-tile.picked:disabled { opacity: 1; cursor: default; }
+
+/* immich instance list (settings) */
+.immich-instance-list { border-top: 1px solid var(--rule); }
+.immich-instance-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.immich-instance-url {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+  .immich-grid { grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; }
+  #immich-picker-controls { flex-direction: column; }
+  #immich-picker-controls .form-select { max-width: none !important; width: 100%; }
+  .immich-instance-row { flex-wrap: wrap; }
+}
+
+/* ------------------------------------------------------------------------
+   Address residency windows, move history, relationship categories
+   (contacts detail page) */
+.rec-kv-past { opacity: 0.6; }
+.rec-addr-window {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  margin-left: 6px;
+  white-space: nowrap;
+}
+.rec-move-row {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  padding: 3px 0;
+}
+.rel-pills { padding: 2px 0 8px; }
+.rec-imm-family {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.rec-imm-family .rec-part-key { width: auto; }
+.rec-imm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+}
+.rec-imm-chip .av { width: 22px; height: 22px; font-size: 9px; }
+.rec-imm-chip .rec-imm-name {
+  font-family: var(--font-serif);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.rec-imm-chip:hover .rec-imm-name { color: var(--accent); }
+.rec-imm-family .rec-imm-tree {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.rec-imm-family .rec-imm-tree:hover { color: var(--accent); }
+@media (max-width: 768px) {
+  .rec-imm-family { gap: 6px; }
+  .rec-imm-family .rec-imm-tree { margin-left: 0; flex-basis: 100%; }
+  .rel-pills { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .rel-pills .filter-pills { flex-wrap: nowrap; width: max-content; }
+}
+
+/* ==========================================================================
+   Mobile pass 3 — usability audit fixes (append-only).
+   Phones ~360–430px; everything scoped to 768px or hover:none except the
+   few globally-safe guards (popover max-width, dvh viewport units).
+   ========================================================================== */
+
+/* dvh where supported: 100vh under-reports usable space when mobile browser
+   chrome collapses; dvh tracks the real visible viewport. Desktop unchanged
+   (dvh == vh there). */
+@supports (height: 100dvh) {
+  #app { height: 100dvh; }
+  .login-screen { height: 100dvh; }
+  .modal { max-height: calc(100dvh - 24px); }
+}
+
+/* popovers must never poke past the right viewport edge (overflow-wrap
+   handles long item labels) */
+.popover { max-width: min(320px, calc(100vw - 32px)); }
+.popover-item { overflow-wrap: anywhere; }
+
+/* pill labels never break mid-word inside a scrolling pill row */
+.filter-pill { white-space: nowrap; }
+
+@media (max-width: 768px) {
+  /* ------------------------------------------------ people table (list) */
+  /* keep Name / Location / star; Tags + Updated are low-value on a phone */
+  .data-table .td-tags, .data-table .td-updated { display: none; }
+  .data-table th { padding: 10px 8px; }
+  .data-table td { padding: 10px 8px; }
+  .data-table .rec-tbl-no { display: none; } /* mono record № eats ~40px */
+
+  /* -------------------------------------------------- toolbars, actions */
+  /* flex-basis beats the inline width:220px/260px on the search wraps for
+     flex main-sizing, so no !important is needed */
+  .rec-toolbar { row-gap: 10px; }
+  .rec-actions { column-gap: 14px; row-gap: 8px; }
+  .rec-actions .search-input-wrap { flex: 1 1 160px; min-width: 140px; max-width: 100%; }
+  .toolbar > .search-input-wrap { flex: 1 1 200px; min-width: 0; max-width: 100%; }
+
+  /* ----------------------------------------------------- filter pill rows */
+  /* single-row aesthetics: scroll horizontally instead of wrapping */
+  .filter-pills {
+    max-width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .filter-pills::-webkit-scrollbar { display: none; }
+  #ft-view-pills, #tl-view-pills, #contacts-filter-pills { max-width: 100%; min-width: 0; }
+  #tl-view-pills { overflow-x: auto; scrollbar-width: none; }
+  #tl-view-pills::-webkit-scrollbar { display: none; }
+
+  /* ----------------------------------------------------- family tree page */
+  /* the wrapped toolbar + pills run taller on phones; dvh so browser chrome
+     collapsing doesn't push the chart bottom off-screen */
+  .ft-chart { height: calc(100dvh - 250px); min-height: 360px; }
+
+  /* --------------------------------------------------------------- modals */
+  .modal-overlay { padding: 12px; }
+  .modal { max-height: calc(100dvh - 24px); }
+  .modal.modal-lg, .modal.modal-xl { max-width: none; }
+  .modal-header { padding: 12px 16px; }
+  .modal-content { padding: 16px; }
+  .modal-footer { padding: 12px 16px; flex-wrap: wrap; }
+
+  /* -------------------------------------------------------- command palette */
+  .cmdk-overlay { padding: 8vh 12px 12px; }
+  .cmdk-results { max-height: 50dvh; }
+
+  /* ------------------------------------------------------------------ map */
+  .map-canvas-wrap { min-height: 60dvh; }
+  .map-canvas { min-height: 60dvh; }
+
+  /* -------------------------------------------------------- touch targets */
+  .btn-icon { width: 34px; height: 34px; }
+  .rec-act { padding: 6px 8px; margin: -6px -2px -4px; }
+  .rec-actions .rec-act { margin: 0; }
+  .bulk-check { width: 18px; height: 18px; }
+}
+
+/* touch devices: hover-revealed edit affordances must be visible at rest */
+@media (hover: none) {
+  .rec-portrait .av-edit-btn { opacity: 0.9; }
+}
+
+/* correction to the @supports block above: desktop keeps the 48px breathing
+   room (overlay padding is 24px/side); only phones go edge-to-edge-ish */
+@supports (height: 100dvh) {
+  .modal { max-height: calc(100dvh - 48px); }
+  @media (max-width: 768px) {
+    .modal { max-height: calc(100dvh - 24px); }
+  }
+}
+
+@media (max-width: 768px) {
+  /* settings Users table has no overflow-x wrapper (04→06 sections) and the
+     changelog table renders inside a modal — let headers wrap and let wide
+     tables scroll within modal content instead of blowing out the viewport */
+  .data-table th { white-space: normal; }
+  .modal-content { overflow-x: auto; }
+  /* audit/changelog cell values can be long unbroken strings */
+  .modal-content .data-table td { overflow-wrap: anywhere; }
+}
