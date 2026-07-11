@@ -202,6 +202,8 @@ const TABLES = [
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
   // groups — backticked: GROUPS became reserved in MariaDB 10.3+
+  // tag_id NULL = manual group (group_members); tag_id set = smart group
+  // whose membership is derived from contact_tags on the linked tag.
   `CREATE TABLE IF NOT EXISTS \`groups\` (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
@@ -210,8 +212,10 @@ const TABLES = [
     description TEXT NULL,
     owner_user_id INT NULL,
     is_system BOOLEAN NOT NULL DEFAULT 0,
+    tag_id INT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_groups_owner FOREIGN KEY (owner_user_id) REFERENCES users(id),
+    CONSTRAINT fk_groups_tag FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE SET NULL,
     INDEX idx_groups_owner (owner_user_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 
@@ -406,6 +410,7 @@ const TABLES = [
     skipped_records INT NOT NULL DEFAULT 0,
     error_message TEXT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     completed_at TIMESTAMP NULL,
     CONSTRAINT fk_ij_user FOREIGN KEY (user_id) REFERENCES users(id),
     INDEX idx_ij_user_status (user_id, status)
@@ -581,6 +586,39 @@ const TABLES = [
     UNIQUE KEY uq_endpoint (endpoint(255)),
     INDEX idx_push_user (user_id)
   ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
+
+  // event_locations — extra stops beyond events.location (the primary);
+  // geo metadata parsed from the geocoder label (lib/places.parseGeoLabel)
+  `CREATE TABLE IF NOT EXISTS event_locations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    event_id INT NOT NULL,
+    label VARCHAR(255) NOT NULL,
+    latitude DECIMAL(10,7) NULL,
+    longitude DECIMAL(10,7) NULL,
+    city VARCHAR(100) NULL,
+    state VARCHAR(100) NULL,
+    state_code VARCHAR(10) NULL,
+    country_code VARCHAR(2) NULL,
+    geocode_source VARCHAR(20) NULL,
+    position INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_evloc_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+    INDEX idx_evloc_event (event_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
+
+  // visited_places — manual "been there" marks for the Places bucket list
+  // (derived marks are computed on the fly from event locations)
+  `CREATE TABLE IF NOT EXISTS visited_places (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    kind ENUM('country','us_state') NOT NULL,
+    code VARCHAR(10) NOT NULL,
+    source ENUM('manual','derived') NOT NULL DEFAULT 'manual',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_vp_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    UNIQUE KEY uq_vp (user_id, kind, code),
+    INDEX idx_vp_user (user_id)
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci${TABLE_ENC}`,
 ];
 
 // ---------------------------------------------------------------------------
@@ -616,29 +654,42 @@ async function seed() {
     if (rows.length === 0) await query('INSERT INTO tags (name, color, owner_user_id) VALUES (?, ?, NULL)', [name, color]);
   }
 
-  // Default groups (system)
+  // Default groups (system). linkTag = seed as a smart group linked to that
+  // system tag (Family/Shared) so the tag+group pairs stay in sync by design.
   const defaultGroups = [
-    ['Close Friends', 'star', '#7c5bf5', 'Your inner circle'],
-    ['Family', 'home', '#50c878', 'Family members'],
-    ['Acquaintances', 'users', '#5b9cf5', 'People you know'],
-    ['Shared', 'link', '#f59e0b', 'Contacts shared with you'],
+    ['Close Friends', 'star', '#7c5bf5', 'Your inner circle', null],
+    ['Family', 'home', '#50c878', 'Family members', 'Family'],
+    ['Acquaintances', 'users', '#5b9cf5', 'People you know', null],
+    ['Shared', 'link', '#f59e0b', 'Contacts shared with you', 'Shared'],
   ];
-  for (const [name, icon, color, description] of defaultGroups) {
-    const rows = await query('SELECT id FROM `groups` WHERE name = ? AND is_system = 1', [name]);
+  for (const [name, icon, color, description, linkTag] of defaultGroups) {
+    let tagId = null;
+    if (linkTag) {
+      const t = await query('SELECT id FROM tags WHERE name = ? AND owner_user_id IS NULL', [linkTag]);
+      if (t.length) tagId = t[0].id;
+    }
+    const rows = await query('SELECT id, tag_id FROM `groups` WHERE name = ? AND is_system = 1', [name]);
     if (rows.length === 0) {
       await query(
-        'INSERT INTO `groups` (name, icon, color, description, owner_user_id, is_system) VALUES (?, ?, ?, ?, NULL, 1)',
-        [name, icon, color, description]
+        'INSERT INTO `groups` (name, icon, color, description, owner_user_id, is_system, tag_id) VALUES (?, ?, ?, ?, NULL, 1, ?)',
+        [name, icon, color, description, tagId]
       );
+    } else if (tagId && rows[0].tag_id === null) {
+      // existing install where migration 007 couldn't link (e.g. tag was
+      // recreated later) — repair the linkage idempotently
+      await query('UPDATE `groups` SET tag_id = ? WHERE id = ?', [tagId, rows[0].id]);
     }
   }
 
   // Default app settings — spicy_enabled seeds FALSE (deliberate post-setup act)
   const defaultSettings = [
     ['app_name', JSON.stringify('Kith'), 'string'],
-    ['app_logo', JSON.stringify(null), 'string'],
-    ['accent_color', JSON.stringify('#7c5bf5'), 'color'],
-    ['spicy_accent_color', JSON.stringify('#c2394f'), 'color'],
+    // app_logo is still read (app.js logoHtml + settings whitelist) but needs no
+    // seed row — an absent key falls back to the default mark the same as null.
+    // accent_color / spicy_accent_color are no longer seeded: instance-level
+    // accent customization was removed post-v1.3 ("The Record" pins the accent
+    // tokens in CSS). Existing installs may still carry those rows in
+    // app_settings — harmless, ignored by the UI; no destructive migration.
     ['spicy_enabled', JSON.stringify(false), 'boolean'],
     ['spicy_require_pin', JSON.stringify(false), 'boolean'],
     ['spicy_auto_disable_minutes', JSON.stringify(0), 'string'],

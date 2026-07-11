@@ -11,12 +11,10 @@ const { requireAuth, requireContactAccess, contactAccess, isAdmin } = require('.
 const { auditWrite } = require('../lib/audit');
 const { spicyVisible } = require('./contacts');
 const { encryptField, decryptField } = require('../lib/crypto');
+const { geocode, queryHash } = require('../lib/geo');
+const { US_STATES, US_STATE_CODES, countryCode, parseGeoLabel } = require('../lib/places');
 const contactsLib = require('../lib/contacts');
-const { rebuildSearchIndexAsync, isValidDate } = contactsLib;
-
-// touchContact is exported by lib/contacts (concurrent work) — resolve lazily
-// and stub-guard so this module never crashes if the export lands later.
-const touchContact = (...args) => (contactsLib.touchContact || (() => {}))(...args);
+const { rebuildSearchIndexAsync, isValidDate, touchContact } = contactsLib;
 
 // ------------------------------------------------------------- timeline
 const timelineRouter = express.Router();
@@ -111,11 +109,192 @@ timelineRouter.delete('/:id', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ----------------------------------------------------------- timeline map
+// GET /api/timeline/map — every located event as map pins: the primary
+// events.location (lazily geocoded through geo_cache, like the journal
+// timeline) plus all event_locations stops (roadtrips). Owner-scoped,
+// spicy-filtered like the events routes.
+timelineRouter.get('/map', async (req, res, next) => {
+  try {
+    const showSpicy = await spicyVisible(req.user);
+    const where = ['e.deleted_at IS NULL'];
+    const params = [];
+    if (!isAdmin(req.user)) { where.push('e.owner_user_id = ?'); params.push(req.user.id); }
+    if (!showSpicy) where.push('e.is_spicy = 0');
+    const whereSql = where.join(' AND ');
+
+    const [primary, extras] = await Promise.all([
+      query(
+        `SELECT e.id, e.title, e.type, e.starts_at, e.location
+         FROM events e WHERE ${whereSql} AND e.location IS NOT NULL AND e.location != ''
+         ORDER BY e.starts_at DESC LIMIT 1000`, params),
+      query(
+        `SELECT el.event_id, el.label, el.latitude, el.longitude, el.position,
+                e.title, e.type, e.starts_at
+         FROM event_locations el JOIN events e ON e.id = el.event_id
+         WHERE ${whereSql} AND el.latitude IS NOT NULL AND el.longitude IS NOT NULL
+         ORDER BY e.starts_at DESC, el.position LIMIT 2000`, params),
+    ]);
+
+    const pins = [];
+    // primary locations — resolve coords through geo_cache; capped fresh lookups
+    const cacheByHash = new Map();
+    if (primary.length) {
+      const hashes = [...new Set(primary.map((r) => queryHash(r.location)))];
+      const ph = hashes.map(() => '?').join(',');
+      const cachedRows = await query(
+        `SELECT query_hash, latitude, longitude, label FROM geo_cache WHERE query_hash IN (${ph})`, hashes);
+      for (const c of cachedRows) cacheByHash.set(c.query_hash, c);
+    }
+    let lookups = 0;
+    const MAX_LOOKUPS = 100;
+    for (const r of primary) {
+      let lat = null, lng = null;
+      const cached = cacheByHash.get(queryHash(r.location));
+      if (cached) {
+        if (cached.latitude == null) continue; // cached miss
+        lat = Number(cached.latitude); lng = Number(cached.longitude);
+      } else {
+        if (lookups >= MAX_LOOKUPS) continue;
+        lookups++;
+        const g = await geocode(r.location); // computes + caches (hit or miss)
+        if (!g) continue;
+        lat = g.lat; lng = g.lng;
+      }
+      pins.push({
+        event_id: r.id, title: r.title, type: r.type, starts_at: r.starts_at,
+        label: r.location, lat, lng, primary: true,
+      });
+    }
+    for (const r of extras) {
+      pins.push({
+        event_id: r.event_id, title: r.title, type: r.type, starts_at: r.starts_at,
+        label: r.label, lat: Number(r.latitude), lng: Number(r.longitude), primary: false,
+      });
+    }
+    res.json({ pins });
+  } catch (err) { next(err); }
+});
+
+// ---------------------------------------------------------- visited places
+// The Places bucket list: manual marks (visited_places, user-scoped) merged
+// with marks derived on the fly from event locations' geo metadata. Derived
+// marks are never stored; unchecking is only possible for manual marks.
+const VP_KINDS = ['country', 'us_state'];
+
+/** Derive visited state/country codes from the user's events: event_locations
+ * carry parsed metadata; primary events.location falls back to parsing the
+ * cached geocoder label (no fresh geocoding here — the map/timeline routes
+ * warm the cache). Returns { states: Set<code>, countries: Set<code> }. */
+async function derivedPlaces(user) {
+  const showSpicy = await spicyVisible(user);
+  const where = ['e.deleted_at IS NULL', `e.owner_user_id = ?`];
+  const params = [user.id];
+  if (!showSpicy) where.push('e.is_spicy = 0');
+  const whereSql = where.join(' AND ');
+
+  const states = new Set();
+  const countries = new Set();
+
+  const locRows = await query(
+    `SELECT DISTINCT el.state_code, el.country_code
+     FROM event_locations el JOIN events e ON e.id = el.event_id
+     WHERE ${whereSql}`, params);
+  for (const r of locRows) {
+    if (r.state_code && US_STATE_CODES.has(r.state_code)) states.add(r.state_code);
+    if (r.country_code) countries.add(String(r.country_code).toUpperCase());
+  }
+
+  const primRows = await query(
+    `SELECT DISTINCT e.location FROM events e
+     WHERE ${whereSql} AND e.location IS NOT NULL AND e.location != '' LIMIT 1000`, params);
+  if (primRows.length) {
+    const byHash = new Map(primRows.map((r) => [queryHash(r.location), r.location]));
+    const hashes = [...byHash.keys()];
+    const ph = hashes.map(() => '?').join(',');
+    const cachedRows = await query(
+      `SELECT query_hash, latitude, label FROM geo_cache WHERE query_hash IN (${ph})`, hashes);
+    for (const c of cachedRows) {
+      if (c.latitude == null || !c.label) continue; // cached miss / no label
+      const meta = parseGeoLabel(c.label);
+      if (meta.state_code) states.add(meta.state_code);
+      if (meta.country_code) countries.add(meta.country_code);
+    }
+  }
+  return { states, countries };
+}
+
+// GET /api/timeline/places → { us_states: [{code, source}], countries: [{code, source}] }
+// source: 'manual' | 'derived' | 'both' — manual wins for delete affordance.
+timelineRouter.get('/places', async (req, res, next) => {
+  try {
+    const [manualRows, derived] = await Promise.all([
+      query('SELECT kind, code FROM visited_places WHERE user_id = ? AND source = ?', [req.user.id, 'manual']),
+      derivedPlaces(req.user),
+    ]);
+    const manualStates = new Set();
+    const manualCountries = new Set();
+    for (const r of manualRows) {
+      if (r.kind === 'us_state') manualStates.add(r.code);
+      else if (r.kind === 'country') manualCountries.add(r.code);
+    }
+    const merge = (manual, derivedSet) => {
+      const out = [];
+      for (const code of new Set([...manual, ...derivedSet])) {
+        const m = manual.has(code), d = derivedSet.has(code);
+        out.push({ code, source: m && d ? 'both' : (m ? 'manual' : 'derived') });
+      }
+      return out.sort((a, b) => a.code.localeCompare(b.code));
+    };
+    res.json({
+      us_states: merge(manualStates, derived.states),
+      countries: merge(manualCountries, derived.countries),
+      us_state_total: US_STATES.length,
+    });
+  } catch (err) { next(err); }
+});
+
+// POST /api/timeline/places { kind, code } — manual "been there" mark
+timelineRouter.post('/places', async (req, res, next) => {
+  try {
+    const { kind, code } = req.body || {};
+    if (!VP_KINDS.includes(kind)) return res.status(400).json({ error: "kind must be 'country' or 'us_state'" });
+    const c = String(code || '').trim().toUpperCase();
+    if (kind === 'us_state' && !US_STATE_CODES.has(c)) {
+      return res.status(400).json({ error: 'Unknown US state code' });
+    }
+    if (kind === 'country' && !(/^[A-Z]{2}$/.test(c) || countryCode(c))) {
+      return res.status(400).json({ error: 'Unknown country code' });
+    }
+    const stored = kind === 'country' && !/^[A-Z]{2}$/.test(c) ? countryCode(c) : c;
+    await query(
+      "INSERT IGNORE INTO visited_places (user_id, kind, code, source) VALUES (?, ?, ?, 'manual')",
+      [req.user.id, kind, stored]
+    );
+    res.status(201).json({ ok: true, code: stored });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/timeline/places/:kind/:code — remove a manual mark (derived
+// marks come from event data and can't be unchecked here)
+timelineRouter.delete('/places/:kind/:code', async (req, res, next) => {
+  try {
+    const kind = String(req.params.kind);
+    if (!VP_KINDS.includes(kind)) return res.status(400).json({ error: 'Invalid kind' });
+    const code = String(req.params.code || '').trim().toUpperCase().slice(0, 10);
+    await query(
+      "DELETE FROM visited_places WHERE user_id = ? AND kind = ? AND code = ? AND source = 'manual'",
+      [req.user.id, kind, code]
+    );
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // ---------------------------------------------------------------- notes
 const notesRouter = express.Router();
 notesRouter.use(requireAuth);
 
-// GET /api/notes?contact_id=
+// GET /api/notes?contact_id=&page=&limit= (default 100, max 500)
 notesRouter.get('/', async (req, res, next) => {
   try {
     const contactId = Number(req.query.contact_id);
@@ -125,10 +304,13 @@ notesRouter.get('/', async (req, res, next) => {
     if (found.access === 'shared' && found.share.share_scope === 'basic') {
       return res.status(403).json({ error: 'Not available for this share scope' });
     }
+    const lim = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500);
+    const off = (Math.max(parseInt(req.query.page, 10) || 1, 1) - 1) * lim;
     const showSpicy = (await spicyVisible(req.user)) &&
       (found.access !== 'shared' || found.share.share_scope === 'full_spicy');
     const rows = await query(
-      `SELECT * FROM notes WHERE contact_id = ? AND deleted_at IS NULL ${showSpicy ? '' : 'AND is_spicy = 0'} ORDER BY created_at DESC`,
+      `SELECT * FROM notes WHERE contact_id = ? AND deleted_at IS NULL ${showSpicy ? '' : 'AND is_spicy = 0'}
+       ORDER BY created_at DESC, id DESC LIMIT ${lim} OFFSET ${off}`,
       [contactId]
     );
     res.json({ notes: rows.map((n) => ({ ...n, content: n.is_spicy ? decryptField(n.content) : n.content })) });

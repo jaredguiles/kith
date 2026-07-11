@@ -9,8 +9,7 @@ const { query } = require('../database/connection');
 const { requireAuth, contactAccess, isAdmin } = require('../middleware/auth');
 const { auditWrite } = require('../lib/audit');
 const contactsLib = require('../lib/contacts');
-const { isValidDate } = contactsLib;
-const touchContact = (...args) => (contactsLib.touchContact || (() => {}))(...args);
+const { isValidDate, touchContact } = contactsLib;
 
 const router = express.Router();
 router.use(requireAuth);

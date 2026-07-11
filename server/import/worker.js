@@ -21,6 +21,7 @@ const parsers = {
 };
 const { findBestMatch } = require('./matcher');
 const { encryptField } = require('../lib/crypto');
+const { buildSslConfig } = require('../database/connection');
 
 let pool;
 
@@ -32,7 +33,8 @@ function getPool() {
       user: process.env.DB_USER,
       password: process.env.DB_PASSWORD,
       database: process.env.DB_NAME,
-      ssl: String(process.env.DB_SSL) === 'true' ? { rejectUnauthorized: false } : undefined,
+      // Shared TLS semantics with the main pool (DB_SSL / DB_SSL_CA / DB_SSL_INSECURE)
+      ssl: buildSslConfig(),
       connectionLimit: 3,
       dateStrings: true,
       charset: 'utf8mb4_unicode_ci',
@@ -204,17 +206,28 @@ async function poll() {
 
 /**
  * Crash recovery: jobs left in 'processing' by a previous worker/process crash
- * would otherwise be stuck forever. Single-worker design (one worker thread,
- * one poll loop) makes a blanket requeue at startup safe — except jobs claimed
- * by a finalize in flight (finalize reuses 'processing'; those have staging
- * rows with review decisions and must return to 'awaiting_review', not be
- * re-parsed).
+ * would otherwise be stuck forever. Jobs claimed by a finalize in flight
+ * (finalize reuses 'processing'; those have staging rows with review decisions)
+ * must return to 'awaiting_review', not be re-parsed.
+ *
+ * Race guard (audit L6): a finalize can legitimately be running when this
+ * executes (worker restart while the HTTP process keeps serving), so recovery
+ * never blanket-requeues. Both recovery UPDATEs are conditional on
+ * status='processing' AND updated_at older than STUCK_MINUTES (the claim is
+ * atomic via the WHERE clause). A live parse bumps updated_at via progress
+ * writes; a finalize bumps it at claim time — so only jobs whose last state
+ * change is stale get recovered, and a finalize that finishes anyway wins by
+ * writing status='complete' last.
  */
+const STUCK_MINUTES = 10;
+
 async function recoverStuckJobs() {
   try {
     const [reviewed] = await getPool().execute(
       `UPDATE import_jobs j SET j.status = 'awaiting_review'
-       WHERE j.status = 'processing' AND EXISTS (
+       WHERE j.status = 'processing'
+         AND j.updated_at < NOW() - INTERVAL ${STUCK_MINUTES} MINUTE
+         AND EXISTS (
          SELECT 1 FROM import_staging s
          WHERE s.import_job_id = j.id
            AND (s.reviewed_at IS NOT NULL OR s.final_contact_id IS NOT NULL)
@@ -224,7 +237,8 @@ async function recoverStuckJobs() {
       console.log(`[import-worker] restored ${reviewed.affectedRows} interrupted finalize job(s) to 'awaiting_review'`);
     }
     const [requeued] = await getPool().execute(
-      "UPDATE import_jobs SET status = 'queued' WHERE status = 'processing'"
+      `UPDATE import_jobs SET status = 'queued'
+       WHERE status = 'processing' AND updated_at < NOW() - INTERVAL ${STUCK_MINUTES} MINUTE`
     );
     if (requeued.affectedRows > 0) {
       console.log(`[import-worker] requeued ${requeued.affectedRows} job(s) stuck in 'processing' from a previous run`);
@@ -236,3 +250,6 @@ async function recoverStuckJobs() {
 
 console.log('[import-worker] started');
 recoverStuckJobs().then(poll);
+// keep sweeping: a job that becomes stuck AFTER boot (worker restart mid-parse,
+// finalize crash) is recovered on the next interval instead of never.
+setInterval(recoverStuckJobs, 5 * 60 * 1000).unref();

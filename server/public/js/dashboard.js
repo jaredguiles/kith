@@ -3,7 +3,7 @@
 import { api } from './api.js';
 import { esc, fmtDate, fmtDateTime, timeAgo, parseDate } from './utils.js';
 import { icon } from './icons.js';
-import { emptyState, toast, sectionHeader, leaderRow } from './components.js';
+import { emptyState, toast, sectionHeader, leaderRow, withBusy } from './components.js';
 import { pageRenderers } from './pages.js';
 import { state, refreshNotifCount } from './app.js';
 import { openReminderForm, recurBadge } from './events.js';
@@ -40,14 +40,19 @@ function dueTag(dueAt) {
   return { label: fmtDate(due), overdue: false };
 }
 
+let homeToken = 0; // stale-response guard: only the latest fetch renders
+
 async function renderHome(el) {
+  const token = ++homeToken;
   let data;
   try {
     data = await api.get('/api/dashboard');
   } catch (err) {
+    if (token !== homeToken) return;
     el.innerHTML = `<div class="page-inner">${emptyState('alert-circle', "Couldn't load", 'Check your connection and try again.')}</div>`;
     return;
   }
+  if (token !== homeToken) return; // late response — a newer render owns the page
   const { birthdays, reminders, events, activity, stats } = data;
   const outOfTouch = data.out_of_touch || [];
   const upcomingDates = data.upcoming_dates || [];
@@ -157,14 +162,14 @@ async function renderHome(el) {
 
   el.querySelector('[data-action="new-reminder"]').addEventListener('click', () => openReminderForm(null, () => renderHome(el)));
   el.querySelectorAll('[data-complete-reminder]').forEach((b) =>
-    b.addEventListener('click', async () => {
+    b.addEventListener('click', withBusy(b, async () => {
       try {
         const res = await api.post(`/api/reminders/${b.dataset.completeReminder}/complete`);
         toast(res?.next_due_at ? `Reminder completed. Next: ${fmtDateTime(res.next_due_at)}` : 'Reminder completed.');
         renderHome(el);
         refreshNotifCount();
       } catch (err) { toast(err.message, 'error'); }
-    }));
+    })));
 }
 
 // ---------------------------------------------------------- notifications

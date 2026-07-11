@@ -564,7 +564,10 @@ window.addEventListener('kith:shell-ready', () => {
   a.className = 'nav-item';
   a.dataset.nav = 'settings';
   a.href = '#/settings';
-  a.innerHTML = `<span class="nav-num">08</span><span class="nav-label">Account</span><span class="nav-marker"></span>`;
+  // Number continues the existing index (non-admins have 01–09, so this is
+  // 10) — a hardcoded '08' collided with Journal's 08.
+  const nextNum = String(nav.querySelectorAll('.nav-item').length + 1).padStart(2, '0');
+  a.innerHTML = `<span class="nav-num">${nextNum}</span><span class="nav-label">Account</span><span class="nav-marker"></span>`;
   nav.appendChild(a);
 });
 

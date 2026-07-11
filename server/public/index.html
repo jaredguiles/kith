@@ -7,6 +7,10 @@
   <meta name="color-scheme" content="dark">
   <meta name="theme-color" content="#15130d">
   <link rel="icon" href="/assets/logo.svg" type="image/svg+xml">
+  <!-- Manifest reuses icon-192/512 for the "maskable" purpose (JSON allows no
+       comments): the artwork has no dedicated safe-zone padding, so launchers
+       that apply a mask may crop the mark's edges. A padded maskable icon
+       (~80% safe zone) would be the proper fix. -->
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/assets/icons/apple-touch-icon.png">
   <link rel="stylesheet" href="/fonts/record-fonts.css">

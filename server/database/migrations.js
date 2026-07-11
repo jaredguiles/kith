@@ -129,6 +129,103 @@ const MIGRATIONS = [
       }
     },
   },
+  {
+    version: 5,
+    name: 'import-jobs-updated-at',
+    up: async (query) => {
+      // updated_at powers the stuck-job recovery guard (only requeue jobs
+      // whose last state change is old enough — see import/worker.js).
+      const rows = await query(
+        `SELECT 1 FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'import_jobs' AND COLUMN_NAME = 'updated_at'`
+      );
+      if (!rows.length) {
+        await query(
+          'ALTER TABLE import_jobs ADD COLUMN updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP AFTER created_at'
+        );
+      }
+    },
+  },
+  {
+    version: 6,
+    name: 'event-locations-visited-places',
+    up: async (query) => {
+      // Multi-location events (roadtrips): extra stops beyond events.location
+      // (which stays the primary). Geo metadata (city/state/country) is parsed
+      // from the geocoder label at save time (lib/places.parseGeoLabel) so the
+      // Places tab can derive visited states/countries without re-geocoding.
+      await query(`CREATE TABLE IF NOT EXISTS event_locations (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        event_id INT NOT NULL,
+        label VARCHAR(255) NOT NULL,
+        latitude DECIMAL(10,7) NULL,
+        longitude DECIMAL(10,7) NULL,
+        city VARCHAR(100) NULL,
+        state VARCHAR(100) NULL,
+        state_code VARCHAR(10) NULL,
+        country_code VARCHAR(2) NULL,
+        geocode_source VARCHAR(20) NULL,
+        position INT NOT NULL DEFAULT 0,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT fk_evloc_event FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+        INDEX idx_evloc_event (event_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+      // Manual "been there" marks for the Places bucket list (pre-app trips).
+      // Derived marks (from event locations) are computed on the fly and never
+      // stored — `source` exists so a future backfill could persist them.
+      await query(`CREATE TABLE IF NOT EXISTS visited_places (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        kind ENUM('country','us_state') NOT NULL,
+        code VARCHAR(10) NOT NULL,
+        source ENUM('manual','derived') NOT NULL DEFAULT 'manual',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT fk_vp_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE KEY uq_vp (user_id, kind, code),
+        INDEX idx_vp_user (user_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`);
+    },
+  },
+  {
+    version: 7,
+    name: 'groups-tag-link-smart-groups',
+    up: async (query) => {
+      // Smart groups: a group with tag_id set derives its membership from
+      // contact_tags (the linked tag IS the membership). Groups without
+      // tag_id keep manual group_members semantics.
+      const cols = await query(
+        `SELECT 1 FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'groups' AND COLUMN_NAME = 'tag_id'`
+      );
+      if (!cols.length) {
+        await query(
+          'ALTER TABLE `groups` ADD COLUMN tag_id INT NULL AFTER is_system, ' +
+          'ADD CONSTRAINT fk_groups_tag FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE SET NULL'
+        );
+      }
+      // Link the overlapping system seeds: Family group → Family tag and
+      // Shared group → Shared tag. Skips silently when either side is missing
+      // (the JOIN simply matches no rows).
+      for (const name of ['Family', 'Shared']) {
+        await query(
+          `UPDATE \`groups\` g JOIN tags t ON t.name = ? AND t.owner_user_id IS NULL
+           SET g.tag_id = t.id
+           WHERE g.name = ? AND g.is_system = 1 AND g.tag_id IS NULL`,
+          [name, name]
+        );
+      }
+      // Backfill: existing members of newly-smart groups that lack the tag
+      // get it copied over so nobody loses membership. The old group_members
+      // rows for smart groups become inert (reads branch on tag_id and
+      // ignore them) — deliberately left in place, harmless.
+      await query(
+        `INSERT IGNORE INTO contact_tags (contact_id, tag_id)
+         SELECT gm.contact_id, g.tag_id FROM group_members gm
+         JOIN \`groups\` g ON g.id = gm.group_id
+         WHERE g.tag_id IS NOT NULL`
+      );
+    },
+  },
 ];
 
 async function ensureVersionTable() {

@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Kith — "The Record" design system (new_design_temp/README.md is
+   Kith — "The Record" design system (DESIGN.md at the repo root is
    authoritative). Warm editorial dossier: paper/ink, Newsreader serif +
    IBM Plex Mono, hairline rules, dotted leaders, indexed sections.
    All styling lives here. Page-level JS only composes these classes.
@@ -12,7 +12,9 @@
   --paper: #f2eee4;            /* page bg */
   --panel: #faf7f0;            /* sidebar / inset bg */
   --ink: #1c1813;              /* text, strong rules, buttons */
-  --muted: #6f685b;            /* secondary text */
+  /* secondary text — darkened from #6f685b (4.76:1) to keep the tiny 9–10px
+     uppercase mono labels comfortably above WCAG 4.5:1 on --paper (≈5.5:1) */
+  --muted: #655e52;
   --rule: rgba(28, 24, 19, 0.16);         /* hairlines */
   --rule-strong: rgba(28, 24, 19, 0.32);  /* frame border */
   --accent: #2b5566;           /* ink-blue */
@@ -38,11 +40,11 @@
   --font-sans: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  /* radius — crisp, print-like */
-  --radius-sm: 4px;
-  --radius-md: 4px;
-  --radius-lg: 4px;
-  --radius-xl: 4px;
+  /* radius — blocky, print-like: zero everywhere */
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
 
   /* motion */
   --ease-snap: cubic-bezier(0.16, 1, 0.3, 1);
@@ -80,7 +82,7 @@ body.spicy-mode {
   --paper: #efe5d8;
   --panel: #f6ede1;
   --ink: #1c1813;
-  --muted: #6f685b;
+  --muted: #655e52; /* keep ≥4.5:1 on the warmer spicy paper (see :root note) */
   --rule: rgba(28, 24, 19, 0.16);
   --rule-strong: rgba(28, 24, 19, 0.32);
   --accent: #7a1f2b; /* oxblood */
@@ -93,7 +95,9 @@ body.spicy-mode {
   --paper: #15130d;
   --panel: #1e1a12;
   --ink: #ece4d2;
-  --muted: #8b8271;
+  /* lightened from #8b8271 (4.56:1 on --panel) so tiny mono labels clear
+     WCAG 4.5:1 with margin on both paper and panel (≈5.6:1) */
+  --muted: #9a9180;
   --rule: rgba(236, 228, 210, 0.13);
   --rule-strong: rgba(236, 228, 210, 0.26);
   --accent: #7fa8b8; /* dusty blue */
@@ -121,7 +125,7 @@ body.spicy-mode {
      the dark theme would inherit light-theme #1c1813 text on near-black paper
      (invisible). */
   --ink: #ece4d2;
-  --muted: #8b8271;
+  --muted: #9a9180; /* match dark theme (contrast note above) */
   --rule: rgba(236, 228, 210, 0.13);
   --rule-strong: rgba(236, 228, 210, 0.26);
   --accent: #d0808a; /* dusty rose/oxblood */
@@ -372,8 +376,10 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--in
 .sidebar-mini-item .leader-dots + .mini-count { margin-left: 0; }
 .sidebar-mini-item .dot { display: none; } /* group color dots retired in The Record */
 
-/* confidential toggle — quiet, low-contrast (README: INCONSPICUOUS) */
-.btn-flame, .btn-confidential {
+/* confidential toggle — quiet, low-contrast (DESIGN.md: INCONSPICUOUS).
+   Class kept as .btn-flame for historical hook compatibility (pre-Record
+   flame toggle); it renders the lock/confidential control. */
+.btn-flame {
   align-self: flex-start;
   display: flex; align-items: center; gap: 7px;
   background: none; border: none;
@@ -386,8 +392,8 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--in
   filter: none;
   border-radius: var(--radius-sm);
 }
-.btn-flame:hover, .btn-confidential:hover { opacity: 0.9; background: none; }
-.btn-flame svg, .btn-confidential svg {
+.btn-flame:hover { opacity: 0.9; background: none; }
+.btn-flame svg {
   width: 12px; height: 12px;
   stroke: var(--muted); fill: none;
 }
@@ -710,7 +716,7 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
 .rec-quicklog-btn {
   font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em;
   text-transform: uppercase;
-  background: none; border: 1px solid var(--rule); border-radius: 3px;
+  background: none; border: 1px solid var(--rule); border-radius: 0;
   padding: 5px 10px; color: var(--muted); cursor: pointer;
   transition: color 0.12s ease, border-color 0.12s ease;
 }
@@ -1189,7 +1195,7 @@ a.btn, a.btn:hover { text-decoration: none; }
 .toggle-switch {
   position: relative;
   width: 34px; height: 18px;
-  border-radius: 2px;
+  border-radius: 0;
   background: none;
   border: 1px solid var(--rule-strong);
   cursor: pointer;
@@ -1202,7 +1208,7 @@ a.btn, a.btn:hover { text-decoration: none; }
   position: absolute;
   top: 2px; left: 2px;
   width: 12px; height: 12px;
-  border-radius: 1px;
+  border-radius: 0;
   background: var(--muted);
   transition: transform 150ms var(--ease-snap), background 150ms ease-out;
 }
@@ -1377,7 +1383,9 @@ a.btn, a.btn:hover { text-decoration: none; }
   padding: 48px 24px;
   color: var(--text-secondary);
 }
-.empty-state svg { width: 32px; height: 32px; color: var(--muted); margin-bottom: 14px; stroke-width: 1.5; }
+/* direct child only: the CTA button's own svg must keep .btn sizing (13px),
+   not inflate to the 32px empty-state glyph */
+.empty-state > svg { width: 32px; height: 32px; color: var(--muted); margin-bottom: 14px; stroke-width: 1.5; }
 .empty-state h3 { font-family: var(--font-serif); font-size: 20px; font-weight: 400; color: var(--ink); margin-bottom: 4px; }
 .empty-state p { font-family: var(--font-serif); font-size: 14px; color: var(--muted); font-style: italic; max-width: 360px; }
 .empty-state .btn { margin-top: 16px; }
@@ -1420,6 +1428,25 @@ a.btn, a.btn:hover { text-decoration: none; }
 .toast.error svg { color: var(--red); }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
 @keyframes toast-out { to { opacity: 0; transform: translateY(8px); } }
+
+/* --------------------------------------------- SW update banner (app.js) */
+.update-banner {
+  position: fixed;
+  bottom: 20px; right: 20px;
+  z-index: 300;
+  display: flex; align-items: center; gap: 12px;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  box-shadow: var(--frame-shadow);
+  padding: 10px 12px 10px 16px;
+  animation: toast-in 250ms var(--ease-snap);
+}
+.update-banner .update-banner-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
 
 /* --------------------------------------------------------------- popovers */
 .popover-wrap { position: relative; display: inline-block; }
@@ -1500,6 +1527,12 @@ a.btn, a.btn:hover { text-decoration: none; }
 .import-widget .iw-bar-fill { height: 100%; background: var(--accent); transition: width 300ms ease-out; }
 .import-widget .btn { margin-top: 10px; }
 
+/* upload progress inside the import modal (XHR onprogress; import.js) */
+#upload-progress { margin: 12px 0 4px; }
+#upload-progress .iw-bar { height: 4px; background: var(--rule); overflow: hidden; }
+#upload-progress .iw-bar-fill { height: 100%; background: var(--accent); transition: width 200ms ease-out; }
+#upload-progress .rec-mono { font-family: var(--font-mono); font-size: 11px; color: var(--ink); font-variant-numeric: tabular-nums; }
+
 /* --------------------------------------------------------- command palette */
 .cmdk-overlay {
   position: fixed; inset: 0; z-index: 200;
@@ -1536,7 +1569,7 @@ a.btn, a.btn:hover { text-decoration: none; }
   color: var(--muted);
 }
 .cmdk-kbd {
-  display: inline-block; border: 1px solid var(--rule); border-radius: 3px;
+  display: inline-block; border: 1px solid var(--rule); border-radius: 0;
   padding: 0 4px; margin: 0 2px; color: var(--ink);
 }
 .cmdk-item {
@@ -1769,6 +1802,12 @@ a.btn, a.btn:hover { text-decoration: none; }
 .map-canvas-wrap { flex: 1; min-height: 320px; overflow: hidden; isolation: isolate; z-index: 0; position: relative; border: 1px solid var(--rule-strong); }
 .map-canvas { width: 100%; height: 100%; min-height: 320px; border-radius: 0; }
 .leaflet-container { background: var(--panel); font-family: inherit; }
+/* square the vendored Leaflet chrome (zoom bar, layer control) — The Record
+   is zero-radius; leaflet.css ships 4–5px corners */
+.leaflet-bar, .leaflet-bar a, .leaflet-touch .leaflet-bar,
+.leaflet-touch .leaflet-bar a:first-child, .leaflet-touch .leaflet-bar a:last-child,
+.leaflet-control-layers, .leaflet-touch .leaflet-control-layers,
+.leaflet-tooltip { border-radius: 0; }
 .leaflet-popup-content-wrapper {
   background: var(--paper);
   color: var(--ink);
@@ -1830,36 +1869,6 @@ a.btn, a.btn:hover { text-decoration: none; }
   border: 5px solid transparent;
   border-top: 6px solid var(--ink);
   border-bottom: none;
-}
-
-/* --------------------------------------------------- map style switcher */
-.map-style-switcher {
-  position: absolute;
-  top: 12px; right: 12px;
-  z-index: 500;
-  display: inline-flex; gap: 0;
-  padding: 0;
-  background: var(--paper);
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-.map-style-switcher .map-style-pill {
-  padding: 4px 9px;
-  border-radius: 0;
-  border: none; border-left: 1px solid var(--rule);
-  background: none;
-  font-family: var(--font-mono);
-  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
-  color: var(--muted);
-  transition: background 150ms ease-out, color 150ms ease-out;
-  white-space: nowrap;
-}
-.map-style-switcher .map-style-pill:first-child { border-left: none; }
-.map-style-switcher .map-style-pill:hover { color: var(--ink); }
-.map-style-switcher .map-style-pill.active { background: var(--ink); color: var(--paper); }
-@media (max-width: 768px) {
-  .map-style-switcher { max-width: calc(100% - 60px); overflow-x: auto; }
 }
 
 /* ------------------------------------------------------------- calendar */
@@ -2299,6 +2308,24 @@ a.rec-log-who:hover { color: var(--accent); text-decoration: none; }
 .rec-group-card .card-header { margin-bottom: 0; }
 .rec-group-card .group-members { margin-top: 10px; border-top: 1px solid var(--rule); padding-top: 4px; }
 .rec-group-card .chev { width: 14px; height: 14px; color: var(--muted); flex-shrink: 0; }
+/* smart groups (tag-linked): mono ledger annotation, zero radius per The Record */
+.rec-group-card .rec-smart-link {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted);
+}
+.rec-group-card .rec-smart-link svg { width: 11px; height: 11px; flex-shrink: 0; }
+.rec-group-card .rec-smart-hint {
+  margin: 4px 0 6px;
+  padding: 5px 8px;
+  border: 1px dotted var(--rule-strong);
+  border-radius: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
 
 /* --------------------------------------------- media contact-sheet tiles */
 .media-tile { background: var(--panel); }
@@ -2413,6 +2440,13 @@ a.rec-log-who:hover { color: var(--accent); text-decoration: none; }
 }
 .ft-search-results:empty { display: none; }
 
+/* person popup opened from a tree card — key info + link to full record */
+.ft-person-pop { display: flex; align-items: flex-start; gap: 16px; }
+.ft-person-pop .av.lg { flex: 0 0 auto; }
+.ft-person-pop-info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ft-person-pop-info .rec-serif { font-size: 20px; }
+.ft-person-pop-info .uppercase-label { color: var(--muted); }
+
 /* palette colors win on map pins too (.map-avatar-pin .pin-av sets its own
    color/background at higher specificity than a bare .avc-N) */
 .map-avatar-pin .pin-av[class*="avc-"] { background: var(--panel); }
@@ -2467,11 +2501,10 @@ a.rec-log-who:hover { color: var(--accent); text-decoration: none; }
 .jt-map-pin-wrap { background: none; border: none; }
 .jt-map-pin {
   display: flex; align-items: center; justify-content: center;
-  width: 28px; height: 28px; border-radius: 50% 50% 50% 4px;
+  width: 28px; height: 28px; border-radius: 0;
   transform: rotate(0deg);
-  background: var(--surface, var(--bg)); color: var(--accent);
-  border: 1.5px solid var(--accent);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  background: var(--panel); color: var(--accent);
+  border: 1px solid var(--accent);
 }
 .jt-map-pin svg { width: 13px; height: 13px; }
 .jt-pin-event { color: var(--muted); border-color: var(--muted); }
@@ -2710,3 +2743,210 @@ a.rec-log-who:hover { color: var(--accent); text-decoration: none; }
   /* audit/changelog cell values can be long unbroken strings */
   .modal-content .data-table td { overflow-wrap: anywhere; }
 }
+
+/* ==========================================================================
+   Timeline page — vertical timeline (spine + sticky year markers), map tab,
+   Places bucket list. Scoped: .vtl-*, .place-*, .places-*, .ev-loc-row.
+   ========================================================================== */
+
+/* ------------------------------------------------------ vertical timeline */
+.vtl { position: relative; margin-top: 10px; }
+.vtl-year-block { position: relative; }
+/* the spine — runs through each year block, offset past the date rail */
+.vtl-year-block::before {
+  content: '';
+  position: absolute;
+  left: 106px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--rule-strong);
+}
+.vtl-year {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 10px 0 6px;
+  background: var(--paper);
+  font-family: var(--font-serif);
+  font-size: 26px;
+  color: var(--ink);
+  border-bottom: 1px solid var(--ink);
+}
+.vtl-year .rec-fill { border-bottom: none; }
+.vtl-month {
+  margin: 16px 0 4px 130px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.vtl-entry {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  padding: 8px 0;
+}
+.vtl-date {
+  width: 92px;
+  flex: none;
+  text-align: right;
+  padding-right: 14px;
+  padding-top: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.vtl-day { font-family: var(--font-mono); font-size: 11px; color: var(--ink); }
+.vtl-time { font-family: var(--font-mono); font-size: 10px; color: var(--muted); }
+/* node on the spine — square, zero-radius, paper-punched */
+.vtl-node {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin: 5px 20px 0 10px;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  position: relative;
+  z-index: 1;
+}
+.vtl-entry:hover .vtl-node { background: var(--accent); border-color: var(--accent); }
+.vtl-card {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--rule);
+  background: var(--panel);
+  padding: 10px 14px 12px;
+}
+.vtl-entry:hover .vtl-card { border-color: var(--rule-strong); }
+.vtl-title { font-family: var(--font-serif); font-size: 17px; color: var(--ink); margin-top: 3px; overflow-wrap: anywhere; }
+.vtl-title a { color: var(--ink); }
+.vtl-title a:hover { color: var(--accent); text-decoration: none; }
+.vtl-body { color: var(--muted); font-size: 13px; margin-top: 3px; overflow-wrap: anywhere; }
+.spicy-mode .vtl-entry.has-spicy-data .vtl-card { border-left: 2px solid var(--accent); }
+
+/* ---------------------------------------------------- places bucket list */
+.places-wrap { margin-top: 12px; }
+.places-stats {
+  display: flex;
+  align-items: baseline;
+  gap: 34px;
+  flex-wrap: wrap;
+  padding: 14px 0 18px;
+  border-bottom: 1px solid var(--ink);
+  margin-bottom: 18px;
+}
+.places-stat { display: flex; flex-direction: column; gap: 2px; }
+.places-stat-num { font-family: var(--font-serif); font-size: 34px; line-height: 1; color: var(--ink); }
+.places-stat-of { font-size: 18px; color: var(--muted); }
+.places-stat-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.places-hint { font-family: var(--font-serif); font-style: italic; font-size: 13px; color: var(--muted); max-width: 380px; }
+.place-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+  margin: 12px 0 26px;
+}
+.place-tile {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.place-tile:hover { border-color: var(--rule-strong); color: var(--ink); }
+.place-tile .place-check {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--rule-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.place-tile .place-check svg { width: 10px; height: 10px; }
+.place-tile .place-code { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.08em; flex: none; color: var(--muted); }
+.place-tile .place-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.place-tile.visited { border-color: var(--ink); color: var(--ink); background: var(--accent-weak); }
+.place-tile.visited .place-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+.place-tile.visited .place-code { color: var(--accent); }
+.place-tile.derived .place-check { background: var(--ink); border-color: var(--ink); }
+.place-tile:disabled { opacity: 0.5; cursor: wait; }
+
+/* ------------------------------------ event form: extra locations repeater */
+.ev-loc-row { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.ev-loc-row .form-input { flex: 1; }
+
+/* --------------------------------------------------------------- mobile */
+@media (max-width: 768px) {
+  .vtl-year-block::before { left: 14px; }
+  .vtl-entry { flex-wrap: wrap; }
+  .vtl-date { width: auto; order: 2; text-align: left; padding: 4px 0 0 34px; flex-direction: row; gap: 8px; }
+  .vtl-node { margin: 5px 10px 0 10px; order: 0; }
+  .vtl-card { order: 1; flex-basis: calc(100% - 40px); }
+  .vtl-month { margin-left: 34px; }
+  .place-grid { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
+  .places-stats { gap: 22px; }
+}
+
+/* --------------------------------------------- address autocomplete (contacts.js owner)
+   Typeahead dropdown for the addressAutocomplete component (components.js).
+   The Record: paper/ink, hard edges, zero radius on the list + items. */
+.addr-ac { position: relative; }
+.addr-ac .form-input { width: 100%; padding-right: 28px; }
+.addr-ac-state {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; color: var(--accent); pointer-events: none;
+}
+.addr-ac-state svg { width: 14px; height: 14px; }
+.addr-ac-list {
+  position: absolute; top: calc(100% + 2px); left: 0; right: 0;
+  z-index: 60;
+  max-height: 240px; overflow-y: auto;
+  background: var(--paper);
+  border: 1px solid var(--rule-strong);
+  border-radius: 0;
+  box-shadow: var(--frame-shadow);
+}
+.addr-ac-item {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none; border-radius: 0; background: none;
+  color: var(--ink);
+  font-size: 13px; text-align: left;
+  cursor: pointer;
+}
+.addr-ac-item:hover, .addr-ac-item.active { background: var(--accent-weak); }
+.addr-ac-item .addr-ac-label { min-width: 0; overflow-wrap: anywhere; }
+.addr-ac-item .addr-ac-type {
+  flex: none;
+  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--muted);
+}
+/* inline-edit flavor: the editor is narrow — let the list use the row width */
+.ie-field.ie-editing .addr-ac { min-width: 220px; }
+.ie-field.ie-editing .addr-ac-list { min-width: 260px; left: auto; right: 0; }
+
+/* select + Other… free-text reveal (ethnicity etc.) */
+.select-other { display: flex; flex-direction: column; }
+.ie-field.ie-editing .select-other { min-width: 180px; }

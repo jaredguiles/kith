@@ -53,6 +53,14 @@ function getPool() {
   if (typeof pool.on === 'function') pool.on('error', onPoolError);
   if (pool.pool && typeof pool.pool.on === 'function') {
     pool.pool.on('error', onPoolError);
+    // Per-connection init: MariaDB's default group_concat_max_len (1024)
+    // silently truncates GROUP_CONCAT aggregates (audit L9) — raise it on
+    // every new pooled connection.
+    pool.pool.on('connection', (conn) => {
+      conn.query('SET SESSION group_concat_max_len = 1048576', (err) => {
+        if (err) console.error('[db] group_concat_max_len init failed:', err.message);
+      });
+    });
   }
   return pool;
 }
@@ -79,4 +87,4 @@ async function withTransaction(fn) {
   }
 }
 
-module.exports = { getPool, query, withTransaction };
+module.exports = { getPool, query, withTransaction, buildSslConfig };

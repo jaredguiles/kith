@@ -16,6 +16,7 @@ const { requireAuth, contactAccess, isAdmin } = require('../middleware/auth');
 const { auditWrite } = require('../lib/audit');
 const { spicyVisible } = require('./contacts');
 const { encryptField, decryptField } = require('../lib/crypto');
+const { sniffBuffer, matchesDeclared } = require('../lib/filetype');
 const immich = require('./immich');
 
 const router = express.Router();
@@ -78,6 +79,39 @@ function safeFilename(name) {
   const base = path.basename(String(name || 'download'));
   // strip quotes/control chars/CRLF that could break the header
   return base.replace(/[^\w.\- ()\[\]]/g, '_').slice(0, 200) || 'download';
+}
+
+/** Read the first bytes of a file for magic-byte sniffing (audit S5). */
+function readHead(filePath, bytes = 64) {
+  const fd = fs.openSync(filePath, 'r');
+  try {
+    const buf = Buffer.alloc(bytes);
+    const n = fs.readSync(fd, buf, 0, bytes, 0);
+    return buf.subarray(0, n);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Verify uploaded image/video files against their magic bytes — the client's
+ * mimetype/extension is untrusted. Returns an error string (all files are
+ * unlinked) or null when every file checks out. Documents keep the existing
+ * mime+extension whitelist (no rename risk: names are server-generated).
+ */
+function verifyUploadContent(files) {
+  for (const file of files) {
+    if (!IMAGE_TYPES[file.mimetype] && !VIDEO_TYPES[file.mimetype]) continue; // documents
+    let sniffed = null;
+    try {
+      sniffed = sniffBuffer(readHead(file.path));
+    } catch { /* unreadable → treated as unknown */ }
+    if (!matchesDeclared(file.mimetype, sniffed)) {
+      for (const f of files) fs.unlink(f.path, () => {});
+      return `File "${file.originalname}" content does not match its declared type (${file.mimetype})`;
+    }
+  }
+  return null;
 }
 
 /** Resolve a stored relative path inside MEDIA_PATH, guarding traversal. */
@@ -186,6 +220,10 @@ router.post('/', (req, res, next) => {
 }, async (req, res, next) => {
   try {
     if (!req.files || !req.files.length) return res.status(400).json({ error: 'No files uploaded' });
+
+    // magic-byte check (audit S5): reject spoofed image/video uploads
+    const sniffErr = verifyUploadContent(req.files);
+    if (sniffErr) return res.status(400).json({ error: sniffErr });
 
     let contactId = null;
     if (req.body.contact_id) {

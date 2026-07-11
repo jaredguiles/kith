@@ -11,7 +11,9 @@ import { icon } from './icons.js';
 import {
   avatar, tagPill, groupBadge, emptyState, modalShell, formGroup,
   textInput, selectInput, textarea, toast, openModal, confirmModal, readForm,
-  filterPills, feedItem, sectionHeader, leaderRow, recNo,
+  filterPills, feedItem, sectionHeader, leaderRow, recNo, withBusy,
+  selectWithOtherHtml, bindSelectWithOther,
+  addressAutocompleteHtml, bindAddressAutocomplete,
 } from './components.js';
 import { formatPhoneSafe, attachPhoneInput, formatAddress, isUSCountry, normalizePhone } from './phonefmt.js';
 import {
@@ -19,6 +21,7 @@ import {
 } from './inline-edit.js';
 import { pageRenderers } from './pages.js';
 import { state, navigate, refreshSidebarLists, isSpicyOn } from './app.js';
+import { invalidateSearchIndex } from './search-index.js';
 
 // Sex = assigned at birth (GEDCOM SEX maps here); gender identity is its own
 // field so a transition is a recorded field change, not an overwrite of sex.
@@ -27,6 +30,11 @@ const GENDER_IDENTITY_OPTIONS = ['', 'Man', 'Woman', 'Trans man', 'Trans woman',
 const PRONOUN_OPTIONS = ['', 'he/him', 'she/her', 'they/them', 'he/they', 'she/they', 'ze/zir', 'xe/xem', 'it/its', 'any pronouns', 'ask me', 'other'];
 const ORIENTATION_OPTIONS = ['', 'Straight', 'Gay', 'Lesbian', 'Bisexual', 'Pansexual', 'Queer', 'Asexual', 'Aromantic', 'Demisexual', 'Omnisexual', 'Polysexual', 'Questioning', 'Other'];
 const REL_STATUS_OPTIONS = ['', 'Single', 'In a relationship', 'Married', 'Engaged', 'Divorced', 'Widowed', 'Separated', "It's complicated", 'Open relationship', 'Domestic partnership'];
+// Curated (US-census-style + common) — rendered via selectWithOther, so any
+// stored value outside this list survives through the "Other…" free-text path.
+const ETHNICITY_OPTIONS = ['', 'White/Caucasian', 'Black/African American', 'Hispanic/Latino',
+  'Asian', 'South Asian', 'East Asian', 'Southeast Asian', 'Middle Eastern/North African',
+  'Native American/Alaska Native', 'Native Hawaiian/Pacific Islander', 'Mixed/Multiracial'];
 const SOCIAL_PLATFORMS = ['Instagram', 'Twitter/X', 'LinkedIn', 'Facebook', 'TikTok', 'Snapchat', 'YouTube', 'GitHub', 'Sniffies', 'Grindr', 'Scruff', 'Feeld', 'Hinge', 'Tinder', 'Bumble', 'Website', 'Other'];
 
 const listState = {
@@ -239,11 +247,14 @@ function renderFilterControls(el) {
   });
 }
 
+let loadTableToken = 0; // stale-response guard: only the latest fetch renders
+
 async function loadTable(el) {
   const tableEl = el.querySelector('#contacts-table');
   const countEl = el.querySelector('#contacts-count');
   const pagerEl = el.querySelector('#contacts-pager');
   if (!tableEl) return;
+  const token = ++loadTableToken;
 
   let data;
   try {
@@ -257,10 +268,19 @@ async function loadTable(el) {
       page: listState.page, limit: listState.limit,
     }));
   } catch (err) {
+    if (token !== loadTableToken) return; // a newer request superseded this one
     countEl.textContent = '';
     pagerEl.innerHTML = '';
     tableEl.innerHTML = emptyState('alert-circle', "Couldn't load contacts", err?.message || 'Check your connection and try again.');
     return;
+  }
+  if (token !== loadTableToken) return; // late response — don't clobber newer render
+
+  // Deleting the last item on the last page leaves an out-of-range page →
+  // step back to the real last page instead of showing a bogus empty state.
+  if (!data.contacts.length && data.total > 0 && listState.page > 1) {
+    listState.page = Math.max(1, Math.ceil(data.total / listState.limit));
+    return loadTable(el);
   }
 
   countEl.textContent = `${data.total} ${data.total === 1 ? 'record' : 'records'}`;
@@ -282,15 +302,15 @@ async function loadTable(el) {
   <table class="data-table">
     <thead><tr>
       ${listState.selectMode ? `<th style="width:34px"><input type="checkbox" class="bulk-check" data-select-page ${allPageSelected ? 'checked' : ''} aria-label="Select page"></th>` : ''}
-      <th class="sortable" data-sort="name">Name ${sortArrow('name')}</th>
+      <th class="sortable" data-sort="name" tabindex="0" role="button" aria-label="Sort by name">Name ${sortArrow('name')}</th>
       <th class="td-tags">Tags</th>
-      <th class="sortable" data-sort="location">Location ${sortArrow('location')}</th>
-      <th class="sortable td-updated" data-sort="updated">Updated ${sortArrow('updated')}</th>
+      <th class="sortable" data-sort="location" tabindex="0" role="button" aria-label="Sort by location">Location ${sortArrow('location')}</th>
+      <th class="sortable td-updated" data-sort="updated" tabindex="0" role="button" aria-label="Sort by updated">Updated ${sortArrow('updated')}</th>
       <th></th>
     </tr></thead>
     <tbody>
       ${data.contacts.map((c) => `
-      <tr data-contact-id="${c.id}" class="contact-row ${c.is_spicy ? 'has-spicy-data' : ''}">
+      <tr data-contact-id="${c.id}" class="contact-row ${c.is_spicy ? 'has-spicy-data' : ''}" tabindex="0" aria-label="Open ${esc(c.display_name)}">
         ${listState.selectMode ? `<td>${c.is_shared_in ? '' : `<input type="checkbox" class="bulk-check" data-select-row="${c.id}" data-select-name="${esc(c.display_name)}" ${sel.has(c.id) ? 'checked' : ''} aria-label="Select ${esc(c.display_name)}">`}</td>` : ''}
         <td>
           <div class="flex items-center gap-3">
@@ -315,17 +335,22 @@ async function loadTable(el) {
     </tbody>
   </table>`;
 
-  tableEl.querySelectorAll('th.sortable').forEach((th) =>
-    th.addEventListener('click', () => {
+  tableEl.querySelectorAll('th.sortable').forEach((th) => {
+    const doSort = () => {
       const col = th.dataset.sort;
       if (listState.sort === col) listState.sortDir = listState.sortDir === 'asc' ? 'desc' : 'asc';
       else { listState.sort = col; listState.sortDir = 'asc'; }
       loadTable(el);
-    })
-  );
+    };
+    th.addEventListener('click', doSort);
+    // keyboard: Enter/Space activate like a real button
+    th.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); doSort(); }
+    });
+  });
 
-  tableEl.querySelectorAll('tbody tr').forEach((tr) =>
-    tr.addEventListener('click', (e) => {
+  tableEl.querySelectorAll('tbody tr').forEach((tr) => {
+    const activate = (e) => {
       if (e.target.closest('[data-fav]')) return;
       if (listState.selectMode) {
         if (e.target.closest('[data-select-row]')) return; // checkbox handles itself
@@ -334,8 +359,14 @@ async function loadTable(el) {
         return;
       }
       navigate(`/contacts/${tr.dataset.contactId}`);
-    })
-  );
+    };
+    tr.addEventListener('click', activate);
+    tr.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.target !== tr) return;
+      e.preventDefault();
+      activate(e);
+    });
+  });
 
   // ---- select mode wiring
   tableEl.querySelectorAll('[data-select-row]').forEach((cb) =>
@@ -577,20 +608,20 @@ export async function renderContactDetail(el, id) {
     maiden_name: { type: 'text', label: 'Maiden name', value: c.maiden_name, placeholder: 'Name before marriage' },
     middle_name: { type: 'text', label: 'Middle name', value: c.middle_name },
     birthday: { type: 'date', label: 'Birthday', value: (c.birthday || '').slice(0, 10) },
-    place_of_birth: { type: 'text', label: 'Place of birth', value: c.place_of_birth },
-    hometown: { type: 'text', label: 'Hometown', value: c.hometown },
+    place_of_birth: { type: 'address', label: 'Place of birth', value: c.place_of_birth },
+    hometown: { type: 'address', label: 'Hometown', value: c.hometown },
     education: { type: 'text', label: 'Education', value: c.education, placeholder: 'School, college, degrees…' },
     is_deceased: { type: 'select', label: 'Living status', value: c.is_deceased ? '1' : '0', options: [{ value: '0', label: 'Living' }, { value: '1', label: 'Deceased' }] },
     date_of_death: { type: 'date', label: 'Date of death', value: (c.date_of_death || '').slice(0, 10) },
-    place_of_death: { type: 'text', label: 'Place of death', value: c.place_of_death },
-    location: { type: 'text', label: 'Location', value: c.location, placeholder: 'City, State — or add a full address below' },
+    place_of_death: { type: 'address', label: 'Place of death', value: c.place_of_death },
+    location: { type: 'address', label: 'Location', value: c.location, placeholder: 'City, State — or add a full address below' },
     occupation: { type: 'text', label: 'Occupation', value: c.occupation },
     company: { type: 'text', label: 'Company', value: c.company },
     website: { type: 'text', label: 'Website', value: c.website, placeholder: 'https://' },
     email: { type: 'text', label: 'Primary email', value: c.email, placeholder: 'name@example.com' },
     phone: { type: 'text', label: 'Primary phone', value: c.phone, placeholder: '+1 555 000 0000' },
     languages: { type: 'langs', label: 'Languages', value: c.languages },
-    ethnicity: { type: 'text', label: 'Ethnicity', value: c.ethnicity },
+    ethnicity: { type: 'select-other', label: 'Ethnicity', value: c.ethnicity, options: ETHNICITY_OPTIONS },
     religion: { type: 'text', label: 'Religion', value: c.religion },
     nationality: { type: 'text', label: 'Nationality', value: c.nationality },
     how_we_met: { type: 'text', label: 'How we met', value: c.how_we_met },
@@ -890,10 +921,15 @@ export async function renderContactDetail(el, id) {
 
   // ---- inline edit-in-place (edit mode only — view mode is read-only)
   if (canInline && editMode) {
+    // fields the ⌘K MiniSearch index covers (search-index.js FIELDS) — edits
+    // to any of them must invalidate the cached index, not just name changes
+    const INDEXED_FIELDS = ['display_name', 'nickname', 'first_name', 'middle_name', 'last_name',
+      'email', 'phone', 'location', 'occupation', 'company', 'bio', 'notes_text'];
     const saveField = async (payload) => {
       await api.put(`/api/contacts/${c.id}`, payload);
       // name/nickname changes ripple into sidebar favorites etc.
       if ('first_name' in payload || 'last_name' in payload || 'middle_name' in payload || 'nickname' in payload) refreshSidebarLists();
+      else if (INDEXED_FIELDS.some((f) => f in payload)) invalidateSearchIndex();
     };
     bindInlineEditor(el.querySelector('.page-inner'), {
       defs: ieDefs,
@@ -930,20 +966,26 @@ export async function renderContactDetail(el, id) {
   });
 
   el.querySelector('[data-action="delete"]')?.addEventListener('click', async () => {
-    const ok = await confirmModal('Delete contact', `Delete ${c.display_name}? This can't be undone.`);
+    const ok = await confirmModal('Delete contact',
+      `Delete ${c.display_name}? They move to the Trash and can be restored for 30 days.`);
     if (!ok) return;
     try {
       await api.del(`/api/contacts/${c.id}`);
-      toast('Contact deleted.');
+      toast('Contact moved to Trash.');
       navigate('/contacts');
       refreshSidebarLists();
     } catch (err) { toast(err.message, 'error'); }
   });
 
-  // satellite removal
+  // satellite removal (emails/phones/addresses/socials — HARD delete server-side)
+  const SAT_LABELS = { emails: 'email', phones: 'phone number', addresses: 'address', socials: 'social link' };
   el.querySelectorAll('[data-del-sat]').forEach((btn) =>
     btn.addEventListener('click', async () => {
       const row = btn.closest('[data-sat]');
+      const what = SAT_LABELS[row.dataset.sat] || 'item';
+      const ok = await confirmModal(`Remove ${what}`,
+        `Remove this ${what}? This can't be undone.`, { confirmLabel: 'Remove' });
+      if (!ok) return;
       try {
         await api.del(`/api/${row.dataset.sat}/${row.dataset.satId}`);
         renderContactDetail(el, id);
@@ -1478,11 +1520,11 @@ export function openContactForm(existing = null, onSaved = null) {
       <div id="cf-death-date-wrap" class="${c.is_deceased ? '' : 'hidden'}">${formGroup('Date of death (optional)', textInput('date_of_death', (c.date_of_death || '').slice(0, 10), 'type="date"'))}</div>
     </div>
     <div class="form-row">
-      ${formGroup('Place of birth', textInput('place_of_birth', c.place_of_birth))}
+      ${formGroup('Place of birth', addressAutocompleteHtml('place_of_birth', c.place_of_birth))}
       ${formGroup('Maiden name', textInput('maiden_name', c.maiden_name))}
     </div>
     <div class="form-row">
-      ${formGroup('Hometown', textInput('hometown', c.hometown))}
+      ${formGroup('Hometown', addressAutocompleteHtml('hometown', c.hometown))}
       ${formGroup('Education', textInput('education', c.education, 'placeholder="School, college, degrees…"'))}
     </div>
     <div class="form-group" id="rel-link-group">
@@ -1508,7 +1550,7 @@ export function openContactForm(existing = null, onSaved = null) {
       ${formGroup('Nationality', textInput('nationality', c.nationality))}
     </div>
     <div class="form-row">
-      ${formGroup('Location', textInput('location', c.location))}
+      ${formGroup('Location', addressAutocompleteHtml('location', c.location, { placeholder: 'City, State — pick from suggestions' }))}
       ${formGroup('Website', textInput('website', c.website, 'type="url" placeholder="https://"'))}
     </div>
     <div class="form-row">
@@ -1517,7 +1559,7 @@ export function openContactForm(existing = null, onSaved = null) {
     </div>
     <div class="form-row">
       ${formGroup('Languages', languageFieldHtml('languages', c.languages))}
-      ${formGroup('Ethnicity', textInput('ethnicity', c.ethnicity))}
+      ${formGroup('Ethnicity', selectWithOtherHtml('ethnicity', ETHNICITY_OPTIONS, c.ethnicity, { label: 'Ethnicity' }))}
     </div>
     ${formGroup('Religion', textInput('religion', c.religion))}
     <div class="form-row">
@@ -1548,6 +1590,8 @@ export function openContactForm(existing = null, onSaved = null) {
       );
       attachPhoneInput(overlay.querySelector('[data-phone-input]'));
       bindLanguageField(overlay);
+      bindSelectWithOther(overlay);           // ethnicity "Other…" reveal
+      bindAddressAutocomplete(overlay);       // location / hometown / place of birth
 
       // date-of-death only makes sense for a deceased person
       const deceasedSel = overlay.querySelector('#cf-is-deceased');
@@ -1589,7 +1633,8 @@ export function openContactForm(existing = null, onSaved = null) {
           }));
       }, 250));
 
-      overlay.querySelector('[data-action="save"]').addEventListener('click', async () => {
+      const saveBtn = overlay.querySelector('[data-action="save"]');
+      saveBtn.addEventListener('click', withBusy(saveBtn, async () => {
         const values = readForm(overlay.querySelector('.modal-content'));
         delete values.link_relation_type;
         const spicyToggle = overlay.querySelector('[data-toggle="is_spicy"]');
@@ -1612,16 +1657,19 @@ export function openContactForm(existing = null, onSaved = null) {
           onSaved?.();
           refreshSidebarLists();
         } catch (err) { toast(err.message, 'error'); }
-      });
+      }));
     },
   });
 }
 
 // ---------------------------------------------- add email/phone/address
-/** Shared address field block + live formatted preview. */
+/** Shared address field block + live formatted preview. The City field is a
+ * place typeahead (/api/geo/suggest): picking a candidate fills city/state/
+ * country from the confirmed place, so the geocoder pins the right town
+ * (free text still allowed — the server geocodes it best-effort). */
 function addressFieldsHtml(a = {}) {
   return formGroup('Street', textInput('street', a.street)) +
-    `<div class="form-row">${formGroup('City', textInput('city', a.city))}${formGroup('State', textInput('state', a.state, 'data-addr-state'))}</div>` +
+    `<div class="form-row">${formGroup('City', addressAutocompleteHtml('city', a.city, { placeholder: 'Start typing — pick to confirm' }))}${formGroup('State', textInput('state', a.state, 'data-addr-state'))}</div>` +
     `<div class="form-row">${formGroup('ZIP', textInput('zip', a.zip))}${formGroup('Country', textInput('country', a.country))}</div>` +
     `<div class="addr-preview" data-addr-preview aria-live="polite"></div>` +
     formGroup('Label', selectInput('label', ['home', 'work', 'vacation', 'other'], a.label || 'home')) +
@@ -1633,8 +1681,32 @@ function addressFieldsHtml(a = {}) {
     }</div>`;
 }
 
+/** Confirmed-pick coordinates for the save payload: { verified_lat/lng }
+ * only when the user PICKED a suggest candidate for the City field (the
+ * server stores them with geocode_source 'user' instead of re-guessing). */
+function addressPinPayload(scope) {
+  const wrap = scope.querySelector('[data-addr-ac]');
+  if (!wrap || wrap.dataset.verified !== '1' || !wrap._addressPick) return {};
+  return { verified_lat: wrap._addressPick.lat, verified_lng: wrap._addressPick.lng };
+}
+
 /** Wire live preview + US-state auto-uppercase + ZIP trim inside `scope`. */
 function bindAddressFields(scope) {
+  // City typeahead: a pick copies the confirmed place into city/state/country
+  bindAddressAutocomplete(scope, {
+    onPick: (cand, input) => {
+      if (cand.city || cand.name) input.value = cand.city || cand.name;
+      const stateEl = scope.querySelector('[name="state"]');
+      const countryEl = scope.querySelector('[name="country"]');
+      if (stateEl && cand.state) stateEl.value = cand.state;
+      if (countryEl && (cand.country || cand.countrycode)) {
+        countryEl.value = cand.country && cand.country.length > 2 ? cand.country : (cand.countrycode || cand.country);
+      }
+      // refresh the formatted preview WITHOUT re-firing the typeahead's own
+      // input handler (which would unverify the pick and reopen the list)
+      (stateEl || countryEl)?.dispatchEvent(new Event('input', { bubbles: true }));
+    },
+  });
   const preview = scope.querySelector('[data-addr-preview]');
   if (!preview) return;
   const read = () => ({
@@ -1704,6 +1776,7 @@ function openContactMethodModal(contactId, onSaved) {
         const values = readForm(fieldsEl);
         if (typeof values.zip === 'string') values.zip = values.zip.trim();
         values.is_primary = overlay.querySelector('[data-toggle]').classList.contains('on');
+        if (kind === 'addresses') Object.assign(values, addressPinPayload(fieldsEl));
         try {
           await api.post(`/api/contacts/${contactId}/${kind}`, values);
           toast('Added.');
@@ -1748,6 +1821,7 @@ function openSatelliteEditModal(kind, item, onSaved) {
         const values = readForm(body);
         if (typeof values.zip === 'string') values.zip = values.zip.trim();
         values.is_primary = overlay.querySelector('[data-toggle]').classList.contains('on');
+        if (kind === 'addresses') Object.assign(values, addressPinPayload(body));
         try {
           await api.put(`/api/${kind}/${item.id}`, values);
           toast('Saved.');

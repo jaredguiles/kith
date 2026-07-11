@@ -42,15 +42,20 @@ async function renderGroups(el) {
 
   el.querySelector('[data-action="new-group"]').addEventListener('click', () => openGroupForm(null, () => renderGroups(el)));
 
-  el.querySelectorAll('[data-group-card]').forEach((card) => bindGroupCard(card, el));
+  el.querySelectorAll('[data-group-card]').forEach((card) => {
+    const g = groups.find((x) => String(x.id) === String(card.dataset.groupCard));
+    bindGroupCard(card, el, g);
+  });
 }
 
 function groupCard(g) {
+  const smart = g.tag_id != null;
   return `
   <div class="card rec-group-card" data-group-card="${g.id}">
     <div class="card-header clickable" data-expand>
       <div>
         <div class="rec-group-name">${esc(g.name)} ${g.is_system ? '<span class="badge neutral">System</span>' : ''}</div>
+        ${smart ? `<div class="rec-smart-link">${icon('link')} linked to tag: ${esc(g.tag_name || `#${g.tag_id}`)}</div>` : ''}
         ${g.description ? `<div class="rec-mono mt-1">${esc(g.description)}</div>` : ''}
       </div>
       <div class="flex items-center gap-2">
@@ -69,8 +74,9 @@ function groupCard(g) {
   </div>`;
 }
 
-function bindGroupCard(card, pageEl) {
+function bindGroupCard(card, pageEl, group) {
   const groupId = card.dataset.groupCard;
+  const isSmart = group && group.tag_id != null;
   let loaded = false;
 
   const loadMembers = async () => {
@@ -88,6 +94,7 @@ function bindGroupCard(card, pageEl) {
     const countEl = card.querySelector('[data-member-count]');
     if (countEl) countEl.textContent = `${members.length} members`;
     membersEl.innerHTML = `
+      ${isSmart ? `<div class="rec-smart-hint">Membership is driven by the “${esc(group.tag_name || 'linked')}” tag — adding or removing a member tags or untags the contact.</div>` : ''}
       ${members.map((m) => `
         <div class="flex-between" style="padding:6px 0;border-bottom:1px solid var(--rule)">
           <a class="flex items-center gap-2" href="#/contacts/${m.id}" style="color:inherit;text-decoration:none">
@@ -157,7 +164,10 @@ function bindGroupCard(card, pageEl) {
   });
 
   card.querySelector('[data-action="delete-group"]')?.addEventListener('click', async () => {
-    const ok = await confirmModal('Delete group', 'Delete this group? Contacts are not deleted.');
+    const msg = isSmart
+      ? 'Delete this group? The linked tag and its contacts are not affected.'
+      : 'Delete this group? Contacts are not deleted.';
+    const ok = await confirmModal('Delete group', msg);
     if (!ok) return;
     try {
       await api.del(`/api/groups/${groupId}`);
@@ -168,12 +178,22 @@ function bindGroupCard(card, pageEl) {
   });
 }
 
-function openGroupForm(existing, onSaved) {
+async function openGroupForm(existing, onSaved) {
   const g = existing || {};
+  let tags = [];
+  try {
+    tags = (await api.get('/api/tags')).tags || [];
+  } catch { /* tag list unavailable — form still works as manual group */ }
+  const tagOptions = [
+    { value: '', label: 'None — manual group' },
+    ...tags.map((t) => ({ value: String(t.id), label: t.name })),
+  ];
   const content = `
     ${formGroup('Name', textInput('name', g.name))}
     ${formGroup('Icon', selectInput('icon', GROUP_ICONS, g.icon || 'users'))}
     ${formGroup('Color', `<input class="form-input" name="color" type="color" value="${esc(g.color || '#7c5bf5')}" style="height:38px;padding:4px">`)}
+    ${formGroup('Linked tag', selectInput('tag_id', tagOptions, g.tag_id != null ? String(g.tag_id) : ''),
+      'Pick a tag to make this a smart group — membership follows the tag automatically.')}
     ${formGroup('Description', textarea('description', g.description))}`;
   const html = modalShell('group-form', existing ? `Edit ${g.name}` : 'New group', content,
     `<button class="btn btn-secondary" data-action="close-modal">Cancel</button>

@@ -6,7 +6,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { geocodeLocal, queryHash } = require('../lib/geo');
+const { geocodeLocal, queryHash, localSuggest } = require('../lib/geo');
 
 test('geocodeLocal resolves "Portland, OR" to Oregon', () => {
   const r = geocodeLocal('Portland, OR');
@@ -78,4 +78,34 @@ test('queryHash is normalization-stable', () => {
   assert.equal(queryHash('Portland, OR'), queryHash('  portland,   or '));
   assert.equal(queryHash('São Paulo'), queryHash('sao paulo'));
   assert.notEqual(queryHash('Portland'), queryHash('Berlin'));
+});
+
+// ---------------------------------------------------------- localSuggest
+test('localSuggest prefix-matches cities ("portl" → Portland first)', () => {
+  const list = localSuggest('portl', 5);
+  assert.ok(list.length >= 2, 'expected multiple Portlands');
+  assert.match(list[0].label, /^Portland/);
+  assert.match(list[0].label, /Oregon/); // biggest Portland first
+  assert.equal(list[0].source, 'geonames');
+  assert.ok(Number.isFinite(list[0].lat) && Number.isFinite(list[0].lng));
+});
+
+test('localSuggest respects state qualifier ("portland, me")', () => {
+  const list = localSuggest('portland, me', 5);
+  assert.ok(list.length >= 1);
+  assert.match(list[0].label, /Maine/);
+});
+
+test('localSuggest candidates carry normalized fields', () => {
+  const [c] = localSuggest('berlin, de', 1);
+  assert.ok(c);
+  assert.equal(c.countrycode, 'DE');
+  assert.equal(c.city, 'Berlin');
+  assert.equal(c.matchesQuery, true);
+});
+
+test('localSuggest returns [] for garbage / empty input', () => {
+  assert.deepEqual(localSuggest('zzzznotaplace'), []);
+  assert.deepEqual(localSuggest(''), []);
+  assert.deepEqual(localSuggest(null), []);
 });

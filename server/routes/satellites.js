@@ -29,6 +29,9 @@ const KINDS = {
     table: 'contact_addresses',
     // start_date/end_date = residency window ("moved in / moved out");
     // NULL end_date marks the current home. Enables move-history tracking.
+    // latitude/longitude: only honored via extractUserPin() — a confirmed
+    // pick from the address-autocomplete UI (geocode_source 'user'), never
+    // as raw pass-through fields.
     fields: ['label', 'street', 'city', 'state', 'zip', 'country', 'is_primary', 'start_date', 'end_date'],
     required: [],
     entity: 'address',
@@ -47,6 +50,20 @@ function pickFields(body, kind) {
     if (f in (body || {})) data[f] = f === 'is_primary' ? (body[f] ? 1 : 0) : body[f];
   }
   return data;
+}
+
+/**
+ * Confirmed-pick coordinates from the address-autocomplete UI: the client
+ * sends { verified_lat, verified_lng } ONLY when the user explicitly picked
+ * a suggest candidate. Those beat re-geocoding free text (which is exactly
+ * how "Gowen, MI" once landed in Mississippi). Returns {lat,lng} or null.
+ */
+function extractUserPin(body) {
+  const lat = Number(body?.verified_lat);
+  const lng = Number(body?.verified_lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  return { lat, lng };
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +136,18 @@ for (const [name, kind] of Object.entries(KINDS)) {
         [req.contact.id, ...cols.map((k) => data[k] ?? null)]
       );
       rebuildSearchIndexAsync(req.contact.id);
-      if (name === 'addresses') geocodeAddressAsync(result.insertId); // fire-and-forget
+      if (name === 'addresses') {
+        const pin = extractUserPin(req.body);
+        if (pin) {
+          // user confirmed a suggest candidate — trust its coordinates
+          await query(
+            `UPDATE contact_addresses SET latitude = ?, longitude = ?, geocoded_at = NOW(), geocode_source = 'user' WHERE id = ?`,
+            [pin.lat, pin.lng, result.insertId]
+          );
+        } else {
+          geocodeAddressAsync(result.insertId); // fire-and-forget best-effort
+        }
+      }
       auditWrite(req.user.id, req.contact.id, 'create', kind.entity, result.insertId, null, data, `Added ${kind.entity}`);
       res.status(201).json({ id: result.insertId });
     } catch (err) { next(err); }
@@ -160,8 +188,16 @@ for (const [name, kind] of Object.entries(KINDS)) {
         [...cols.map((k) => data[k] ?? null), req.item.id]
       );
       rebuildSearchIndexAsync(req.item.contact_id);
-      if (name === 'addresses' && cols.some((c) => ['street', 'city', 'state', 'zip', 'country'].includes(c))) {
-        geocodeAddressAsync(req.item.id); // address text changed → re-geocode
+      if (name === 'addresses') {
+        const pin = extractUserPin(req.body);
+        if (pin) {
+          await query(
+            `UPDATE contact_addresses SET latitude = ?, longitude = ?, geocoded_at = NOW(), geocode_source = 'user' WHERE id = ?`,
+            [pin.lat, pin.lng, req.item.id]
+          );
+        } else if (cols.some((c) => ['street', 'city', 'state', 'zip', 'country'].includes(c))) {
+          geocodeAddressAsync(req.item.id); // address text changed → re-geocode
+        }
       }
       auditWrite(req.user.id, req.item.contact_id, 'update', kind.entity, req.item.id, req.item, data, `Updated ${kind.entity}`);
       res.json({ ok: true });

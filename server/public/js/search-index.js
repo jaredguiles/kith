@@ -44,10 +44,23 @@ async function build() {
     storeFields: STORE,
     searchOptions: { prefix: true, fuzzy: 0.3, maxFuzzy: 4, boost: { display_name: 3, nickname: 2 } },
   });
-  // /api/contacts caps limit at 200 server-side; fetch the full first page.
-  const data = await api.get('/api/contacts' + qs({ limit: 200, sort: 'name' }));
-  const contacts = data.contacts || data.data || [];
-  ms.addAll(contacts.map(toDoc));
+  // /api/contacts caps limit at 200 server-side — page through ALL contacts
+  // (hard cap 10k as a sanity bound) so ⌘K finds people beyond the first page.
+  const LIMIT = 200;
+  const MAX_CONTACTS = 10000;
+  let page = 1;
+  let all = [];
+  for (;;) {
+    const data = await api.get('/api/contacts' + qs({ limit: LIMIT, page, sort: 'name' }));
+    const contacts = data.contacts || data.data || [];
+    all = all.concat(contacts);
+    const total = Number(data.total);
+    if (!contacts.length || all.length >= MAX_CONTACTS) break;
+    if (Number.isFinite(total) && all.length >= total) break;
+    if (contacts.length < LIMIT) break; // short page → done (no total field)
+    page++;
+  }
+  ms.addAll(all.slice(0, MAX_CONTACTS).map(toDoc));
   mini = ms;
   stale = false;
   return ms;

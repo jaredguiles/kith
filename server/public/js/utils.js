@@ -104,9 +104,17 @@ export function daysUntilBirthday(birthday) {
   const b = parseDate(birthday);
   if (!b) return null;
   const now = new Date();
-  const next = new Date(now.getFullYear(), b.getMonth(), b.getDate());
-  if (next < new Date(now.getFullYear(), now.getMonth(), now.getDate())) next.setFullYear(next.getFullYear() + 1);
-  return Math.round((next - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+  // Feb-29 birthdays: in non-leap years celebrate on Feb 28 (common
+  // convention) — a naive Date(year, 1, 29) would roll over to Mar 1.
+  const isLeap = (y) => (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const bdayIn = (year) => {
+    const day = (b.getMonth() === 1 && b.getDate() === 29 && !isLeap(year)) ? 28 : b.getDate();
+    return new Date(year, b.getMonth(), day);
+  };
+  let next = bdayIn(now.getFullYear());
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (next < today) next = bdayIn(now.getFullYear() + 1);
+  return Math.round((next - today) / 86400000);
 }
 
 // ---------------------------------------------------------------- zodiac

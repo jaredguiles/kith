@@ -94,7 +94,13 @@ router.get('/calendar.ics', async (req, res, next) => {
     const rawToken = String(req.query.token || '');
     const auth = await authenticateApiToken(rawToken);
     if (!auth) return res.status(401).json({ error: 'Invalid or expired token' });
-    // any valid scope works — the feed is read-only by nature ('read' suffices)
+    // Query-param tokens leak via logs/Referer (audit S2): only read-only
+    // tokens may authenticate this way — a leaked read_write PAT would grant
+    // full write access. Mint a 'read' scoped token for calendar feeds.
+    if (auth.scopes !== 'read') {
+      return res.status(401).json({ error: 'Calendar feeds require a read-only API token' });
+    }
+    // the feed is read-only by nature — 'read' scope suffices
     const user = auth.user;
 
     const scope = contactScopeSql(user);

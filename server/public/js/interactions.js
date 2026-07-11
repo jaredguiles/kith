@@ -7,6 +7,7 @@ import { esc, fmtDate, timeAgo, toLocalInput, fromLocalInput } from './utils.js'
 import { icon } from './icons.js';
 import {
   toast, openModal, modalShell, formGroup, textInput, selectInput, textarea, readForm,
+  confirmModal,
 } from './components.js';
 import { isSpicyOn } from './app.js';
 
@@ -41,16 +42,25 @@ function renderQuickLogBar(container, contact, refresh) {
     ).join('')}
     <button type="button" class="rec-quicklog-btn rec-quicklog-more" data-log-more aria-label="Log interaction with a note or a past date">…</button>`;
 
-  const logType = async (type) => {
+  let logging = false; // in-flight guard: double-tap must not log twice
+  const logType = async (type, btn) => {
+    if (logging) return;
+    logging = true;
+    if (btn) btn.disabled = true;
     try {
       await api.post(`/api/contacts/${contact.id}/interactions`, { type });
       toast(`Logged: ${TYPE_VERB[type] || type} ${firstName(contact)}.`);
       refresh(); // re-renders detail → updates timeline + out-of-touch badge
-    } catch (err) { toast(err.message, 'error'); }
+    } catch (err) {
+      toast(err.message, 'error');
+      if (btn) btn.disabled = false;
+    } finally {
+      logging = false;
+    }
   };
 
   container.querySelectorAll('[data-log-type]').forEach((btn) =>
-    btn.addEventListener('click', () => logType(btn.dataset.logType)));
+    btn.addEventListener('click', () => logType(btn.dataset.logType, btn)));
   container.querySelector('[data-log-more]')?.addEventListener('click', () =>
     openInteractionModal(contact, refresh));
 }
@@ -115,8 +125,12 @@ async function renderInteractions(container, contact, canEdit, refresh) {
 
   container.querySelectorAll('[data-del-interaction]').forEach((btn) =>
     btn.addEventListener('click', async () => {
+      const ok = await confirmModal('Delete interaction',
+        "Delete this logged interaction? This can't be undone.");
+      if (!ok) return;
       try {
         await api.del(`/api/interactions/${btn.dataset.delInteraction}`);
+        toast('Interaction deleted.');
         refresh(); // refresh whole detail so last-contacted badge recomputes
       } catch (err) { toast(err.message, 'error'); }
     }));
@@ -181,6 +195,9 @@ function messageRow(m, canEdit) {
 function bindMessageRows(scope, contact, refresh) {
   scope.querySelectorAll('[data-del-msg]').forEach((btn) =>
     btn.addEventListener('click', async () => {
+      const ok = await confirmModal('Delete message',
+        "Delete this message? This can't be undone.");
+      if (!ok) return;
       try {
         await api.del(`/api/messages/${btn.dataset.delMsg}`);
         toast('Message deleted.');
@@ -201,6 +218,9 @@ function openAllMessagesModal(contact, msgs, canEdit, refresh) {
         // deleting inside the modal closes it and refreshes the page
         ov.querySelectorAll('[data-del-msg]').forEach((btn) =>
           btn.addEventListener('click', async () => {
+            const ok = await confirmModal('Delete message',
+              "Delete this message? This can't be undone.");
+            if (!ok) return;
             try {
               await api.del(`/api/messages/${btn.dataset.delMsg}`);
               toast('Message deleted.');

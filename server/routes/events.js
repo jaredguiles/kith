@@ -11,17 +11,49 @@ const { requireAuth, contactAccess, isAdmin } = require('../middleware/auth');
 const { auditWrite } = require('../lib/audit');
 const { spicyVisible } = require('./contacts');
 const contactsLib = require('../lib/contacts');
-const { isValidDate } = contactsLib;
+const { isValidDate, touchContact } = contactsLib;
 const { decryptField } = require('../lib/crypto');
-
-// touchContact is exported by lib/contacts (concurrent work) — resolve lazily
-// and stub-guard so this module never crashes if the export lands later.
-const touchContact = (...args) => (contactsLib.touchContact || (() => {}))(...args);
+const { geocode } = require('../lib/geo');
+const { parseGeoLabel } = require('../lib/places');
 
 const router = express.Router();
 router.use(requireAuth);
 
 const EVENT_TYPES = ['meetup', 'date', 'hangout', 'hookup', 'party', 'trip', 'call', 'dinner', 'coffee', 'workout', 'other'];
+
+const MAX_EVENT_LOCATIONS = 20;
+
+/** Normalize a `locations` request field (array of strings or {label}) into
+ * trimmed labels, capped. Returns null when the field is absent/invalid. */
+function normalizeLocationLabels(locations) {
+  if (!Array.isArray(locations)) return null;
+  return locations
+    .map((l) => (typeof l === 'string' ? l : (l && l.label)))
+    .map((s) => String(s || '').trim().slice(0, 255))
+    .filter(Boolean)
+    .slice(0, MAX_EVENT_LOCATIONS);
+}
+
+/** Replace an event's extra locations (event_locations) with `labels`.
+ * Each label is geocoded (lib/geo — cached, never throws) and its
+ * city/state/country metadata parsed from the geocoder label so the Places
+ * tab can derive visited states/countries without re-geocoding. */
+async function saveEventLocations(eventId, labels) {
+  await query('DELETE FROM event_locations WHERE event_id = ?', [eventId]);
+  let position = 0;
+  for (const label of labels) {
+    const g = await geocode(label);
+    const meta = parseGeoLabel(g ? g.label : label);
+    await query(
+      `INSERT INTO event_locations
+         (event_id, label, latitude, longitude, city, state, state_code, country_code, geocode_source, position)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [eventId, label, g ? g.lat : null, g ? g.lng : null, meta.city, meta.state,
+       meta.state_code, meta.country_code, g ? g.source : null, position]
+    );
+    position++;
+  }
+}
 
 async function loadEvent(req, res, next) {
   try {
@@ -90,9 +122,15 @@ router.get('/:id', loadEvent, async (req, res, next) => {
        ${(await spicyVisible(req.user)) ? '' : 'AND m.is_spicy = 0'}`,
       [req.event.id]
     );
+    const locations = await query(
+      `SELECT id, label, latitude, longitude, city, state, state_code, country_code, position
+       FROM event_locations WHERE event_id = ? ORDER BY position, id`,
+      [req.event.id]
+    );
     res.json({
       event: req.event,
       contacts,
+      locations,
       // never expose fs paths — mirror the media list route shape
       media: media.map((m) => ({
         id: m.id, type: m.type,
@@ -107,7 +145,7 @@ router.get('/:id', loadEvent, async (req, res, next) => {
 // POST /api/events
 router.post('/', async (req, res, next) => {
   try {
-    const { title, type, description, location, starts_at, ends_at, status, is_spicy, contact_ids } = req.body || {};
+    const { title, type, description, location, starts_at, ends_at, status, is_spicy, contact_ids, locations } = req.body || {};
     if (!title || !String(title).trim()) return res.status(400).json({ error: 'Title is required' });
     if (!starts_at) return res.status(400).json({ error: 'Start date is required' });
     if (!isValidDate(starts_at)) return res.status(400).json({ error: 'Invalid start date' });
@@ -134,6 +172,9 @@ router.post('/', async (req, res, next) => {
       }
       return eventId;
     });
+    // extra locations (roadtrip stops) — additive to the primary `location`
+    const extraLabels = normalizeLocationLabels(locations);
+    if (extraLabels && extraLabels.length) await saveEventLocations(result, extraLabels);
     auditWrite(req.user.id, null, 'create', 'event', result, null, { title }, `Created event ${title}`);
     res.status(201).json({ id: result });
   } catch (err) { next(err); }
@@ -185,6 +226,10 @@ router.put('/:id', loadEvent, async (req, res, next) => {
         await query('DELETE FROM event_contacts WHERE event_id = ? AND contact_id = ?', [req.event.id, cid]);
       }
     }
+
+    // extra locations: full replace when the field is present (like contact_ids)
+    const extraLabels = normalizeLocationLabels(b.locations);
+    if (extraLabels !== null) await saveEventLocations(req.event.id, extraLabels);
 
     auditWrite(req.user.id, null, 'update', 'event', req.event.id, { title: req.event.title }, b, `Updated event ${req.event.title}`);
     res.json({ ok: true });

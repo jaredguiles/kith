@@ -10,7 +10,7 @@ import {
 } from './components.js';
 import { pageRenderers } from './pages.js';
 import { state, isSpicyOn } from './app.js';
-import { openImmichPicker } from './media.js';
+import { openImmichPicker, openLightbox } from './media.js';
 
 const EVENT_TYPES = ['meetup', 'date', 'hangout', 'hookup', 'party', 'trip', 'call', 'dinner', 'coffee', 'workout', 'other'];
 const TYPE_ICONS = {
@@ -135,14 +135,16 @@ function eventCard(ev) {
 
 // --------------------------------------------------------- event detail
 
-/** Re-render the media grid inside an open event-detail modal. */
+/** Re-render the media grid inside an open event-detail modal.
+ * Returns the fresh media list (or null) so callers can keep their
+ * lightbox lookup in sync with what's on screen. */
 async function refreshEventMedia(overlay, eventId) {
   const wrap = overlay.querySelector('#event-media');
-  if (!wrap) return;
+  if (!wrap) return null;
   let data;
   try {
     data = await api.get(`/api/events/${eventId}`);
-  } catch { return; }
+  } catch { return null; }
   const media = data.media || [];
   const gridHtml = media.length ? `
     <div class="media-grid mb-2">
@@ -156,6 +158,7 @@ async function refreshEventMedia(overlay, eventId) {
     </div>` : '<div class="text-sm text-muted mb-2">No media attached.</div>';
   const oldGrid = wrap.querySelector('.media-grid') || wrap.querySelector('.text-muted');
   if (oldGrid) oldGrid.outerHTML = gridHtml;
+  return media;
 }
 
 async function openEventDetail(id, onChanged) {
@@ -169,6 +172,7 @@ async function openEventDetail(id, onChanged) {
   const ev = data.event;
   const contacts = data.contacts || [];
   const media = data.media || [];
+  const locations = data.locations || [];
 
   const content = `
     <div class="flex items-center gap-3 mb-3">
@@ -177,6 +181,7 @@ async function openEventDetail(id, onChanged) {
         <div class="text-sm text-secondary capitalize">${esc(ev.type || 'event')} · ${esc(ev.status)}</div>
         <div class="text-sm text-secondary">${esc(fmtDateTime(ev.starts_at))}${ev.ends_at ? ` → ${esc(fmtDateTime(ev.ends_at))}` : ''}</div>
         ${ev.location ? `<div class="text-sm text-secondary">${icon('map-pin')} ${esc(ev.location)}</div>` : ''}
+        ${locations.length ? `<div class="text-sm text-secondary">${icon('map')} ${locations.map((l) => esc(l.label)).join(' → ')}</div>` : ''}
       </div>
     </div>
     ${ev.description ? `<p class="text-sm mb-3">${esc(ev.description)}</p>` : ''}
@@ -212,12 +217,22 @@ async function openEventDetail(id, onChanged) {
 
   openModal(modalShell('event-detail', ev.title, content, footer, { size: 'modal-lg' }), {
     onMount: (overlay, close) => {
+      // media tiles → lightbox (view-only). Delegated on the #event-media
+      // wrap so tiles stay clickable after refreshEventMedia re-renders.
+      let mediaList = media;
+      overlay.querySelector('#event-media')?.addEventListener('click', (e) => {
+        const tile = e.target.closest('[data-ev-media]');
+        if (!tile) return;
+        const m = mediaList.find((x) => String(x.id) === tile.dataset.evMedia);
+        if (m) openLightbox(m, null, false, null, null);
+      });
       overlay.querySelector('[data-action="attach-immich"]')?.addEventListener('click', () => {
         openImmichPicker({
           onPicked: async (mediaId) => {
             try {
               await api.post(`/api/events/${ev.id}/media/${mediaId}`);
-              refreshEventMedia(overlay, ev.id);
+              const fresh = await refreshEventMedia(overlay, ev.id);
+              if (fresh) mediaList = fresh;
             } catch (err) { toast(err.message, 'error'); }
           },
         });
@@ -234,7 +249,7 @@ async function openEventDetail(id, onChanged) {
       });
       overlay.querySelector('[data-action="edit-event"]').addEventListener('click', () => {
         close();
-        openEventForm({ ...ev, contacts }, onChanged);
+        openEventForm({ ...ev, contacts, locations }, onChanged);
       });
       overlay.querySelector('[data-action="complete-event"]')?.addEventListener('click', () => {
         close();
@@ -291,6 +306,11 @@ export function openEventForm(existing, onSaved, presetContact = null) {
       ${formGroup('Ends (optional)', `<input class="form-input" name="ends_at" type="datetime-local" value="${esc(toLocalInput(ev.ends_at))}">`)}
     </div>
     ${formGroup('Location', textInput('location', ev.location))}
+    <div class="form-group">
+      <label class="form-label">More locations <span class="text-muted">(roadtrip stops)</span></label>
+      <div id="extra-locations"></div>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="add-location">${icon('plus')} Add another location</button>
+    </div>
     ${formGroup('Description', textarea('description', ev.description))}
     <div class="form-group">
       <label class="form-label">People</label>
@@ -309,6 +329,25 @@ export function openEventForm(existing, onSaved, presetContact = null) {
      <button class="btn btn-primary" data-action="save">${existing ? 'Save' : 'Create'}</button>`,
     { size: 'modal-lg' }), {
     onMount: (overlay, close) => {
+      // --- extra locations repeater (event_locations; primary stays above) ---
+      const locWrap = overlay.querySelector('#extra-locations');
+      const addLocationRow = (value = '') => {
+        const row = document.createElement('div');
+        row.className = 'ev-loc-row';
+        row.innerHTML = `
+          <input class="form-input" data-extra-location placeholder="City, State" autocomplete="off">
+          <button type="button" class="btn btn-icon" data-action="remove-location" aria-label="Remove location">${icon('x')}</button>`;
+        row.querySelector('[data-extra-location]').value = value;
+        row.querySelector('[data-action="remove-location"]').addEventListener('click', () => row.remove());
+        locWrap.appendChild(row);
+      };
+      (ev.locations || []).forEach((l) => addLocationRow(l.label || ''));
+      overlay.querySelector('[data-action="add-location"]').addEventListener('click', () => {
+        addLocationRow();
+        const inputs = locWrap.querySelectorAll('[data-extra-location]');
+        inputs[inputs.length - 1]?.focus();
+      });
+
       const renderLinked = () => {
         overlay.querySelector('#linked-contacts').innerHTML = [...linked.entries()]
           .map(([id, name]) => `<span class="tag-pill">${esc(name)}<button class="tag-x" data-unlink="${id}" aria-label="Remove">${icon('x')}</button></span>`)
@@ -351,6 +390,9 @@ export function openEventForm(existing, onSaved, presetContact = null) {
         values.starts_at = fromLocalInput(startsRaw);
         values.ends_at = fromLocalInput(overlay.querySelector('[name="ends_at"]').value);
         values.contact_ids = [...linked.keys()];
+        values.locations = [...overlay.querySelectorAll('[data-extra-location]')]
+          .map((i) => i.value.trim())
+          .filter(Boolean);
         const spicyToggle = overlay.querySelector('[data-toggle="is_spicy"]');
         if (spicyToggle) values.is_spicy = spicyToggle.classList.contains('on');
         try {

@@ -35,11 +35,11 @@ shareRouter.post('/', requireContactAccess('id'), async (req, res, next) => {
       [req.contact.id, req.user.id, targetId, perm, scope]
     );
 
-    // "Shared" tag on the contact + recipient's system Shared group membership
+    // "Shared" tag on the contact — the system Shared group is a smart group
+    // linked to this tag (groups.tag_id), so tagging alone puts the contact
+    // in the Shared group; no group_members write needed.
     const sharedTag = await query("SELECT id FROM tags WHERE name = 'Shared' AND owner_user_id IS NULL LIMIT 1");
     if (sharedTag.length) await query('INSERT IGNORE INTO contact_tags (contact_id, tag_id) VALUES (?, ?)', [req.contact.id, sharedTag[0].id]);
-    const sharedGroup = await query("SELECT id FROM `groups` WHERE name = 'Shared' AND is_system = 1 LIMIT 1");
-    if (sharedGroup.length) await query('INSERT IGNORE INTO group_members (group_id, contact_id) VALUES (?, ?)', [sharedGroup[0].id, req.contact.id]);
 
     // notification for the recipient
     await query(

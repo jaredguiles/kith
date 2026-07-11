@@ -216,6 +216,13 @@ router.put('/:id', async (req, res, next) => {
     if (target.role === 'main_admin' && req.user.id !== target.id) {
       return res.status(403).json({ error: 'The main admin can only be edited by themselves' });
     }
+    // Lateral-takeover guard (audit S3): a regular admin must not modify
+    // ANOTHER admin's account (password reset would kill their sessions and
+    // hand over the account). Only main_admin may edit other admins; a
+    // regular admin may still edit non-admin users and themselves.
+    if (target.role === 'admin' && target.id !== req.user.id && req.user.role !== 'main_admin') {
+      return res.status(403).json({ error: 'Only the main admin can modify other admin accounts' });
+    }
 
     const { email, display_name, role, is_active, password } = req.body || {};
     const updates = [];
@@ -243,7 +250,15 @@ router.put('/:id', async (req, res, next) => {
     if (updates.length === 0) return res.status(400).json({ error: 'Nothing to update' });
 
     params.push(id);
-    await query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+    try {
+      await query(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, params);
+    } catch (err) {
+      // duplicate email hits the users.email unique key → 409, not a 500
+      if (err && err.code === 'ER_DUP_ENTRY') {
+        return res.status(409).json({ error: 'Email already in use' });
+      }
+      throw err;
+    }
     // Audit only whitelisted, non-secret fields — NEVER the plaintext password.
     const audited = {
       ...(email !== undefined && { email }),
@@ -266,6 +281,9 @@ router.delete('/:id', async (req, res, next) => {
     const rows = await query('SELECT * FROM users WHERE id = ?', [id]);
     if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
     if (rows[0].role === 'main_admin') return res.status(403).json({ error: 'The main admin cannot be deactivated' });
+    if (rows[0].role === 'admin' && req.user.role !== 'main_admin') {
+      return res.status(403).json({ error: 'Only the main admin can deactivate admin accounts' });
+    }
     if (id === req.user.id) return res.status(400).json({ error: 'You cannot deactivate yourself' });
 
     await query('UPDATE users SET is_active = 0, token_version = token_version + 1 WHERE id = ?', [id]);

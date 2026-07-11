@@ -9,9 +9,10 @@ const crypto = require('node:crypto');
 const multer = require('multer');
 const { query, withTransaction } = require('../database/connection');
 const { requireAuth, isAdmin } = require('../middleware/auth');
-const { auditWrite, changelogWrite } = require('../lib/audit');
+const { auditWrite } = require('../lib/audit');
 const { rebuildSearchIndex, buildDisplayName, zodiacFromBirthday } = require('../lib/contacts');
 const { encryptField, decryptField } = require('../lib/crypto');
+const { sniffBuffer } = require('../lib/filetype');
 const { spicyVisible } = require('./contacts');
 
 const router = express.Router();
@@ -43,6 +44,37 @@ const upload = multer({
   },
 });
 
+/**
+ * Content sniffing for import uploads (audit S5): a .zip must actually be a
+ * zip archive (magic bytes), and text formats (.vcf/.csv/.json/.ged) must not
+ * be a disguised binary (image/video/zip content under a text extension).
+ * Returns an error string (all files unlinked) or null.
+ */
+function verifyImportContent(files) {
+  for (const file of files) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    let sniffed = null;
+    try {
+      const fd = fs.openSync(file.path, 'r');
+      try {
+        const head = Buffer.alloc(64);
+        const n = fs.readSync(fd, head, 0, head.length, 0);
+        sniffed = sniffBuffer(head.subarray(0, n));
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch { /* unreadable → sniffed stays null */ }
+    const bad = ext === '.zip'
+      ? (!sniffed || sniffed.kind !== 'archive')
+      : Boolean(sniffed); // text formats must not sniff as image/video/zip
+    if (bad) {
+      for (const f of files) fs.unlink(f.path, () => {});
+      return `File "${file.originalname}" content does not match its ${ext} extension`;
+    }
+  }
+  return null;
+}
+
 // POST /api/import/upload — files[], source_platform, is_spicy_source, column_mapping?
 router.post('/upload', (req, res, next) => {
   upload.array('files', 20)(req, res, (err) => {
@@ -54,6 +86,9 @@ router.post('/upload', (req, res, next) => {
     if (!req.files?.length) return res.status(400).json({ error: 'No files uploaded' });
     const platform = req.body.source_platform;
     if (!PLATFORMS.includes(platform)) return res.status(400).json({ error: 'Unknown source platform' });
+
+    const sniffErr = verifyImportContent(req.files);
+    if (sniffErr) return res.status(400).json({ error: sniffErr });
 
     let spicySource = req.body.is_spicy_source === 'true' || req.body.is_spicy_source === '1';
     if (spicySource && !(await spicyVisible(req.user))) spicySource = false;
@@ -88,6 +123,11 @@ router.post('/csv', (req, res, next) => {
   try {
     if (!req.files?.length) return res.status(400).json({ error: 'No file uploaded' });
     const filePath = req.files[0].path;
+
+    {
+      const sniffErr = verifyImportContent(req.files);
+      if (sniffErr) return res.status(400).json({ error: sniffErr });
+    }
 
     if (req.body.peek === 'true' || req.body.peek === '1') {
       // return headers + auto-mapping for the mapping UI. Only the first 64KB
@@ -228,10 +268,16 @@ router.get('/review', async (req, res, next) => {
       params
     );
     res.json({
-      records: rows.map((r) => ({
-        ...r,
-        normalized_data: decodeNormalizedData(r.normalized_data, Boolean(r.is_spicy_source)),
-      })),
+      records: rows.map((r) => {
+        // a tampered/undecryptable spicy payload throws (H1) — surface it on
+        // the row instead of 500ing the whole review listing
+        try {
+          return { ...r, normalized_data: decodeNormalizedData(r.normalized_data, Boolean(r.is_spicy_source)) };
+        } catch (err) {
+          console.error(`[import] staging row ${r.id} decrypt failed:`, err.message);
+          return { ...r, normalized_data: {}, review_status: 'error', error_message: 'Stored record could not be decrypted' };
+        }
+      }),
     });
   } catch (err) { next(err); }
 });
@@ -286,6 +332,21 @@ const IMPORT_CONTACT_FIELDS = [
   'location', 'bio', 'occupation', 'company', 'website', 'sex', 'religion', 'nationality',
 ];
 
+/**
+ * Changelog writer bound to the finalize transaction (audit L5): rows commit
+ * or roll back atomically with the contact writes, unlike the fire-and-forget
+ * pool-based changelogWrite.
+ */
+async function changelogWriteTx(conn, contactId, userId, source, diffs, importJobId = null) {
+  for (const { field, oldValue, newValue } of diffs) {
+    await conn.execute(
+      `INSERT INTO contact_field_changelog (contact_id, user_id, import_job_id, source, field_name, old_value, new_value)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [contactId, userId ?? null, importJobId, source, field, oldValue ?? null, newValue ?? null]
+    );
+  }
+}
+
 /** Create a brand-new contact from a normalized record. */
 async function createFromRecord(conn, rec, job) {
   const data = {};
@@ -302,7 +363,7 @@ async function createFromRecord(conn, rec, job) {
   );
   const contactId = r.insertId;
   await applySatellites(conn, contactId, rec, job);
-  changelogWrite(contactId, job.user_id, `import_${platformKey(job.source_platform)}`,
+  await changelogWriteTx(conn, contactId, job.user_id, `import_${platformKey(job.source_platform)}`,
     Object.entries(data).map(([field, v]) => ({ field, oldValue: null, newValue: String(v) })), job.id);
   return contactId;
 }
@@ -380,7 +441,7 @@ async function mergeIntoContact(conn, rec, target, job, decisions) {
   }
   await applySatellites(conn, target.id, rec, job);
   if (diffs.length) {
-    changelogWrite(target.id, job.user_id, `import_${platformKey(job.source_platform)}`, diffs, job.id);
+    await changelogWriteTx(conn, target.id, job.user_id, `import_${platformKey(job.source_platform)}`, diffs, job.id);
   }
   return target.id;
 }
@@ -479,8 +540,10 @@ router.post('/jobs/:id/finalize', loadJob, async (req, res, next) => {
         skipped += 1;
         continue;
       }
-      const rec = decodeNormalizedData(row.normalized_data, Boolean(req.job.is_spicy_source));
       try {
+        // decode inside the per-row try: a tampered spicy payload now throws
+        // from decryptField (H1) and must fail THIS row, not the whole finalize
+        const rec = decodeNormalizedData(row.normalized_data, Boolean(req.job.is_spicy_source));
         await withTransaction(async (conn) => {
           if (row.review_status === 'approved_new') {
             const id = await createFromRecord(conn, rec, req.job);

@@ -1,6 +1,6 @@
 # Kith — Personal CRM Specification
 
-> **Synced 2026-07-06** with [[kith-personal-crm-app]] (Master Build Plan): the §2.1 corrections (scraping/extension removal, the database server DB host, file-only imports) are now applied directly in this document. Ships in the repo as `SPEC.md`. Where this spec and the build plan still conflict, the build plan wins; where either conflicts with [[kith-branding]] on visuals, BRANDING wins.
+> **Synced 2026-07-10 to v1.8.** Originally synced 2026-07-06 with [[kith-personal-crm-app]] (Master Build Plan); the §2.1 corrections (scraping/extension removal, the database server DB host, file-only imports) are applied directly in this document. Ships in the repo as `SPEC.md`. Where this spec and the build plan still conflict, the build plan wins; where either conflicts with **`DESIGN.md`** ("The Record" design system, adopted v1.3) on visuals, DESIGN.md wins. The body of this document describes the app as specified through v1.1; the **"Post-v1.1 Features (v1.2–v1.8)"** section below enumerates everything added since — see `BUILDLOG.md` for full per-release detail.
 
 ## Overview
 
@@ -10,7 +10,63 @@ The name "Kith" comes from the Old English word meaning friends, acquaintances, 
 
 ### Key Differentiator: Spicy Mode
 
-Kith has a hidden layer of intimate/personal data that is concealed by default so the app is SFW when opened. A flame toggle activates "spicy mode" which shifts the accent/interactive layer from purple to rose-red (surfaces and text unchanged — see BRANDING §12) so it's immediately obvious what mode you're in. Spicy mode can be globally disabled in Settings, which removes the flame toggle entirely and prevents any spicy content from being viewed or shown.
+Kith has a hidden layer of intimate/personal data that is concealed by default so the app is SFW when opened. A quiet lock toggle low in the sidebar (the "confidential" control) activates "spicy mode", which shifts the accent/interactive layer from ink-blue to oxblood (surfaces and text unchanged — see DESIGN.md) so it's immediately obvious what mode you're in. Spicy mode can be globally disabled in Settings, which removes the toggle entirely and prevents any spicy content from being viewed or shown.
+
+---
+
+## Post-v1.1 Features (v1.2–v1.8)
+
+The body of this spec describes Kith as built through v1.1. Everything below shipped after — see `BUILDLOG.md` for full per-release detail, and the actual code (`server/routes/`, `server/public/js/`) as the ground truth.
+
+### Maps & geocoding (v1.2, refined v1.6/v1.8)
+Self-hosted, addresses never leave the LAN. Bundled geonames city geocoder (`lib/geo.js`, ~56k cities) + a Photon geocoder (self-hosted komoot Photon, `PHOTON_URL`) for street-level precision; city-level queries resolve local-first (v1.8). Authenticated OSM tile proxy with disk cache; vendored Leaflet. Map page (`routes/geo.js`, `js/map.js`) with contact pins, zoom-adaptive clustering (v1.6), geo search, `?near=` proximity filter; contact-detail mini-map; address auto-geocode + manual locate.
+
+### CRM depth (v1.2, expanded v1.5–v1.7)
+- **Relationships** (`routes/relationships.js`): typed contact↔contact links with inverse labels; family types incl. step/adoptive/foster variants (v1.7); categorized UI (Family/Friends/Work/Other) + immediate-family strip (v1.8).
+- **Important dates** (`routes/dates.js`), **gift ideas** (`routes/gifts.js`).
+- **Keep-in-touch cadence:** `last_contacted_at` touched by notes/messages/interactions/event completion; out-of-touch filter/card/notifications.
+- **Interactions** (`routes/interactions.js`, v1.4): one-tap touchpoint log per contact, distinct from notes.
+- **Recurring reminders** with spawn-on-complete.
+- **Deceased status** (v1.6): `is_deceased` + `date_of_death`; excluded from birthday nudges and out-of-touch flags.
+
+### Family tree & GEDCOM (v1.6–v1.7)
+- Family page (`js/familytree.js`, nav 03) on vendored family-chart + d3: pan/zoom generational tree, "Close family" and "Full ancestry" lenses, backed by `GET /api/contacts/:id/family-tree` (BFS over family-typed relationships, access-filtered, 400-person/10-generation cap).
+- Inclusive identity fields (v1.7): `gender_identity` (separate from sex-at-birth), `maiden_name`, `place_of_birth`/`place_of_death`, `religion`, `nationality`, `hometown`, `education` (v1.8); expanded gender/pronoun/orientation option lists.
+- **GEDCOM 5.5.1 import** (`import/parsers/gedcom.js`) through the standard review/merge pipeline, with relationship creation on finalize; **GEDCOM export** (`GET /api/export/gedcom`).
+
+### Journal & timeline (v1.2, reworked v1.8)
+- **Journal** (`routes/journal.js`, `js/journal.js`): true personal diary (owner-scoped even for admins) — kinds entry/reflection/travel/dream/memory, optional geocoded location, optional linked event, spicy entries field-encrypted.
+- **Timeline page** (`js/timelinepage.js`, nav 07, v1.8): merged life feed (`GET /api/journal/timeline`) — events once with participants aggregated + journal entries; list view + map view with travel path.
+
+### Calendar & data portability (v1.2)
+- **Calendar page** (`routes/calendar.js`): month view of events, projected birthdays, recurring important dates, open reminders.
+- **Exports** (`routes/export.js`): vCard 3.0, CSV, GEDCOM, admin JSON backup.
+- **ICS feed** (`routes/ics.js`): `GET /api/ics/calendar.ics?token=kith_…` for calendar apps (query-param token auth), plus single-event `.ics`.
+- **Personal API tokens** (`routes/tokens.js`): `kith_`-prefixed PATs, sha256-stored, `read`/`read_write` scopes, shown once at creation.
+- **Trash** (`routes/trash.js`): 30-day soft-delete recycle bin for contacts/events/media with restore, hard purge, and a daily purge sweeper.
+- **Dedupe scan** feeding the existing merge modal; document attachments; bulk operations (tag/group/favorite/export/delete).
+
+### Auth & security additions (v1.1–v1.2)
+- **Cookie sessions:** JWT in an httpOnly SameSite=Strict cookie (Bearer fallback for API clients); `token_version` invalidation on password change/reset/deactivation.
+- **TOTP 2FA** (`lib/totp.js`, RFC-6238 via node:crypto): encrypted secret, pending-token second login step; Account & security page for all roles.
+- Login throttling keyed on real client IP behind Traefik.
+
+### Notifications & PWA (v1.2, v1.4)
+- **Proactive notifications** (v1.4): scheduler (`lib/scheduler.js`) for birthday/reminder nudges via email and **Web Push** (`routes/push.js`, VAPID, `web-push`).
+- **PWA:** manifest + service worker (`sw.js`, HTTPS-only; API responses never cached), auto-update.
+
+### Sync & integrations (v1.4, v1.8)
+- **CardDAV/CalDAV** (`lib/davsync.js`): sync with the companion Radicale container ("KithDAV", separate repo dir/pipeline).
+- **Immich proxy** (`routes/immich.js`, v1.8): per-user connections to self-hosted Immich photo servers; API keys field-encrypted and never sent to the browser — all asset/thumbnail/search traffic proxied server-side; photo picker attaches Immich photos to people/events; spicy-flagged instances hide behind the confidential layer.
+- **Messages UI + global search** (v1.4): message management (incl. `DELETE /api/messages/:id`), MiniSearch-powered fuzzy client search (`js/search-index.js`), server command-palette search (`routes/search.js`).
+
+### UI/design (v1.2–v1.3, ongoing)
+- **Light theme + system preference** (v1.2) — both themes first-class.
+- **"The Record" redesign** (v1.3): the paper/ink editorial dossier design system — see `DESIGN.md`. Replaced the dark frosted-glass/purple system; removed instance accent customization, pride-flag avatar overlays, and the flame toggle (now a quiet lock "confidential" control).
+- Surname sort, letter-avatar palette, icon-size floor (v1.6); view/edit mode split on the contact page, address residency windows ("moves"), mobile pass (v1.8).
+
+### Schema additions since v1.1 (summary)
+New tables include: `notifications`, `contact_relationships`, `important_dates`, `gift_ideas`, `interactions`, `api_tokens`, `push_subscriptions`, `journal_entries`, `immich_instances`, `geo_cache`, plus columns for geocoding, keep-in-touch, deceased/identity/ancestry fields, address residency windows, and TOTP. `server/database/init.js` (fresh installs) and `migrations.js` (001–004) are authoritative.
 
 ---
 
@@ -434,11 +490,10 @@ Holds all parsed/normalized records from an import job, pending data review.
 - **Default Relationship Types** — Manage the list of relationship type options
 
 ### Appearance
-- **App Color Scheme** — Pick primary accent color (defaults defined in BRANDING.md). CSS variables update globally.
-- **Spicy Mode Color Scheme** — Pick the spicy mode accent color (defaults defined in BRANDING.md). When spicy mode is active, only the interactive/accent layer shifts — see BRANDING.md § 12.
+- **Theme** — Light / Dark / System (per-user preference, not an admin setting). Colors are fixed design tokens per **DESIGN.md** ("The Record") — the accent-color pickers from the pre-v1.3 design were removed in v1.3.
 
 ### Spicy
-- **Enable Spicy Features** — Global toggle. When disabled: flame icon hidden, spicy_profiles inaccessible, all is_spicy content filtered out at the API level. No spicy content can be viewed or shown anywhere.
+- **Enable Spicy Features** — Global toggle. When disabled: confidential toggle hidden, spicy_profiles inaccessible, all is_spicy content filtered out at the API level. No spicy content can be viewed or shown anywhere.
 - **Require PIN** — Optionally require a PIN to activate spicy mode each session.
 - **Auto-disable** — Automatically turn spicy mode off after a set time (15 min, 30 min, 1 hour, never).
 
@@ -460,9 +515,9 @@ Holds all parsed/normalized records from an import job, pending data review.
 ## Spicy Mode
 
 ### Toggle Behavior
-- Flame icon in sidebar header (only visible if spicy features are enabled in Settings)
+- Quiet lock "confidential" control low in the sidebar (only visible if spicy features are enabled in Settings) — deliberately inconspicuous so the app reads SFW at a glance
 - **Off (default, SFW):** Normal app color scheme. All spicy content hidden — contacts with spicy data look normal but spicy sections are hidden, spicy notes/media/events filtered out, spicy_profiles not loaded.
-- **On (NSFW):** The accent/interactive layer shifts from purple to rose-red across all elements (buttons, active states, focus rings, sidebar strip) over 600ms. A subtle edge vignette and grain overlay fade in. All spicy content becomes visible. Surfaces, text, and layout are identical to normal mode — see BRANDING.md § 12 for the full layered signal system.
+- **On (NSFW):** The accent/interactive layer shifts from ink-blue to oxblood across all elements (buttons, active states, focus rings, sidebar top strip) over 600ms; the paper background warms slightly. All spicy content becomes visible (mounted into the DOM — it is absent, not merely hidden, when off). Text and layout are identical to normal mode — see DESIGN.md for the full signal system.
 - Per-user preference saved to database.
 
 ### Spicy Profile Fields (comprehensive, inclusive of all orientations)
@@ -713,23 +768,9 @@ Decisions are stored in `import_staging.merge_field_decisions` as JSON before co
 
 ---
 
-## Pride Flag Indicators
+## Pride Flag Indicators (retired in v1.3)
 
-When a contact has an orientation set, show a small circular pride flag indicator next to their avatar:
-
-| Orientation | Flag |
-|-------------|------|
-| Gay | Rainbow |
-| Lesbian | Lesbian flag (orange-white-pink) |
-| Bisexual | Bi flag (pink-purple-blue) |
-| Pansexual | Pan flag (pink-yellow-blue) |
-| Transgender | Trans flag |
-| Non-binary | NB flag (yellow-white-purple-black) |
-| Asexual | Ace flag (black-gray-white-purple) |
-| Queer | Rainbow or custom |
-| Straight | No indicator (default) |
-
-Rendered as a small circle overlay on the avatar's bottom-right corner using CSS gradients matching the flag colors.
+The original design showed a small circular pride-flag overlay on avatars based on orientation. **"The Record" redesign (v1.3) retired these** — `.av .flag` is `display: none`; identity (pronouns, orientation, gender identity) is conveyed via the record's mono meta line and Particulars section instead. The `prideFlagGradient()` helper remains in `utils.js`/`components.js` but renders nothing under the current stylesheet.
 
 ---
 
@@ -785,7 +826,7 @@ All built as vanilla JS render functions that return HTML strings. Same class na
 - **Modal** — Standard overlay + card. Used for: add/edit contact, add event, merge, audit log, confirmations. All modals use the same `.modal-overlay > .modal > .modal-header + .modal-content + .modal-footer` structure.
 - **Tag pill** — `.tag-pill` with color prop. Used everywhere tags appear.
 - **Group badge** — `.group-badge` with icon + color. Uniform across sidebar, table, detail.
-- **Avatar** — `.av` with size variants (sm/md/lg). Includes pride flag overlay slot.
+- **Avatar** — `.av` with size variants (sm/md/lg). Deterministic letter-avatar palette color per person (v1.6); photos cover when set. (The pride-flag overlay slot is retired — see DESIGN.md.)
 - **Card** — `.card` container. Used for profile sections, event cards, settings sections.
 - **Button** — `.btn` with variants: `.btn-primary`, `.btn-secondary`, `.btn-danger`, `.btn-ghost`, `.btn-icon`. Same everywhere.
 - **Form controls** — `.form-group > .form-label + input/select/textarea`. Uniform styling.
@@ -803,7 +844,7 @@ All built as vanilla JS render functions that return HTML strings. Same class na
 - Grid: `.grid`, `.grid-2`, `.grid-3`, `.grid-4`
 - Spacing: `.mt-*`, `.mb-*`, `.p-*`
 
-> For complete design specifications — colors, typography, spacing, iconography, motion, accessibility, spicy mode visual system, and component patterns — see **BRANDING.md**.
+> For complete design specifications — colors, typography, spacing, iconography, motion, accessibility, spicy mode visual system, and component patterns — see **DESIGN.md** ("The Record").
 
 ---
 
@@ -836,13 +877,15 @@ Layout: cards in a responsive grid. Nothing cluttered — just the essentials wi
 
 ## Sidebar Layout
 
-- **Top:** Logo (custom or default "◆ Kith") + spicy flame toggle (if enabled) + user avatar
-- **Search:** Search bar with keyboard shortcut hint
-- **Button:** Accent-colored "+ New person" button (all roles — every user can add contacts to their own list)
-- **Nav items:** Home, Contacts, Events, Notifications, (Settings — admin only)
-- **Favorites section:** Collapsible, shows favorited contacts as small avatar + name list
-- **Groups section:** Collapsible, each group shows icon + name + color dot + member count
-- **Bottom:** User display name + role, logout button
+*(Current — "The Record", v1.3+. See DESIGN.md.)*
+
+- **Top:** "Kith" masthead (Newsreader serif; custom logo image if `app_logo` is set) + mono `PERSONAL RECORD` subline
+- **Search:** hairline-underlined search row with ⌘K shortcut hint
+- **Button:** full-width ink `NEW RECORD +` button (all roles — every user can add contacts to their own list)
+- **Nav items (numbered index):** 01 Home, 02 People, 03 Family, 04 Calendar, 05 Map, 06 Events, 07 Timeline, 08 Journal, 09 Notices (badge count), 10 Settings (admin only)
+- **Favorites section:** Collapsible, favorited contacts as record-number + name list
+- **Groups section:** Collapsible, each group with dotted-leader member count; gear link to Groups page
+- **Bottom:** quiet confidential lock toggle (if spicy enabled), user monogram + name + role (`KEEPER`/`MEMBER`), logout
 
 ---
 
@@ -864,12 +907,12 @@ Icons are Lucide icon names. Rendered as SVG in the UI.
 
 ### Default app_settings
 - app_name: "Kith"
-- app_logo: null (uses default)
-- accent_color: per BRANDING.md (normal mode accent)
-- spicy_accent_color: per BRANDING.md (spicy mode accent)
 - spicy_enabled: **false** (enabling spicy is a deliberate post-setup act by the admin)
+- spicy_require_pin: false; spicy_auto_disable_minutes: 0
+- relationship_types: Friend, Family, Coworker, Acquaintance, Neighbor, Other
 - media_path: "/media"
 - max_upload_size: 52428800 (50MB — applies to **media** uploads; import file uploads use the separate `IMPORT_MAX_UPLOAD_SIZE`, default 2GB, since platform exports are routinely hundreds of MB)
+- `app_logo` is a recognized setting but not seeded (absent = default mark). `accent_color`/`spicy_accent_color` are no longer seeded — instance accent customization was removed post-v1.3; the accent tokens are pinned in DESIGN.md/style.css.
 
 ### Default user preferences
 - spicy_visible: false
@@ -878,8 +921,10 @@ Icons are Lucide icon names. Rendered as SVG in the UI.
 
 ## API Endpoints
 
+> This list covers the v1.1 API surface. Post-v1.1 routers (see "Post-v1.1 Features" above) additionally mount: `/api/geo`, `/api/calendar`, `/api/journal`, `/api/immich`, `/api/search`, `/api/push`, `/api/tokens`, `/api/ics`, `/api/export` (vCard/CSV/GEDCOM/JSON), `/api/trash`, plus contact-scoped `relationships`, `dates` (important dates), `gifts`, `interactions`, and `family-tree`. Auth gained `POST /api/auth/login/totp` (2FA step) and cookie sessions. `server/routes/` is the ground truth.
+
 ### Auth
-- `POST /api/auth/login` — Login → JWT
+- `POST /api/auth/login` — Login → JWT (session cookie; returns `totp_required` + pending token when 2FA is enabled)
 - `GET /api/auth/me` — Current user from token
 - `PUT /api/auth/password` — Change password
 
@@ -1022,69 +1067,92 @@ Icons are Lucide icon names. Rendered as SVG in the UI.
 
 ## File Structure
 
+*(Current as of v1.8 — the original v1 layout plus post-v1.1 modules.)*
+
 ```
 kith/
 ├── .env
 ├── .gitignore
 ├── docker-compose.yml
+├── docker-compose.dev.yml
 ├── Dockerfile
 ├── files.json
 ├── package.json
-├── SPEC.md
-├── BRANDING.md
+├── SPEC.md                      # This document
+├── DESIGN.md                    # "The Record" design system (authoritative on visuals)
+├── BRANDING.md                  # Superseded stub — name/logo provenance only
+├── BUILDLOG.md                  # Release-by-release build history
 ├── server/
-│   ├── index.js                # Express app entry point
+│   ├── index.js                 # Express app entry point
 │   ├── lib/
-│   │   └── crypto.js            # AES-256-GCM field encryption helpers (spicy layer)
+│   │   ├── crypto.js            # AES-256-GCM field encryption helpers (spicy layer)
+│   │   ├── contacts.js          # Search-index rebuild, share-scope filter, touchContact, validation
+│   │   ├── audit.js             # Non-blocking audit_log writes
+│   │   ├── geo.js               # Geocoding: bundled geonames index + a Photon geocoder, geo_cache
+│   │   ├── notify.js            # Notification + Web Push delivery
+│   │   ├── scheduler.js         # Daily jobs: birthday/reminder nudges, trash purge
+│   │   ├── davsync.js           # CardDAV/CalDAV (Radicale "KithDAV") sync
+│   │   └── totp.js              # RFC-6238 TOTP (2FA), node:crypto only
 │   ├── database/
 │   │   ├── connection.js        # MariaDB pool
-│   │   ├── init.js              # Auto-create tables + seed data
+│   │   ├── init.js              # Auto-create tables + seed data + idempotent column adds
 │   │   └── migrations.js        # schema_version table + sequential migration runner
 │   ├── middleware/
-│   │   └── auth.js              # JWT requireAuth / requireAdmin / requireOwner
+│   │   └── auth.js              # JWT (cookie or bearer) requireAuth / requireAdmin / PAT acceptance
 │   ├── routes/
-│   │   ├── auth.js
+│   │   ├── auth.js              # Login (+TOTP step), cookie sessions, password change
 │   │   ├── users.js
-│   │   ├── contacts.js          # Includes merge, share, photo, favorite, changelog
+│   │   ├── contacts.js          # Incl. merge, share/spicyVisible helpers, photo, favorite, changelog, family-tree
+│   │   ├── satellites.js        # Emails/phones/addresses/socials
 │   │   ├── tags.js
 │   │   ├── groups.js
-│   │   ├── socials.js
+│   │   ├── relationships.js     # Typed contact↔contact links (family/friends/work + inverses)
+│   │   ├── dates.js             # Important dates
+│   │   ├── gifts.js             # Gift ideas
+│   │   ├── interactions.js      # One-tap touchpoint log (keep-in-touch cadence)
 │   │   ├── spicy.js
 │   │   ├── events.js
-│   │   ├── timeline.js
-│   │   ├── notes.js
-│   │   ├── reminders.js
-│   │   ├── messages.js
+│   │   ├── timeline.js          # Timeline/notes/reminders/messages routers
+│   │   ├── journal.js           # Personal diary + merged life-feed timeline
+│   │   ├── calendar.js          # Month-view aggregate
+│   │   ├── geo.js               # Geocode search, map pins, authenticated OSM tile proxy
 │   │   ├── media.js
-│   │   ├── audit.js
-│   │   ├── changelog.js         # Per-field contact change log
+│   │   ├── immich.js            # Immich photo-server proxy (multi-instance, keys server-side)
+│   │   ├── search.js            # Global command-palette search
+│   │   ├── dashboard.js
+│   │   ├── notifications.js
+│   │   ├── push.js              # Web Push (VAPID) subscriptions
+│   │   ├── tokens.js            # Personal API tokens (PATs)
+│   │   ├── ics.js               # ICS calendar feed (PAT query auth)
+│   │   ├── export.js            # vCard/CSV/GEDCOM/JSON export
+│   │   ├── trash.js             # 30-day soft-delete recycle bin
+│   │   ├── sharing.js           # Share/unshare + merge
 │   │   ├── settings.js
 │   │   ├── preferences.js
-│   │   ├── import.js            # All import routes (upload, jobs, review, finalize)
-│   │   └── health.js
+│   │   └── import.js            # All import routes (upload, jobs, review, finalize)
 │   ├── import/
-│   │   ├── worker.js            # Background import job processor
-│   │   ├── normalizer.js        # Shared normalize helpers
-│   │   ├── parsers/
-│   │   │   ├── facebook.js      # Facebook export parser
-│   │   │   ├── instagram.js     # Instagram export parser
-│   │   │   ├── twitter.js       # Twitter/X export parser
-│   │   │   ├── google.js        # Google Contacts / Takeout parser
-│   │   │   ├── vcard.js         # vCard (.vcf) parser
-│   │   │   └── csv.js           # CSV parser (with column mapping)
-│   │   └── matcher.js           # Contact match detection + confidence scoring
+│   │   ├── worker.js            # Background import job processor (worker_threads)
+│   │   ├── normalizer.js
+│   │   ├── matcher.js
+│   │   └── parsers/             # facebook, instagram, twitter, google, vcard, csv, gedcom
+│   ├── test/                    # node:test suites (import-core, geo, gedcom)
 │   └── public/                  # Static files served by Express
-│       ├── index.html           # Single page app shell
-│       ├── css/
-│       │   └── style.css        # All styles — design system + components
-│       └── js/
-│           ├── app.js            # Main app logic, routing, state
-│           ├── api.js            # API client (fetch wrappers)
-│           ├── components.js     # Reusable UI widget render functions
-│           ├── pages.js          # Page-level render functions
-│           └── utils.js          # Formatters, helpers, pride flags, esc() HTML-escaping
-└── mockups/
-    └── v3/                      # Current design mockups (HTML/CSS)
+│       ├── index.html           # Single page app shell (+ PWA manifest, service worker sw.js)
+│       ├── css/style.css        # All styles — The Record design system + components
+│       ├── fonts/               # Self-hosted Newsreader + IBM Plex (record-fonts.css)
+│       ├── vendor/              # Vendored Leaflet, d3 + family-chart (loaded on demand)
+│       └── js/                  # ES modules:
+│           ├── app.js           #   Shell, router, state, auth, theme, confidential toggle
+│           ├── api.js           #   Fetch wrapper
+│           ├── components.js    #   Reusable UI widget render functions
+│           ├── pages.js         #   Shared page-level render helpers
+│           ├── contacts.js / inline-edit.js / spicy.js / interactions.js
+│           ├── events.js / calendarpage.js / journal.js / timelinepage.js
+│           ├── dashboard.js / groups.js / map.js / familytree.js
+│           ├── media.js / import.js / settings.js / trashpage.js
+│           ├── search-index.js / phonefmt.js / icons.js / utils.js
+└── (no mockups directory — the v1 plan's `mockups/v3/` never existed (O7);
+     the v1.3 design handoff was promoted to DESIGN.md)
 ```
 
 ---
@@ -1095,7 +1163,7 @@ When a contact row is clicked in the contacts list, a profile panel opens (slide
 
 ### Sections
 
-**Header** — Avatar (with pride flag indicator), display name, location, relationship type badge, star (favorite) toggle, spicy flame indicator (spicy mode only). Action buttons: Edit, Merge, Delete.
+**Header** — Portrait frame, display name, RECORD №, mono meta line (pronouns, zodiac, location, birth/death dates), status, rating, bracketed tags, star (favorite) toggle. Action buttons: Edit, Merge, Share.
 
 **Info** — All standard fields: full name, nickname, birthday/age, pronouns, sex, orientation, relationship status, occupation/company, website, languages, ethnicity, zodiac sign, how we met / met date, notes.
 
@@ -1142,23 +1210,15 @@ Each card shows: icon + name + description + member count + avatar stack (first 
 
 ---
 
-## Mockup Reference & Known Issues
+## Design Reference
 
-The `mockups/v3/` directory contains HTML/CSS mockups that represent the visual design target. Claude Code should use these as **visual reference only** — they are not functional and should not be used as a basis for production HTML structure.
+The v1 build plan referenced a `mockups/v3/` directory of dark frosted-glass mockups; **those mockups never existed** (build assumption O7 — v1.0 was built from the original BRANDING.md alone). That whole design direction was retired in v1.3.
 
-### Known issues in the mockups to ignore when building
-- The filter/toolbar UI is inconsistent across pages — some pages have pill-style filters, others have dropdown popovers, and one is missing a background. Implement a single consistent pattern: pills for primary status filters (Upcoming / Past / All), a popover for type/category filters.
-- Some filter pills are missing hover states or active backgrounds.
-- The notifications page uses different padding conventions than the rest.
-- Mobile layout is mocked in CSS but has not been visually tested — implement the spec behavior (sidebar drawer, mob-header) rather than exactly replicating any specific mockup detail.
-- The data review, import, and groups pages do not yet have mockups — build from the spec.
+The current, authoritative visual reference is **`DESIGN.md`** ("The Record"), promoted from the v1.3 design-handoff bundle. The throwaway `.dc.html` reference mocks that accompanied the handoff were deleted after the redesign shipped; `server/public/css/style.css` is the single implementation of the design system.
 
-### What the mockups are authoritative on
-- Overall dark frosted-glass aesthetic and surface hierarchy
-- Sidebar structure, nav items, and flame toggle placement
-- Page header / toolbar / content area layout rhythm
-- Component visual style (buttons, tags, avatars, cards, badges)
-- Spicy mode accent shift behavior
+Notes that remain true regardless of design direction:
+- One consistent filter pattern app-wide: pills for primary status filters (Upcoming / Past / All), a popover for type/category filters.
+- Mobile: sidebar drawer + mobile header bar per the spec behavior (a dedicated mobile pass shipped in v1.8).
 
 ---
 

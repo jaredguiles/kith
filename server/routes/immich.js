@@ -7,6 +7,8 @@
 
 const express = require('express');
 const { Readable } = require('node:stream');
+const dns = require('node:dns');
+const net = require('node:net');
 const { query } = require('../database/connection');
 const { requireAuth } = require('../middleware/auth');
 const { encryptField, decryptField } = require('../lib/crypto');
@@ -22,8 +24,74 @@ const UUID_RE = /^[0-9a-f-]{36}$/;
 // Upstream fetch helpers
 // ---------------------------------------------------------------------------
 
-/** fetch() with an AbortController timeout (ms). Throws on timeout/network. */
+// SSRF guard (audit S1): user-supplied base_urls are fetched server-side, so
+// an arbitrary URL would let any authenticated user port-scan the server's
+// network. Loopback (127/8, ::1), link-local (169.254/16, fe80::/10),
+// 0.0.0.0/unspecified and non-http(s) schemes are ALWAYS rejected.
+// RFC1918 private ranges (10/8, 172.16/12, 192.168/16 + fc00::/7) are allowed
+// by default because this is a homelab where Immich legitimately lives on the
+// LAN — set IMMICH_ALLOW_PRIVATE=false to block those too (e.g. when Kith is
+// exposed beyond the LAN and Immich is not).
+const IMMICH_ALLOW_PRIVATE = String(process.env.IMMICH_ALLOW_PRIVATE ?? 'true') !== 'false';
+
+/** Classify an IP string: 'loopback' | 'linklocal' | 'unspecified' | 'private' | 'public'. */
+function classifyIp(ip) {
+  let addr = String(ip);
+  // IPv4-mapped IPv6 (::ffff:10.0.0.1) → classify the embedded IPv4
+  const mapped = addr.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (mapped) addr = mapped[1];
+  if (net.isIP(addr) === 4) {
+    const [a, b] = addr.split('.').map(Number);
+    if (a === 127) return 'loopback';
+    if (a === 0) return 'unspecified';
+    if (a === 169 && b === 254) return 'linklocal';
+    if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return 'private';
+    return 'public';
+  }
+  const lower = addr.toLowerCase();
+  if (lower === '::1') return 'loopback';
+  if (lower === '::') return 'unspecified';
+  if (/^fe[89ab]/.test(lower)) return 'linklocal'; // fe80::/10
+  if (/^f[cd]/.test(lower)) return 'private'; // fc00::/7 (ULA)
+  return 'public';
+}
+
+/**
+ * Validate an Immich upstream URL: http(s) scheme, and the hostname must not
+ * resolve to a blocked address. Returns null when OK, or an error string.
+ */
+async function checkUpstreamUrl(rawUrl) {
+  let u;
+  try {
+    u = new URL(String(rawUrl));
+  } catch {
+    return 'Invalid URL';
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'Only http(s) URLs are allowed';
+  let addresses;
+  try {
+    addresses = await dns.promises.lookup(u.hostname, { all: true, verbatim: true });
+  } catch {
+    return 'Immich server unreachable';
+  }
+  for (const { address } of addresses) {
+    const kind = classifyIp(address);
+    if (kind === 'loopback' || kind === 'linklocal' || kind === 'unspecified') {
+      return 'That URL points at a blocked address';
+    }
+    if (kind === 'private' && !IMMICH_ALLOW_PRIVATE) {
+      return 'Private-network URLs are not allowed (IMMICH_ALLOW_PRIVATE=false)';
+    }
+  }
+  return null;
+}
+
+/** fetch() with an AbortController timeout (ms). Throws on timeout/network.
+ *  Every upstream Immich request goes through here, so the SSRF check runs
+ *  before each proxied fetch (base_urls can predate the save-time check). */
 async function immichFetch(url, options = {}, timeoutMs = 10000) {
+  const blocked = await checkUpstreamUrl(url);
+  if (blocked) throw new Error(`Blocked upstream URL: ${blocked}`);
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -104,14 +172,11 @@ async function getInstanceById(id) {
 }
 
 /**
- * Proxy an Immich asset endpoint (thumbnail/original) to an Express response.
- * `instance` must carry a decrypted api_key. Streams the body; forwards
- * Content-Type (and Content-Length when present).
+ * Stream a binary Immich endpoint (thumbnails/originals) to an Express
+ * response. `instance` must carry a decrypted api_key. Forwards Content-Type
+ * (and Content-Length when present); 404s map to `notFoundMsg`.
  */
-async function proxyAssetResponse(instance, assetId, variant, res) {
-  const url = variant === 'original'
-    ? `${instance.base_url}/api/assets/${assetId}/original`
-    : `${instance.base_url}/api/assets/${assetId}/thumbnail?size=${variant}`;
+async function proxyBinaryResponse(instance, url, res, notFoundMsg) {
   let upstream;
   try {
     upstream = await immichFetch(url, { headers: { 'x-api-key': instance.api_key } });
@@ -119,7 +184,7 @@ async function proxyAssetResponse(instance, assetId, variant, res) {
     return res.status(502).json({ error: 'Immich unreachable' });
   }
   if (!upstream.ok || !upstream.body) {
-    return res.status(upstream.status === 404 ? 404 : 502).json({ error: upstream.status === 404 ? 'Asset not found' : 'Immich unreachable' });
+    return res.status(upstream.status === 404 ? 404 : 502).json({ error: upstream.status === 404 ? notFoundMsg : 'Immich unreachable' });
   }
   const ct = upstream.headers.get('content-type');
   if (ct) res.setHeader('Content-Type', ct);
@@ -129,6 +194,17 @@ async function proxyAssetResponse(instance, assetId, variant, res) {
   const stream = Readable.fromWeb(upstream.body);
   stream.on('error', () => res.destroy());
   stream.pipe(res);
+}
+
+/**
+ * Proxy an Immich asset endpoint (thumbnail/original) to an Express response.
+ * (Also used by routes/media.js — keep the signature stable.)
+ */
+async function proxyAssetResponse(instance, assetId, variant, res) {
+  const url = variant === 'original'
+    ? `${instance.base_url}/api/assets/${assetId}/original`
+    : `${instance.base_url}/api/assets/${assetId}/thumbnail?size=${variant}`;
+  return proxyBinaryResponse(instance, url, res, 'Asset not found');
 }
 
 /** Middleware: :id → req.immich (decrypted), owner + spicy gated. */
@@ -168,6 +244,8 @@ router.post('/instances', async (req, res, next) => {
     const baseUrl = cleanBaseUrl(b.base_url);
     if (!name || !b.base_url || !apiKey) return res.status(400).json({ error: 'Name, base URL, and API key are required' });
     if (!baseUrl) return res.status(400).json({ error: 'Base URL must be a valid http(s) URL' });
+    const ssrfErr = await checkUpstreamUrl(baseUrl);
+    if (ssrfErr) return res.status(400).json({ error: ssrfErr });
 
     const spicyOk = await spicyVisible(req.user);
     const isSpicy = b.is_spicy && spicyOk ? 1 : 0;
@@ -197,6 +275,8 @@ router.put('/instances/:id', loadInstance, async (req, res, next) => {
     if ('base_url' in b) {
       baseUrl = cleanBaseUrl(b.base_url);
       if (!baseUrl) return res.status(400).json({ error: 'Base URL must be a valid http(s) URL' });
+      const ssrfErr = await checkUpstreamUrl(baseUrl);
+      if (ssrfErr) return res.status(400).json({ error: ssrfErr });
     }
     let apiKey = inst.api_key; // already decrypted by loadInstance
     if ('api_key' in b && b.api_key) apiKey = String(b.api_key).trim();
@@ -253,7 +333,10 @@ async function searchMetadata(inst, body) {
   });
 }
 
-// POST /api/immich/:id/search — { query?, album_id?, page=1, size=40 }
+// POST /api/immich/:id/search — { query?, album_id?, person_id?, tag_id?, page=1, size=40 }
+// album/person/tag filters all go through the same /api/search/metadata
+// family the rest of this proxy uses (personIds/tagIds/albumIds are plain
+// metadata-search filters in Immich v1.1xx).
 router.post('/:id/search', loadInstance, async (req, res, next) => {
   try {
     const b = req.body || {};
@@ -262,12 +345,22 @@ router.post('/:id/search', loadInstance, async (req, res, next) => {
     const size = Math.min(100, Math.max(1, Number(b.size) || 40));
     const q = String(b.query || '').trim();
     const albumId = String(b.album_id || '').trim();
+    const personId = String(b.person_id || '').trim();
+    const tagId = String(b.tag_id || '').trim();
     if (albumId && !UUID_RE.test(albumId)) return res.status(400).json({ error: 'Invalid album id' });
+    if (personId && !UUID_RE.test(personId)) return res.status(400).json({ error: 'Invalid person id' });
+    if (tagId && !UUID_RE.test(tagId)) return res.status(400).json({ error: 'Invalid tag id' });
+
+    const filters = {};
+    if (albumId) filters.albumIds = [albumId];
+    if (personId) filters.personIds = [personId];
+    if (tagId) filters.tagIds = [tagId];
+    const hasFilters = Object.keys(filters).length > 0;
 
     let upstream;
     let fallback = false;
     try {
-      if (q && !albumId) {
+      if (q && !hasFilters) {
         // semantic search first; needs Immich's ML container
         upstream = await immichFetch(`${inst.base_url}/api/search/smart`, {
           method: 'POST',
@@ -279,10 +372,8 @@ router.post('/:id/search', loadInstance, async (req, res, next) => {
           fallback = true;
           upstream = await searchMetadata(inst, { order: 'desc', page, size, withExif: true });
         }
-      } else if (albumId) {
-        upstream = await searchMetadata(inst, { albumIds: [albumId], page, size, withExif: true });
       } else {
-        upstream = await searchMetadata(inst, { order: 'desc', page, size, withExif: true });
+        upstream = await searchMetadata(inst, { ...filters, order: 'desc', page, size, withExif: true });
       }
     } catch {
       return res.status(502).json({ error: 'Immich unreachable' });
@@ -317,6 +408,115 @@ router.get('/:id/albums', loadInstance, async (req, res, next) => {
         id: a.id, name: a.albumName, count: a.assetCount,
       })),
     });
+  } catch (err) { next(err); }
+});
+
+// GET /api/immich/:id/people?page=1 — named people only (unnamed faces are
+// noise in a picker). Immich paginates: { people: [], total, hasNextPage }.
+router.get('/:id/people', loadInstance, async (req, res, next) => {
+  try {
+    const page = Math.max(1, Number(req.query.page) || 1);
+    let upstream;
+    try {
+      upstream = await immichFetch(
+        `${req.immich.base_url}/api/people?page=${page}&size=100&withHidden=false`,
+        { headers: { 'x-api-key': req.immich.api_key } }
+      );
+    } catch {
+      return res.status(502).json({ error: 'Immich unreachable' });
+    }
+    if (upstream.status === 404) return res.status(404).json({ error: 'People view not supported by this Immich server' });
+    if (!upstream.ok) return res.status(502).json({ error: 'Immich unreachable' });
+    const data = await upstream.json().catch(() => null);
+    const people = data && Array.isArray(data.people) ? data.people : [];
+    res.json({
+      people: people
+        .filter((p) => p && p.name && String(p.name).trim())
+        .map((p) => ({ id: p.id, name: p.name })),
+      hasNextPage: Boolean(data && data.hasNextPage),
+    });
+  } catch (err) { next(err); }
+});
+
+// GET /api/immich/:id/people/:personId/thumbnail — face crop for the person list
+router.get('/:id/people/:personId/thumbnail', loadInstance, async (req, res, next) => {
+  try {
+    const personId = String(req.params.personId);
+    if (!UUID_RE.test(personId)) return res.status(404).json({ error: 'Person not found' });
+    await proxyBinaryResponse(
+      req.immich,
+      `${req.immich.base_url}/api/people/${personId}/thumbnail`,
+      res,
+      'Person not found'
+    );
+  } catch (err) { next(err); }
+});
+
+// GET /api/immich/:id/tags — flat list; `value` is the full hierarchical path
+router.get('/:id/tags', loadInstance, async (req, res, next) => {
+  try {
+    let upstream;
+    try {
+      upstream = await immichFetch(`${req.immich.base_url}/api/tags`, {
+        headers: { 'x-api-key': req.immich.api_key },
+      });
+    } catch {
+      return res.status(502).json({ error: 'Immich unreachable' });
+    }
+    if (upstream.status === 404) return res.status(404).json({ error: 'Tags not supported by this Immich server' });
+    if (!upstream.ok) return res.status(502).json({ error: 'Immich unreachable' });
+    const tags = await upstream.json().catch(() => []);
+    res.json({
+      tags: (Array.isArray(tags) ? tags : []).map((t) => ({
+        id: t.id, name: t.name, path: t.value || t.name,
+      })),
+    });
+  } catch (err) { next(err); }
+});
+
+// GET /api/immich/:id/folders — unique folder paths (Immich folder view).
+// 404s cleanly when the deployed Immich predates /api/view/folder so the
+// picker can hide the Folders tab.
+router.get('/:id/folders', loadInstance, async (req, res, next) => {
+  try {
+    let upstream;
+    try {
+      upstream = await immichFetch(`${req.immich.base_url}/api/view/folder/unique-paths`, {
+        headers: { 'x-api-key': req.immich.api_key },
+      });
+    } catch {
+      return res.status(502).json({ error: 'Immich unreachable' });
+    }
+    if (upstream.status === 404) return res.status(404).json({ error: 'Folder view not supported by this Immich server' });
+    if (!upstream.ok) return res.status(502).json({ error: 'Immich unreachable' });
+    const paths = await upstream.json().catch(() => []);
+    res.json({
+      folders: (Array.isArray(paths) ? paths : [])
+        .filter((p) => typeof p === 'string')
+        .slice(0, 5000),
+    });
+  } catch (err) { next(err); }
+});
+
+// GET /api/immich/:id/folder?path=... — assets in one folder (not paginated
+// upstream; folder views are bounded by what fits in one directory)
+router.get('/:id/folder', loadInstance, async (req, res, next) => {
+  try {
+    const p = String(req.query.path || '');
+    if (!p || p.length > 1024 || p.includes('\0')) return res.status(400).json({ error: 'Invalid folder path' });
+    let upstream;
+    try {
+      upstream = await immichFetch(
+        `${req.immich.base_url}/api/view/folder?path=${encodeURIComponent(p)}`,
+        { headers: { 'x-api-key': req.immich.api_key } }
+      );
+    } catch {
+      return res.status(502).json({ error: 'Immich unreachable' });
+    }
+    if (upstream.status === 404) return res.status(404).json({ error: 'Folder not found' });
+    if (!upstream.ok) return res.status(502).json({ error: 'Immich unreachable' });
+    const assets = await upstream.json().catch(() => []);
+    res.json({ items: (Array.isArray(assets) ? assets : []).map(mapAsset), nextPage: null });
   } catch (err) { next(err); }
 });
 

@@ -7,26 +7,40 @@ import { esc, initials, avatarColorIndex, loadLeaflet } from './utils.js';
 import { icon } from './icons.js';
 import { emptyState, toast } from './components.js';
 import { pageRenderers } from './pages.js';
-import { state } from './app.js';
 
-// Whitelisted tile styles (mirrors server/routes/geo.js TILE_STYLES; the
-// switcher itself renders from GET /api/geo/styles so labels stay in sync).
-const VALID_STYLES = ['osm', 'light', 'dark', 'voyager', 'topo'];
-const DEFAULT_ATTRIBUTION = '&copy; OpenStreetMap';
+// CARTO basemaps only, theme-matched: light_all in light theme, dark_all in
+// dark theme (both proxied through /api/geo/tiles — see server/routes/geo.js).
+const VALID_STYLES = ['light', 'dark'];
+const DEFAULT_ATTRIBUTION = '&copy; OpenStreetMap &copy; CARTO';
 
 const tileUrl = (style) => `/api/geo/tiles/${encodeURIComponent(style)}/{z}/{x}/{y}.png`;
 
-/** Resolve the effective tile style: explicit user preference, else follow
- * the app theme (dark → 'dark' tiles, light → 'voyager'). */
+/** Resolve the tile style from the app theme: light → CARTO light_all,
+ * dark → CARTO dark_all. */
 export function resolveMapStyle() {
-  const saved = state.preferences?.map_style;
-  if (VALID_STYLES.includes(saved)) return saved;
   const theme = document.documentElement.getAttribute('data-theme');
-  return theme === 'light' ? 'voyager' : 'dark';
+  return theme === 'light' ? 'light' : 'dark';
+}
+
+// Live theme-follow: one observer watches <html data-theme> and re-styles
+// every live map. Maps whose containers left the DOM are pruned lazily.
+const liveMaps = new Set();
+let themeObserver = null;
+function ensureThemeObserver() {
+  if (themeObserver) return;
+  themeObserver = new MutationObserver(() => {
+    const styleId = resolveMapStyle();
+    for (const map of [...liveMaps]) {
+      const el = typeof map.getContainer === 'function' ? map.getContainer() : null;
+      if (!el || !el.isConnected) { liveMaps.delete(map); continue; }
+      setMapStyle(map, styleId);
+    }
+  });
+  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 }
 
 /**
- * Circular avatar pin (accent ring + tail) for contact markers. Replaces
+ * Square avatar pin (ink frame + tail) for contact markers. Replaces
  * L.Icon.Default, whose image path resolution breaks under the vendored
  * setup (renders as a missing-image placeholder). Initials render under the
  * photo <img>; the element keeps class 'av' so the document-level error
@@ -47,8 +61,9 @@ export function avatarPin(L, contact) {
  * Create a Leaflet map on `el` with the authenticated same-origin tile proxy.
  * Call after loadLeaflet() has resolved. Returns the L.Map instance.
  * opts: { center: [lat,lng], zoom, style, attribution, ...L.MapOptions }
- * style defaults to resolveMapStyle(); the active tile layer is kept on
- * map._kithTileLayer so callers can swap styles.
+ * style defaults to resolveMapStyle() (CARTO light/dark per app theme); the
+ * active tile layer is kept on map._kithTileLayer and swaps live when the
+ * theme changes.
  */
 export function createMap(el, opts = {}) {
   const L = window.L;
@@ -60,10 +75,13 @@ export function createMap(el, opts = {}) {
     attribution: attribution || DEFAULT_ATTRIBUTION,
   }).addTo(map);
   map._kithStyle = resolved;
+  liveMaps.add(map);
+  map.on('unload', () => liveMaps.delete(map)); // fired by L.Map#remove()
+  ensureThemeObserver();
   return map;
 }
 
-/** Swap the map's tile layer to another whitelisted style. */
+/** Swap the map's tile layer to another whitelisted CARTO style. */
 function setMapStyle(map, styleId, attribution) {
   const L = window.L;
   if (!VALID_STYLES.includes(styleId) || map._kithStyle === styleId) return;
@@ -75,12 +93,19 @@ function setMapStyle(map, styleId, attribution) {
   map._kithStyle = styleId;
 }
 
+// Strict coordinate check: null/undefined/'' coerce to 0 via Number(), which
+// would silently drop a pin at 0,0 in the Gulf of Guinea — reject them.
+function validCoords(lat, lng) {
+  if (lat == null || lng == null || lat === '' || lng === '') return false;
+  return Number.isFinite(Number(lat)) && Number.isFinite(Number(lng));
+}
+
 // Group pins whose cells (in degrees) collide at the given cell size.
 function clusterPins(pins, cell = 0.02) {
   const buckets = new Map();
   for (const p of pins) {
+    if (!validCoords(p.lat, p.lng)) continue;
     const lat = Number(p.lat), lng = Number(p.lng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
     const key = `${Math.round(lat / cell)}:${Math.round(lng / cell)}`;
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push({ ...p, lat, lng });
@@ -104,8 +129,8 @@ function cellForZoom(zoom) {
 function groupExactPins(pins, precision = 5) {
   const buckets = new Map();
   for (const p of pins) {
+    if (!validCoords(p.lat, p.lng)) continue;
     const lat = Number(p.lat), lng = Number(p.lng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
     const key = `${lat.toFixed(precision)}:${lng.toFixed(precision)}`;
     if (!buckets.has(key)) buckets.set(key, []);
     buckets.get(key).push({ ...p, lat, lng });
@@ -151,48 +176,7 @@ function clusterPopupHtml(group) {
   </div>`;
 }
 
-// ---------------------------------------------------------- style switcher
-/** Compact pill control, top-right over the map. Persists the choice as the
- * per-user 'map_style' preference (arbitrary keys are accepted by
- * PUT /api/preferences/:key — only KNOWN_PREFS values are constrained). */
-async function renderStyleSwitcher(el, map) {
-  const wrap = el.querySelector('.map-canvas-wrap');
-  if (!wrap) return;
-  let styles = [];
-  try {
-    styles = (await api.get('/api/geo/styles')).styles || [];
-  } catch { return; } // no switcher without the style list — map still works
-  if (!styles.length || !el.isConnected) return;
-
-  const host = document.createElement('div');
-  host.className = 'map-style-switcher';
-  host.setAttribute('role', 'group');
-  host.setAttribute('aria-label', 'Map style');
-  host.innerHTML = styles.map((s) => `
-    <button class="map-style-pill ${s.id === map._kithStyle ? 'active' : ''}"
-      data-style="${esc(s.id)}" data-attribution="${esc(s.attribution || '')}"
-      aria-pressed="${s.id === map._kithStyle ? 'true' : 'false'}">${esc(s.label || s.id)}</button>`).join('');
-  wrap.appendChild(host);
-
-  host.querySelectorAll('[data-style]').forEach((btn) =>
-    btn.addEventListener('click', async () => {
-      const styleId = btn.dataset.style;
-      if (styleId === map._kithStyle) return;
-      setMapStyle(map, styleId, btn.dataset.attribution || undefined);
-      host.querySelectorAll('[data-style]').forEach((b) => {
-        const on = b.dataset.style === styleId;
-        b.classList.toggle('active', on);
-        b.setAttribute('aria-pressed', on ? 'true' : 'false');
-      });
-      try {
-        await api.put('/api/preferences/map_style', { value: styleId, type: 'string' });
-        state.preferences.map_style = styleId;
-      } catch (err) {
-        toast(err.message || "Couldn't save the map style.", 'error');
-      }
-    }));
-}
-
+// ------------------------------------------------------------------- page
 async function renderMapPage(el) {
   el.innerHTML = `
   <div class="map-page">
@@ -219,7 +203,7 @@ async function renderMapPage(el) {
     return;
   }
 
-  const pins = (data.pins || []).filter((p) => Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng)));
+  const pins = (data.pins || []).filter((p) => validCoords(p.lat, p.lng));
   const canvas = el.querySelector('#map-canvas');
   if (!canvas) return; // user navigated away mid-load
 
@@ -230,7 +214,6 @@ async function renderMapPage(el) {
 
   canvas.innerHTML = '';
   const map = createMap(canvas, { center: [20, 0], zoom: 2 });
-  renderStyleSwitcher(el, map);
 
   // Zoom-adaptive clustering: nearby pins (e.g. two people in one city plus
   // one in the town next door) collapse into a numbered badge instead of
@@ -293,7 +276,7 @@ async function renderMapPage(el) {
     input.disabled = true;
     try {
       const res = await api.get('/api/geo/search' + qs({ q }));
-      if (res && Number.isFinite(Number(res.lat)) && Number.isFinite(Number(res.lng))) {
+      if (res && validCoords(res.lat, res.lng)) {
         map.flyTo([Number(res.lat), Number(res.lng)], 12, { duration: 1.2 });
         if (res.label) {
           L.popup({ maxWidth: 260 })

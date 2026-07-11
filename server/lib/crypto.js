@@ -52,8 +52,10 @@ function encryptField(plaintext) {
 /**
  * Decrypt an encoded token back to plaintext.
  * null/undefined/'' pass through. Throws on tamper/wrong key.
- * If the value does not look like a valid token (e.g. legacy cleartext),
- * it is returned as-is — makes reads resilient during transitions.
+ * Lenient passthrough applies ONLY to values that do not parse as a versioned
+ * envelope (legacy cleartext during transitions). Once the version byte and
+ * lengths validate as one of our envelopes, an auth-tag failure THROWS —
+ * silently returning raw ciphertext would defeat GCM's tamper detection.
  */
 function decryptField(token) {
   if (token === null || token === undefined || token === '') return token;
@@ -70,14 +72,9 @@ function decryptField(token) {
   const iv = buf.subarray(1, 1 + IV_LENGTH);
   const tag = buf.subarray(1 + IV_LENGTH, 1 + IV_LENGTH + TAG_LENGTH);
   const ct = buf.subarray(1 + IV_LENGTH + TAG_LENGTH);
-  try {
-    const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
-    decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
-  } catch {
-    // Not one of ours (legacy cleartext that happened to be base64) — return raw.
-    return token;
-  }
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(ct), decipher.final()]).toString('utf8');
 }
 
 /** True if the value parses as one of our encrypted tokens. */

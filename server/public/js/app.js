@@ -51,8 +51,16 @@ function parseRoute() {
 }
 
 async function onRouteChange() {
+  const prev = state.route;
   state.route = parseRoute();
-  const render = () => renderCurrentPage();
+  // Reset scroll on navigation to a different page/record — otherwise the new
+  // page renders at the old page's scroll offset. (Simple version: any route
+  // change resets; same-route param tweaks like filters keep their position.)
+  const routeChanged = !prev || prev.page !== state.route.page || prev.params.id !== state.route.params.id;
+  const render = () => {
+    renderCurrentPage();
+    if (routeChanged) document.getElementById('page')?.scrollTo(0, 0);
+  };
   if (document.startViewTransition && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
     const t = document.startViewTransition(render);
     t.finished.catch(() => {}); // skipped transitions are fine
@@ -102,6 +110,8 @@ export async function setSpicyActive(active, { skipPin = false } = {}) {
   try {
     await api.put('/api/preferences/spicy_visible', { value: active, type: 'boolean' });
     state.preferences.spicy_visible = active;
+    // server stamps spicy_activated_at on enable; mirror it locally
+    if (active) state.preferences.spicy_activated_at = Date.now();
   } catch (err) {
     // revert the optimistic UI
     state.spicyActive = prevActive;
@@ -772,7 +782,18 @@ async function loadContext() {
   state.preferences = prefsData.preferences || {};
   state.spicyEnabled = Boolean(state.settings.spicy_enabled);
   // Session spicy state restores from preference only when no PIN is required.
+  // The server enforces the auto-disable window (GET /api/preferences flips
+  // spicy_visible off when expired), so a stale true can't survive a reload.
   state.spicyActive = state.spicyEnabled && !state.settings.spicy_require_pin && Boolean(state.preferences.spicy_visible);
+  // Restored active session: re-arm the client timer for the REMAINING window
+  // so an open tab still flips off on time (the timer is lost on reload).
+  const mins = Number(state.settings.spicy_auto_disable_minutes || 0);
+  if (state.spicyActive && mins > 0) {
+    const activatedAt = Number(state.preferences.spicy_activated_at) || Date.now();
+    const remaining = Math.max(0, activatedAt + mins * 60 * 1000 - Date.now());
+    clearTimeout(state.spicyTimer);
+    state.spicyTimer = setTimeout(() => setSpicyActive(false), remaining);
+  }
   // With a PIN required the flame starts OFF — but the server-side preference
   // may still be true from last session, which would leak spicy content in
   // server-filtered responses. Sync it back to false before rendering.
@@ -802,11 +823,36 @@ async function start() {
   window.dispatchEvent(new CustomEvent('kith:shell-ready'));
 }
 
+// ------------------------------------------------------------ SW updates
+/** "Update available — Reload" banner (The Record style). Clicking Reload
+ * tells the waiting worker to skipWaiting; controllerchange then reloads.
+ * Dismiss (or no interaction) leaves the new worker waiting — it activates
+ * on the next natural full load once all tabs are closed. */
+function showUpdateBanner(registration) {
+  if (document.getElementById('sw-update-banner')) return;
+  const bar = document.createElement('div');
+  bar.id = 'sw-update-banner';
+  bar.className = 'update-banner';
+  bar.setAttribute('role', 'status');
+  bar.innerHTML = `
+    <span class="update-banner-text">A new version of Kith is ready.</span>
+    <button class="btn btn-primary btn-sm" data-action="sw-reload">Reload</button>
+    <button class="btn btn-icon" data-action="sw-dismiss" aria-label="Dismiss">${icon('x')}</button>`;
+  document.body.appendChild(bar);
+  bar.querySelector('[data-action="sw-reload"]').addEventListener('click', () => {
+    bar.querySelector('[data-action="sw-reload"]').disabled = true;
+    registration.waiting?.postMessage({ type: 'SKIP_WAITING' });
+  });
+  bar.querySelector('[data-action="sw-dismiss"]').addEventListener('click', () => bar.remove());
+}
+
 async function boot() {
   // PWA service worker — HTTPS only (plain-HTTP dev skips it to avoid cache
-  // hell) and never allowed to break the app. When a NEW worker takes control
-  // (deploy), reload once so users see the fresh assets without a manual
-  // cache clear. The flag guards against reload loops.
+  // hell) and never allowed to break the app. When a NEW worker is installed
+  // (deploy), it WAITS; we surface an "Update available — Reload" banner and
+  // only activate + reload on user consent, so open forms are never wiped
+  // mid-session. Without interaction the update applies on the next natural
+  // load after all tabs close. The flag guards against reload loops.
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     try {
       let swReloaded = false;
@@ -818,7 +864,17 @@ async function boot() {
         swReloaded = true;
         location.reload();
       });
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.register('/sw.js').then((reg) => {
+        if (!reg) return;
+        // a worker is already waiting from a previous visit
+        if (reg.waiting && navigator.serviceWorker.controller) showUpdateBanner(reg);
+        reg.addEventListener('updatefound', () => {
+          const nw = reg.installing;
+          nw?.addEventListener('statechange', () => {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller) showUpdateBanner(reg);
+          });
+        });
+      }).catch(() => {});
     } catch { /* never fatal */ }
   }
   try {

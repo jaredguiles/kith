@@ -195,14 +195,95 @@ function geocodeLocal(text) {
 }
 
 /**
- * Remote geocode via a self-hosted Photon instance (env PHOTON_URL).
- * Returns {lat, lng, label, source:'photon'} or null. 3s timeout; never throws.
+ * Does a Photon feature satisfy a free-typed qualifier ("MI", "Michigan",
+ * "Germany", "US")? Photon returns FULL state names ("Michigan") while users
+ * type USPS-style abbreviations ("MI") — resolve via the admin1 index.
+ *
+ * BUGFIX (Gowen, MI → Mississippi): geocodeRemote used to take Photon's
+ * features[0] blindly. Photon's free-text ranking treats "MI" as a fuzzy
+ * token, so a "City, ST" query could rank a same-named place in another
+ * state first (and the wrong hit then stuck forever in geo_cache). Every
+ * remote candidate is now validated against the typed qualifiers.
  */
-async function geocodeRemote(text) {
+function remoteQualifierMatches(props, qualifier) {
+  // "MI 49326" — free-typed state+ZIP in one comma segment: match on the
+  // non-numeric part ("MI"); a pure-ZIP segment is treated as always-true
+  // (Photon itself matched the postcode).
+  const zipless = String(qualifier).replace(/\b\d{3,10}(-\d+)?\b/g, ' ').trim();
+  if (zipless !== String(qualifier).trim()) {
+    return zipless ? remoteQualifierMatches(props, zipless) : true;
+  }
+  const q = norm(qualifier);
+  if (!q) return true;
+  load(); // admin1 index resolves state abbreviations
+  const upper = String(qualifier).trim().toUpperCase();
+  const cc = String(props.countrycode || '').toUpperCase();
+  // country: ISO code or common English name
+  if (upper.length === 2 && cc === upper) return true;
+  if (COUNTRY_NAMES[q] && COUNTRY_NAMES[q] === cc) return true;
+  if (props.country && norm(props.country) === q) return true;
+  // state / admin1: full name, or abbreviation resolved through admin1.tsv
+  // (Photon is inconsistent — `state` may be "Michigan" OR "MI")
+  if (props.state && norm(props.state) === q) return true;
+  if (upper.length === 2 && props.state) {
+    const code = admin1ByName.get(`${cc.toLowerCase()}|${norm(props.state)}`);
+    if (code && code.toUpperCase() === upper) return true;
+  }
+  if (props.state && props.state.length === 2) {
+    const qCode = admin1ByName.get(`${cc.toLowerCase()}|${q}`);
+    if (qCode && qCode.toUpperCase() === props.state.toUpperCase()) return true;
+  }
+  // looser containers (qualifier was a county, the enclosing city, or —
+  // for street-level hits inside a hamlet — Photon's `district`)
+  if (props.county && norm(props.county) === q) return true;
+  if (props.city && norm(props.city) === q) return true;
+  if (props.district && norm(props.district) === q) return true;
+  return false;
+}
+
+/** Photon feature → normalized candidate {label, name, city, state, country,
+ * countrycode, lat, lng, type, source} or null when malformed. */
+function photonCandidate(feat) {
+  if (!feat || !feat.geometry || !Array.isArray(feat.geometry.coordinates)) return null;
+  const [lng, lat] = feat.geometry.coordinates.map(Number);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const p = feat.properties || {};
+  const label = [p.name, p.city, p.state, p.country]
+    .filter((v, i, a) => v && a.indexOf(v) === i)
+    .join(', ');
+  if (!label) return null;
+  return {
+    label: label.slice(0, 255),
+    name: p.name || null,
+    city: p.city || (p.osm_key === 'place' ? p.name : null) || null,
+    state: p.state || null,
+    country: p.country || null,
+    countrycode: p.countrycode || null,
+    lat, lng,
+    type: p.osm_value || p.type || null,
+    source: 'photon',
+  };
+}
+
+// place-ish OSM values a human means when typing "City, ST"
+const PLACE_VALUES = new Set(['city', 'town', 'village', 'hamlet', 'borough',
+  'suburb', 'district', 'municipality', 'locality', 'county', 'state', 'country']);
+
+/**
+ * Multi-candidate remote suggest via self-hosted Photon (env PHOTON_URL).
+ * Candidates are scored: qualifier match (state/country the user typed)
+ * dominates, then place-type over street/POI, then exact name match.
+ * Each candidate carries `matchesQuery` = satisfied EVERY typed qualifier.
+ * Returns [] on timeout/network/bad JSON — remote is best-effort.
+ */
+async function remoteSuggest(text, limit = 8) {
   const base = process.env.PHOTON_URL;
-  if (!base || !text) return null;
+  if (!base || !text) return [];
+  const segments = String(text).split(',').map((s) => s.trim()).filter(Boolean);
+  const qualifiers = segments.slice(1, 3);
+  let feats;
   try {
-    const url = `${base.replace(/\/+$/, '')}/api?q=${encodeURIComponent(text)}&limit=1`;
+    const url = `${base.replace(/\/+$/, '')}/api?q=${encodeURIComponent(text)}&limit=${Math.max(Number(limit) || 8, 10)}`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3000);
     let resp;
@@ -211,24 +292,124 @@ async function geocodeRemote(text) {
     } finally {
       clearTimeout(timer);
     }
-    if (!resp.ok) return null;
+    if (!resp.ok) return [];
     const geo = await resp.json();
-    const feat = geo && Array.isArray(geo.features) ? geo.features[0] : null;
-    if (!feat || !feat.geometry || !Array.isArray(feat.geometry.coordinates)) return null;
-    const [lng, lat] = feat.geometry.coordinates.map(Number);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-    const p = feat.properties || {};
-    const label = [p.name, p.city, p.state, p.country]
-      .filter((v, i, a) => v && a.indexOf(v) === i)
-      .join(', ') || text;
-    return { lat, lng, label: label.slice(0, 255), source: 'photon' };
+    feats = geo && Array.isArray(geo.features) ? geo.features : [];
   } catch {
-    return null; // timeout / network / bad JSON — remote is best-effort
+    return [];
   }
+  const scored = [];
+  for (let i = 0; i < feats.length; i++) {
+    const p = feats[i].properties || {};
+    const cand = photonCandidate(feats[i]);
+    if (!cand) continue;
+    const matched = qualifiers.filter((q) => remoteQualifierMatches(p, q)).length;
+    cand.matchesQuery = matched === qualifiers.length;
+    let score = matched * 100;
+    if (p.osm_key === 'place' || p.osm_key === 'boundary') score += 20;
+    if (PLACE_VALUES.has(String(p.osm_value))) score += 10;
+    if (segments[0] && norm(p.name) === norm(segments[0])) score += 5;
+    scored.push({ score, i, cand });
+  }
+  scored.sort((a, b) => b.score - a.score || a.i - b.i); // stable: Photon order on ties
+  return scored.slice(0, limit).map((s) => s.cand);
 }
 
+/**
+ * Remote geocode via a self-hosted Photon instance (env PHOTON_URL).
+ * Returns {lat, lng, label, source:'photon'} or null. 3s timeout; never throws.
+ * When the query carries qualifiers ("City, ST" / "City, Country") only a
+ * candidate matching ALL of them is accepted — no match → null (callers fall
+ * back to the local index or leave the text un-pinned) rather than guessing.
+ */
+async function geocodeRemote(text) {
+  const list = await remoteSuggest(text, 10);
+  if (!list.length) return null;
+  const hasQualifiers = String(text).split(',').map((s) => s.trim()).filter(Boolean).length > 1;
+  const best = hasQualifiers ? list.find((c) => c.matchesQuery) : list[0];
+  if (!best) return null;
+  return { lat: best.lat, lng: best.lng, label: best.label, source: 'photon' };
+}
+
+/**
+ * Local multi-candidate suggest: prefix search over the geonames city index.
+ * "gow" → cities starting with "gow"; qualifiers filter like geocodeLocal.
+ * Returns candidates shaped like remoteSuggest's, source 'geonames'.
+ */
+function localSuggest(text, limit = 8) {
+  if (!text || typeof text !== 'string') return [];
+  load();
+  const segments = text.split(',').map((s) => s.trim()).filter(Boolean);
+  const prefix = norm(segments[0] || '');
+  if (!prefix) return [];
+  const qualifiers = segments.slice(1, 3);
+  const seen = new Set(); // same city object is indexed under name + asciiname
+  let matches = [];
+  for (const [key, arr] of cityIndex) {
+    if (!key.startsWith(prefix)) continue;
+    for (const c of arr) {
+      if (seen.has(c)) continue;
+      seen.add(c);
+      matches.push(c);
+    }
+  }
+  for (const qual of qualifiers) {
+    const next = matches.filter((c) => qualifierMatches(c, qual));
+    if (next.length > 0) matches = next;
+  }
+  matches.sort((a, b) => b.pop - a.pop);
+  return matches.slice(0, limit).map((c) => {
+    const admin = admin1ByCode.get(`${c.cc}.${c.admin1}`);
+    return {
+      label: cityLabel(c),
+      name: c.name,
+      city: c.name,
+      state: (admin && admin.name) || null,
+      country: c.cc,
+      countrycode: c.cc,
+      lat: c.lat,
+      lng: c.lng,
+      type: 'city',
+      source: 'geonames',
+      matchesQuery: true,
+    };
+  });
+}
+
+/**
+ * Combined suggest for typeahead UIs (GET /api/geo/suggest): local geonames
+ * prefix matches first (exact qualifier semantics, offline), then remote
+ * Photon candidates (covers small places like hamlets that the trimmed
+ * cities5000 extract lacks). Deduped by normalized label, capped at `limit`.
+ */
+async function suggest(text, limit = 8) {
+  const cap = Math.max(1, Math.min(Number(limit) || 8, 15));
+  const local = localSuggest(text, cap);
+  const remote = await remoteSuggest(text, cap);
+  const out = [];
+  const seen = new Set();
+  for (const cand of [...local, ...remote]) {
+    // dedupe on name|state|country-code — label text differs between sources
+    // ('Portland, Oregon, US' vs 'Portland, Oregon, United States')
+    const key = cand.city || cand.name
+      ? `${norm(cand.city || cand.name)}|${norm(cand.state)}|${String(cand.countrycode || '').toUpperCase()}`
+      : norm(cand.label);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(cand);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+// Cache-key version: bumped to v2 when remote ranking learned qualifier
+// validation — pre-v2 geo_cache rows may hold mis-ranked hits (e.g. the
+// "Gowen, MI" → Mississippi pin) and must never be served again. Old rows
+// are simply orphaned; the next lookup re-geocodes and re-caches under v2.
+const CACHE_VERSION = 'v2|';
+
 function queryHash(text) {
-  return crypto.createHash('sha256').update(norm(text)).digest('hex');
+  return crypto.createHash('sha256').update(CACHE_VERSION + norm(text)).digest('hex');
 }
 
 /**
@@ -285,4 +466,4 @@ async function geocode(text) {
   return result;
 }
 
-module.exports = { geocode, geocodeLocal, geocodeRemote, queryHash, looksCityLevel };
+module.exports = { geocode, geocodeLocal, geocodeRemote, queryHash, looksCityLevel, suggest, localSuggest, remoteSuggest };

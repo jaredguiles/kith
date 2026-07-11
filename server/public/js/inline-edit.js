@@ -6,17 +6,31 @@
 //     (bind to a freshly-created container — NOT a persistent node — so
 //     listeners don't stack across re-renders).
 //
-// A def: { type: 'text'|'date'|'number'|'textarea'|'select'|'name'|'langs',
+// A def: { type: 'text'|'date'|'number'|'textarea'|'select'|'select-other'|
+//                'address'|'name'|'langs',
 //          label, value, options?, values? (name only) }
+//   - 'select-other': curated <select> + an "Other…" free-text reveal, so
+//     arbitrary stored values are never lost (components.js selectWithOther).
+//   - 'address': place typeahead against /api/geo/suggest — picking a
+//     candidate commits immediately (components.js addressAutocomplete).
 //
 // Saves are per-field (sparse PUT): the binder builds { field: value } (or the
 // first/middle/last trio for 'name'), shows a spinner while `save(payload)`
 // runs, flashes a check, then calls onSaved(). Errors toast and revert.
+//
+// Keyboard flow: while an editor is open, Tab COMMITS the field and opens the
+// editor for the next .ie-field in DOM order (Shift+Tab: previous); Enter
+// commits and, after the re-render, restores focus to the same field so a
+// following Tab lands on the next one. Multi-input editors (name) keep native
+// Tab between their own inputs and only hand off from the edge input.
 // CSP-safe: no inline handlers; esc() on every interpolated value.
 
 import { esc } from './utils.js';
 import { icon } from './icons.js';
-import { toast } from './components.js';
+import {
+  toast, selectWithOtherHtml, bindSelectWithOther, OTHER_SENTINEL,
+  addressAutocompleteHtml, bindAddressAutocomplete,
+} from './components.js';
 
 export const LANGUAGE_OPTIONS = [
   'English', 'Spanish', 'Mandarin', 'Hindi', 'French', 'Arabic', 'Portuguese',
@@ -37,13 +51,33 @@ export function ieSpan(field, def, displayValue, editMode) {
 }
 
 // ------------------------------------------------------------ the binder
+// Cross-render handoff for the Tab-to-next-field flow: a save triggers a full
+// re-render (onSaved), destroying the "next" element — so the field NAME to
+// open (or just focus) is parked here and consumed by the next bind call.
+let pendingOpenField = null;
+let pendingFocusField = null;
+
 export function bindInlineEditor(root, { defs, save, onSaved }) {
+  // Visible editable fields in DOM order (top-to-bottom Tab order).
+  const fields = () => [...root.querySelectorAll('.ie-field')]
+    .filter((f) => f.offsetParent !== null);
+  const sibling = (fieldEl, dir) => {
+    const all = fields();
+    const i = all.indexOf(fieldEl);
+    return i === -1 ? null : (all[i + dir] || null);
+  };
   const open = (fieldEl) => {
-    if (fieldEl.classList.contains('ie-editing') || fieldEl.classList.contains('ie-busy-state')) return;
+    if (!fieldEl || fieldEl.classList.contains('ie-editing') || fieldEl.classList.contains('ie-busy-state')) return;
     const def = defs[fieldEl.dataset.ie];
     if (!def) return;
     if (def.type === 'langs') openLangEditor(fieldEl, def, { save, onSaved });
-    else openEditor(fieldEl, def, { save, onSaved });
+    else openEditor(fieldEl, def, { save, onSaved }, nav);
+  };
+  const nav = {
+    sibling,
+    open,
+    setPendingOpen: (f) => { pendingOpenField = f; },
+    setPendingFocus: (f) => { pendingFocusField = f; },
   };
   root.addEventListener('click', (e) => {
     const f = e.target.closest('.ie-field');
@@ -58,6 +92,20 @@ export function bindInlineEditor(root, { defs, save, onSaved }) {
       open(e.target);
     }
   });
+
+  // Consume a parked handoff from the previous render (Tab-commit → open
+  // next; Enter-commit → refocus same field so the NEXT Tab moves on).
+  if (pendingOpenField) {
+    const name = pendingOpenField;
+    pendingOpenField = null;
+    const f = root.querySelector(`.ie-field[data-ie="${CSS.escape(name)}"]`);
+    if (f) setTimeout(() => open(f), 0);
+  } else if (pendingFocusField) {
+    const name = pendingFocusField;
+    pendingFocusField = null;
+    const f = root.querySelector(`.ie-field[data-ie="${CSS.escape(name)}"]`);
+    if (f) setTimeout(() => f.focus(), 0);
+  }
 }
 
 function editorInputHtml(def) {
@@ -77,6 +125,19 @@ function editorInputHtml(def) {
     }).join('');
     return `<select class="form-select ie-input" aria-label="${esc(def.label)}">${opts}</select>`;
   }
+  if (def.type === 'select-other') {
+    // curated list + "Other…" free text; hidden input carries the value
+    return selectWithOtherHtml('__ie_so', def.options || [], def.value ?? '', { label: def.label });
+  }
+  if (def.type === 'address') {
+    // place typeahead (city/state/country) — picking a candidate commits;
+    // pre-filled with the current text so re-verifying is one interaction
+    return addressAutocompleteHtml('__ie_addr', def.value ?? '', {
+      placeholder: def.placeholder || 'Start typing a city…',
+      inputClass: 'ie-input',
+      attrs: `aria-label="${esc(def.label)}"`,
+    });
+  }
   if (def.type === 'textarea') {
     return `<textarea class="form-textarea ie-input" rows="3" aria-label="${esc(def.label)}" placeholder="${esc(def.label)} — Enter saves, Shift+Enter for a new line">${esc(def.value ?? '')}</textarea>`;
   }
@@ -85,13 +146,15 @@ function editorInputHtml(def) {
   return `<input class="form-input ie-input" type="${type}" ${extra} value="${esc(def.value ?? '')}" placeholder="${esc(def.placeholder || def.label)}" aria-label="${esc(def.label)}" autocomplete="off">`;
 }
 
-function openEditor(fieldEl, def, { save, onSaved }) {
+function openEditor(fieldEl, def, { save, onSaved }, nav = null) {
   const original = fieldEl.innerHTML;
   fieldEl.classList.add('ie-editing');
   fieldEl.innerHTML = editorInputHtml(def);
-  const first = fieldEl.querySelector('.ie-input');
+  if (def.type === 'select-other') bindSelectWithOther(fieldEl);
+  if (def.type === 'address') bindAddressAutocomplete(fieldEl);
+  const first = fieldEl.querySelector(def.type === 'select-other' ? 'select' : '.ie-input, select, input');
   first?.focus();
-  if (first && first.select && def.type !== 'select' && def.type !== 'date') { try { first.select(); } catch { /* not selectable */ } }
+  if (first && first.select && !['select', 'select-other', 'date'].includes(def.type)) { try { first.select(); } catch { /* not selectable */ } }
 
   let done = false;
   const readPayload = () => {
@@ -99,6 +162,10 @@ function openEditor(fieldEl, def, { save, onSaved }) {
       const out = {};
       fieldEl.querySelectorAll('[data-ie-part]').forEach((i) => { out[i.dataset.iePart] = i.value.trim() || null; });
       return out;
+    }
+    if (def.type === 'select-other') {
+      const v = fieldEl.querySelector('[data-select-other] input[type="hidden"]').value.trim();
+      return { [fieldEl.dataset.ie]: v === '' ? null : v };
     }
     const v = fieldEl.querySelector('.ie-input').value;
     const t = typeof v === 'string' ? v.trim() : v;
@@ -120,22 +187,68 @@ function openEditor(fieldEl, def, { save, onSaved }) {
     fieldEl.innerHTML = original;
     fieldEl.focus();
   };
-  const commit = () => {
+  // after: null = stay (refocus this field post-render), or the data-ie name
+  // of a field to auto-open once the re-render lands
+  const commit = (after = undefined) => {
     if (done) return;
-    if (!changed()) { cancel(); return; }
+    if (!changed()) {
+      cancel();
+      if (after && nav) { const n = fieldEl.ownerDocument.querySelector(`.ie-field[data-ie="${CSS.escape(after)}"]`); nav.open(n); }
+      return;
+    }
     done = true;
+    if (nav) {
+      if (after) nav.setPendingOpen(after);
+      else if (after === null) nav.setPendingFocus(fieldEl.dataset.ie);
+    }
     runSave(fieldEl, original, readPayload(), { save, onSaved });
   };
 
   fieldEl.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { e.stopPropagation(); cancel(); }
-    else if (e.key === 'Enter' && !(def.type === 'textarea' && e.shiftKey)) { e.preventDefault(); commit(); }
+    else if (e.key === 'Enter' && !(def.type === 'textarea' && e.shiftKey)) {
+      e.preventDefault();
+      commit(null); // save → refocus this field so the next Tab moves on
+    } else if (e.key === 'Tab' && nav) {
+      // Tab commits + opens the neighbor editor (Shift+Tab: previous).
+      // The name row keeps native Tab between its three inputs and only
+      // hands off at the edges. The select-other free-text reveal keeps
+      // native Tab select → text.
+      if (def.type === 'name') {
+        const parts = [...fieldEl.querySelectorAll('[data-ie-part]')];
+        const i = parts.indexOf(e.target);
+        const atEdge = e.shiftKey ? i === 0 : i === parts.length - 1;
+        if (!atEdge) return;
+      }
+      if (def.type === 'select-other') {
+        if (!e.shiftKey && e.target.matches('[data-so-select]') && e.target.value === OTHER_SENTINEL) return;
+        if (e.shiftKey && e.target.matches('[data-so-text]')) return; // back to its own select
+      }
+      e.preventDefault();
+      const next = nav.sibling(fieldEl, e.shiftKey ? -1 : 1);
+      if (next) commit(next.dataset.ie);
+      else commit(null);
+    }
   });
   if (def.type === 'select') {
-    fieldEl.querySelector('select').addEventListener('change', commit);
+    fieldEl.querySelector('select').addEventListener('change', () => commit(null));
+  }
+  if (def.type === 'select-other') {
+    // curated pick commits immediately (matches plain selects); choosing
+    // "Other…" instead reveals the free-text input and waits for Enter/blur
+    fieldEl.querySelector('[data-so-select]').addEventListener('change', (e) => {
+      if (e.target.value !== OTHER_SENTINEL) commit(null);
+    });
+  }
+  if (def.type === 'address') {
+    // picking a candidate is an explicit confirmation — commit right away
+    fieldEl.querySelector('[data-addr-ac] input').addEventListener('change', () => {
+      const wrap = fieldEl.querySelector('[data-addr-ac]');
+      if (wrap?.dataset.verified === '1') commit(null);
+    });
   }
   fieldEl.addEventListener('focusout', () => {
-    // defer: focus may be moving between the name row's inputs
+    // defer: focus may be moving between the editor's own inputs
     setTimeout(() => { if (!done && !fieldEl.contains(document.activeElement)) commit(); }, 0);
   });
 }
@@ -153,6 +266,10 @@ async function runSave(fieldEl, originalHtml, payload, { save, onSaved }) {
     toast(err?.message || "Couldn't save.", 'error');
     fieldEl.classList.remove('ie-busy-state');
     fieldEl.innerHTML = originalHtml;
+    // failed save → no re-render happens; don't leave a Tab-handoff parked
+    // that would fire on some unrelated later render
+    pendingOpenField = null;
+    pendingFocusField = null;
   }
 }
 

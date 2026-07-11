@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const { pipeline } = require('node:stream/promises');
 const { query } = require('../database/connection');
 const { requireAuth, isAdmin } = require('../middleware/auth');
-const { geocode, queryHash } = require('../lib/geo');
+const { geocode, queryHash, suggest } = require('../lib/geo');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -24,6 +24,22 @@ router.get('/search', async (req, res, next) => {
     const result = await geocode(q);
     if (!result) return res.status(404).json({ error: 'No match' });
     res.json(result);
+  } catch (err) { next(err); }
+});
+
+// ----------------------------------------------------------------- suggest
+// GET /api/geo/suggest?q=&limit=  →  { candidates: [{ label, name, city,
+//   state, country, countrycode, lat, lng, type, source }] }
+// Typeahead backend for the addressAutocomplete component (components.js):
+// local geonames prefix matches first, then self-hosted Photon candidates.
+// Always 200 — an empty candidate list is a normal answer, not an error.
+router.get('/suggest', async (req, res, next) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) return res.status(400).json({ error: 'q is required' });
+    if (q.length > 500) return res.status(400).json({ error: 'q too long' });
+    const limit = Math.max(1, Math.min(Number(req.query.limit) || 8, 15));
+    res.json({ candidates: await suggest(q, limit) });
   } catch (err) { next(err); }
 });
 

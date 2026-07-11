@@ -5,7 +5,7 @@ import { esc, fmtDate, initials, timeAgo, debounce } from './utils.js';
 import { icon } from './icons.js';
 import {
   emptyState, modalShell, formGroup, selectInput, toast, openModal,
-  confirmModal,
+  confirmModal, withBusy,
 } from './components.js';
 import { pageRenderers } from './pages.js';
 import { state, navigate, isSpicyOn, refreshSidebarLists, refreshNotifCount } from './app.js';
@@ -25,6 +25,35 @@ const PLATFORM_LABELS = {
   facebook: 'Facebook', instagram: 'Instagram', twitter: 'Twitter/X', gedcom: 'GEDCOM',
 };
 
+// ---------------------------------------------------------- upload helper
+/** POST a FormData via XMLHttpRequest so upload progress is observable
+ * (fetch can't report request-body progress). Auth rides on the httpOnly
+ * session cookie (same-origin). Resolves parsed JSON, rejects Error with
+ * .status like api.js. */
+function uploadWithProgress(url, form, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.withCredentials = true;
+    xhr.responseType = 'json';
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) onProgress?.(e.loaded, e.total);
+    });
+    xhr.addEventListener('load', () => {
+      const data = xhr.response;
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else {
+        const err = new Error(data?.error || `Upload failed (${xhr.status})`);
+        err.status = xhr.status;
+        reject(err);
+      }
+    });
+    xhr.addEventListener('error', () => reject(new Error('Upload failed — check your connection.')));
+    xhr.addEventListener('abort', () => reject(new Error('Upload cancelled.')));
+    xhr.send(form);
+  });
+}
+
 // ------------------------------------------------------------ upload modal
 export function openImportModal(preselect = 'vcard') {
   const initial = PLATFORMS.find((p) => p.value === preselect) || PLATFORMS[0];
@@ -36,6 +65,13 @@ export function openImportModal(preselect = 'vcard') {
       <input type="file" id="import-files" class="form-input" multiple accept=".zip,.vcf,.vcard,.csv,.json,.ged" style="padding:12px">
     </div>
     <div id="csv-mapping" class="hidden"></div>
+    <div id="upload-progress" class="hidden" aria-live="polite">
+      <div class="flex-between mb-1">
+        <span class="uppercase-label">Uploading</span>
+        <span class="rec-mono" id="upload-progress-pct">0%</span>
+      </div>
+      <div class="iw-bar"><div class="iw-bar-fill" id="upload-progress-fill" style="width:0%"></div></div>
+    </div>
     ${isSpicyOn() ? `
     <div class="toggle-row">
       <div><div class="toggle-label">Treat this import as spicy</div><div class="toggle-desc">Imported contacts, messages, and media get the spicy flag.</div></div>
@@ -91,7 +127,8 @@ export function openImportModal(preselect = 'vcard') {
         } catch (err) { toast(err.message, 'error'); }
       });
 
-      overlay.querySelector('[data-action="start-import"]').addEventListener('click', async () => {
+      const startBtn = overlay.querySelector('[data-action="start-import"]');
+      startBtn.addEventListener('click', withBusy(startBtn, async () => {
         if (!filesInput.files.length) { toast('Pick at least one file.', 'error'); return; }
         const form = new FormData();
         for (const f of filesInput.files) form.append('files', f);
@@ -99,13 +136,27 @@ export function openImportModal(preselect = 'vcard') {
         const spicyToggle = overlay.querySelector('[data-toggle="is_spicy_source"]');
         if (spicyToggle?.classList.contains('on')) form.append('is_spicy_source', 'true');
         if (platformSel.value === 'csv' && csvMapping) form.append('column_mapping', JSON.stringify(csvMapping));
+        // XHR (not fetch) so a multi-GB zip shows real upload progress
+        const progWrap = overlay.querySelector('#upload-progress');
+        const progFill = overlay.querySelector('#upload-progress-fill');
+        const progPct = overlay.querySelector('#upload-progress-pct');
+        progWrap.classList.remove('hidden');
         try {
-          await api.post('/api/import/upload', form);
+          await uploadWithProgress('/api/import/upload', form, (loaded, total) => {
+            const pct = Math.min(100, Math.round((loaded / total) * 100));
+            progFill.style.width = `${pct}%`;
+            progPct.textContent = `${pct}%`;
+          });
           toast('Import started. Processing in the background.');
           close();
           pollImportWidget(true);
-        } catch (err) { toast(err.message, 'error'); }
-      });
+        } catch (err) {
+          progWrap.classList.add('hidden');
+          progFill.style.width = '0%';
+          progPct.textContent = '0%';
+          toast(err.message, 'error');
+        }
+      }));
     },
   });
 }
@@ -336,7 +387,9 @@ function openMergeTargetPicker(stagingId, onDone) {
       input.addEventListener('input', debounce(async () => {
         const q = input.value.trim();
         if (!q) { results.innerHTML = ''; return; }
-        const found = await api.get('/api/contacts' + qs({ search: q, limit: 8 }));
+        let found;
+        try { found = await api.get('/api/contacts' + qs({ search: q, limit: 8 })); }
+        catch { return; } // transient search failure — keep last results
         results.innerHTML = (found.contacts || [])
           .map((c) => `<button class="popover-item w-full" data-pick="${c.id}"><span class="av sm" style="width:24px;height:24px;font-size:10px">${esc(initials(c.display_name))}</span>${esc(c.display_name)}</button>`)
           .join('') || '<div class="text-sm text-muted p-2">No matches.</div>';

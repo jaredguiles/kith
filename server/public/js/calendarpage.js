@@ -96,8 +96,16 @@ function openDayModal(year, month, day, chips) {
     a.addEventListener('click', () => close()));
 }
 
-async function renderCalendarPage(el) {
-  if (!current) current = monthKey(new Date());
+async function renderCalendarPage(el, params = {}) {
+  // Month is URL-authoritative: #/calendar?m=YYYY-MM (deep-linkable/restorable).
+  if (params.m && /^\d{4}-(0[1-9]|1[0-2])$/.test(params.m)) current = params.m;
+  else if (!current) current = monthKey(new Date());
+  // Keep the hash in sync without triggering a re-render (replaceState
+  // doesn't fire hashchange) so reload/back restores this month.
+  const wantedHash = `#/calendar?m=${current}${params.event ? `&event=${encodeURIComponent(params.event)}` : ''}`;
+  if (location.hash.startsWith('#/calendar') && location.hash !== wantedHash) {
+    history.replaceState(null, '', wantedHash);
+  }
   const [year, monthNum] = current.split('-').map(Number);
   const month = monthNum - 1;
 
@@ -118,9 +126,12 @@ async function renderCalendarPage(el) {
     </div>
   </div>`;
 
-  el.querySelector('[data-cal="prev"]').addEventListener('click', () => { current = shiftMonth(current, -1); renderCalendarPage(el); });
-  el.querySelector('[data-cal="next"]').addEventListener('click', () => { current = shiftMonth(current, 1); renderCalendarPage(el); });
-  el.querySelector('[data-cal="today"]').addEventListener('click', () => { current = monthKey(new Date()); renderCalendarPage(el); });
+  // prev/next/today go through the hash so the month is deep-linkable and
+  // back/forward navigate months (hashchange → router → re-render).
+  const goMonth = (key) => { current = key; location.hash = `/calendar?m=${key}`; };
+  el.querySelector('[data-cal="prev"]').addEventListener('click', () => goMonth(shiftMonth(current, -1)));
+  el.querySelector('[data-cal="next"]').addEventListener('click', () => goMonth(shiftMonth(current, 1)));
+  el.querySelector('[data-cal="today"]').addEventListener('click', () => goMonth(monthKey(new Date())));
 
   let data;
   try {
@@ -177,6 +188,18 @@ async function renderCalendarPage(el) {
       const d = Number(btn.dataset.calDay);
       openDayModal(year, month, d, days.get(d) || []);
     }));
+
+  // Per-event deep link: #/calendar?m=YYYY-MM&event=ID auto-opens the day
+  // modal for that event's day (one-shot — clear the param so closing the
+  // modal doesn't reopen it on the next render).
+  if (params.event) {
+    const ev = (data.events || []).find((e) => String(e.id) === String(params.event));
+    const d = ev ? parseDate(ev.starts_at) : null;
+    if (d && d.getFullYear() === year && d.getMonth() === month) {
+      openDayModal(year, month, d.getDate(), days.get(d.getDate()) || []);
+    }
+    history.replaceState(null, '', `#/calendar?m=${current}`);
+  }
 }
 
 pageRenderers.calendar = renderCalendarPage;

@@ -383,7 +383,7 @@ router.get('/backup', requireAdmin, async (req, res, next) => {
     const dump = { exported_at: new Date().toISOString(), version: 1, tables: {} };
     for (const t of tables) {
       let rows = await query(`SELECT * FROM \`${t}\``);
-      if (t === 'users') rows.forEach((r) => { delete r.password_hash; });
+      if (t === 'users') rows.forEach((r) => { delete r.password_hash; delete r.totp_secret; });
       if (t === 'preferences') {
         // never export secret hashes (spicy_pin_hash and any future *_hash keys)
         rows = rows.filter((r) => !/_hash$/.test(String(r.key)));

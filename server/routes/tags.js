@@ -85,6 +85,18 @@ router.put('/:id', loadTag, async (req, res, next) => {
 // DELETE /api/tags/:id
 router.delete('/:id', loadTag, async (req, res, next) => {
   try {
+    // Smart groups linked to this tag fall back to manual (FK ON DELETE SET
+    // NULL). Snapshot the derived membership into group_members first so the
+    // group keeps its current members instead of resurrecting stale
+    // pre-link rows.
+    const linked = await query('SELECT id FROM `groups` WHERE tag_id = ?', [req.tag.id]);
+    for (const g of linked) {
+      await query('DELETE FROM group_members WHERE group_id = ?', [g.id]);
+      await query(
+        'INSERT IGNORE INTO group_members (group_id, contact_id) SELECT ?, ct.contact_id FROM contact_tags ct WHERE ct.tag_id = ?',
+        [g.id, req.tag.id]
+      );
+    }
     await query('DELETE FROM tags WHERE id = ?', [req.tag.id]);
     auditWrite(req.user.id, null, 'delete', 'tag', req.tag.id, { name: req.tag.name }, null, `Deleted tag ${req.tag.name}`);
     res.json({ ok: true });

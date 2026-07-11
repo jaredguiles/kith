@@ -7,6 +7,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { query } = require('../database/connection');
 const { requireAuth } = require('../middleware/auth');
+const { getSetting } = require('./settings');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -62,6 +63,20 @@ router.get('/', async (req, res, next) => {
       try { prefs[row.key] = JSON.parse(row.value); } catch { prefs[row.key] = row.value; }
     }
     prefs.spicy_pin_set = rows.some((r) => r.key === 'spicy_pin_hash');
+    // Spicy auto-disable enforcement on boot: if the activation window has
+    // lapsed (or a legacy true value has no timestamp), report AND persist
+    // spicy_visible=false so a closed tab can't leave spicy on server-side.
+    if (prefs.spicy_visible) {
+      const mins = Number(await getSetting('spicy_auto_disable_minutes')) || 0;
+      const activatedAt = Number(prefs.spicy_activated_at) || null;
+      if (mins > 0 && (!activatedAt || Date.now() - activatedAt > mins * 60 * 1000)) {
+        prefs.spicy_visible = false;
+        await query(
+          'INSERT INTO preferences (user_id, `key`, value, type) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), type = VALUES(type)',
+          [req.user.id, 'spicy_visible', JSON.stringify(false), 'boolean']
+        );
+      }
+    }
     // defaults + value sanitation for known constrained keys
     for (const [k, spec] of Object.entries(KNOWN_PREFS)) {
       if (!spec.values.includes(prefs[k])) prefs[k] = spec.default;
@@ -124,6 +139,14 @@ router.put('/:key', async (req, res, next) => {
       'INSERT INTO preferences (user_id, `key`, value, type) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), type = VALUES(type)',
       [req.user.id, key, JSON.stringify(value ?? null), valueType]
     );
+    // Enabling spicy stamps an activation time so the server can enforce the
+    // auto-disable window even if the client tab (and its timer) disappears.
+    if (key === 'spicy_visible' && value === true) {
+      await query(
+        'INSERT INTO preferences (user_id, `key`, value, type) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), type = VALUES(type)',
+        [req.user.id, 'spicy_activated_at', JSON.stringify(Date.now()), 'string']
+      );
+    }
     res.json({ ok: true });
   } catch (err) { next(err); }
 });

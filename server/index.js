@@ -85,6 +85,19 @@ app.use(
 app.use(express.json({ limit: '1mb' }));
 
 // ---------------------------------------------------------------------------
+// Rate limiting (audit L4): in-memory sliding window per IP, /api only
+// (static assets exempt). RATE_LIMIT_PER_MIN=0 disables; default 600/min,
+// auth endpoints stricter (RATE_LIMIT_AUTH_PER_MIN, default 30/min).
+// ---------------------------------------------------------------------------
+const { rateLimiter } = require('./middleware/ratelimit');
+const RATE_LIMIT_PER_MIN = Number(process.env.RATE_LIMIT_PER_MIN ?? 600);
+if (RATE_LIMIT_PER_MIN > 0) {
+  const RATE_LIMIT_AUTH_PER_MIN = Number(process.env.RATE_LIMIT_AUTH_PER_MIN ?? 30);
+  app.use('/api/auth', rateLimiter(RATE_LIMIT_AUTH_PER_MIN));
+  app.use('/api', rateLimiter(RATE_LIMIT_PER_MIN));
+}
+
+// ---------------------------------------------------------------------------
 // Health — deep check: pings the DB (cheap SELECT 1, short timeout).
 // Returns 200 when the DB answers, 503 when it does not. Never throws.
 // ---------------------------------------------------------------------------
@@ -155,7 +168,6 @@ app.use('/api', require('./routes/relationships'));
 app.use('/api', require('./routes/dates'));
 app.use('/api', require('./routes/gifts'));
 app.use('/api/tokens', require('./routes/tokens'));
-app.use('/api/ics', require('./routes/ics'));
 app.use('/api/calendar', require('./routes/calendar'));
 app.use('/api/journal', require('./routes/journal'));
 // Concurrently developed routers (geo/export/trash/search) — mounted here;

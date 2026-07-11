@@ -3,7 +3,10 @@
 // network pass-through.
 //
 // Deploys MUST bump VERSION so old caches are purged on activate.
-const VERSION = 'v21';
+// NOTE: static files are served directly (no build step), so there is no
+// automatic hash injection — bump this manually on every release or stale
+// shells will be served from the previous cache.
+const VERSION = 'v22';
 const CACHE = `kith-${VERSION}`;
 
 const SHELL = [
@@ -70,15 +73,30 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (event) => {
+  // Precache each shell item individually (Promise.allSettled) so one 404
+  // can't abort the whole install (cache.addAll is atomic — a single failure
+  // used to leave the new cache empty while activate deleted the old one,
+  // breaking the offline shell). Failures are logged and simply skipped;
+  // the fetch handler falls through to the network for missing entries.
+  // NO skipWaiting here: the new worker WAITS until the page opts in via
+  // the SKIP_WAITING message (update toast in app.js) or all tabs close —
+  // deploys no longer force a mid-session reload.
   event.waitUntil(
-    caches.open(CACHE)
-      .then((cache) => cache.addAll(SHELL))
-      .catch(() => {}) // partial precache failure must not block install
-      .then(() => self.skipWaiting())
+    caches.open(CACHE).then((cache) =>
+      Promise.allSettled(SHELL.map((url) => cache.add(url))).then((results) => {
+        results.forEach((r, i) => {
+          if (r.status === 'rejected') {
+            console.warn(`[sw] precache failed for ${SHELL[i]}:`, r.reason?.message || r.reason);
+          }
+        });
+      })
+    )
   );
 });
 
 self.addEventListener('activate', (event) => {
+  // Old caches are only deleted here — i.e. after the new worker installed
+  // successfully and took over — never during a (possibly failing) install.
   event.waitUntil(
     caches.keys()
       .then((keys) => Promise.all(keys.filter((k) => k.startsWith('kith-') && k !== CACHE).map((k) => caches.delete(k))))

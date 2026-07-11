@@ -34,13 +34,39 @@ const SORTABLE = {
   last_contacted_at: 'c.last_contacted_at',
 };
 
-/** Is spicy content visible for this request? Global setting AND session pref. */
+/** Is spicy content visible for this request? Global setting AND session pref.
+ * Server-side auto-disable enforcement: enabling spicy stamps
+ * `spicy_activated_at` (preferences.js); once `spicy_auto_disable_minutes`
+ * has elapsed the pref is treated as false AND flipped off in the DB — so a
+ * closed tab (lost client timer) can't leave spicy content visible forever. */
 async function spicyVisible(user) {
   const enabled = await getSetting('spicy_enabled');
   if (!enabled) return false;
-  const rows = await query('SELECT value FROM preferences WHERE user_id = ? AND `key` = ?', [user.id, 'spicy_visible']);
-  if (rows.length === 0) return false;
-  try { return Boolean(JSON.parse(rows[0].value)); } catch { return false; }
+  const rows = await query(
+    'SELECT `key`, value FROM preferences WHERE user_id = ? AND `key` IN (?, ?)',
+    [user.id, 'spicy_visible', 'spicy_activated_at']
+  );
+  let visible = false;
+  let activatedAt = null;
+  for (const row of rows) {
+    try {
+      if (row.key === 'spicy_visible') visible = Boolean(JSON.parse(row.value));
+      else if (row.key === 'spicy_activated_at') activatedAt = Number(JSON.parse(row.value)) || null;
+    } catch { /* treat unparsable as unset */ }
+  }
+  if (!visible) return false;
+  const mins = Number(await getSetting('spicy_auto_disable_minutes')) || 0;
+  if (mins > 0) {
+    // No timestamp (legacy row) counts as expired — fail closed.
+    if (!activatedAt || Date.now() - activatedAt > mins * 60 * 1000) {
+      query(
+        'INSERT INTO preferences (user_id, `key`, value, type) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value), type = VALUES(type)',
+        [user.id, 'spicy_visible', JSON.stringify(false), 'boolean']
+      ).catch(() => { /* best-effort flip; visibility already denied */ });
+      return false;
+    }
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------- list
@@ -102,7 +128,12 @@ router.get('/', async (req, res, next) => {
       params.push(Number(tag));
     }
     if (group) {
-      where.push('EXISTS (SELECT 1 FROM group_members gm WHERE gm.contact_id = c.id AND gm.group_id = ?)');
+      // smart groups (groups.tag_id set) derive membership from contact_tags;
+      // manual groups keep group_members
+      where.push(`EXISTS (SELECT 1 FROM \`groups\` g WHERE g.id = ? AND (
+        (g.tag_id IS NULL AND EXISTS (SELECT 1 FROM group_members gm WHERE gm.contact_id = c.id AND gm.group_id = g.id))
+        OR (g.tag_id IS NOT NULL AND EXISTS (SELECT 1 FROM contact_tags ctg WHERE ctg.contact_id = c.id AND ctg.tag_id = g.tag_id))
+      ))`);
       params.push(Number(group));
     }
 
@@ -426,6 +457,9 @@ router.put('/:id', requireContactAccess('id', { edit: true }), async (req, res, 
     if ('is_spicy' in data && data.is_spicy && !(await spicyVisible(req.user))) delete data.is_spicy;
 
     const cols = Object.keys(data);
+    // filtering (e.g. a disallowed is_spicy) may have emptied the update set —
+    // never build an empty `UPDATE … SET` (SQL error → 500)
+    if (cols.length === 0) return res.status(400).json({ error: 'Nothing to update' });
     await query(
       `UPDATE contacts SET ${cols.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`,
       [...cols.map((k) => data[k] ?? null), c.id]

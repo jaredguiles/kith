@@ -6,9 +6,9 @@
 // children } } — all ids strings, all links bidirectional.
 
 import { api, qs } from './api.js';
-import { esc, initials, avatarColorIndex, parseDate, debounce } from './utils.js';
+import { esc, escUrl, initials, avatarColorIndex, parseDate, fmtDate, debounce } from './utils.js';
 import { icon } from './icons.js';
-import { emptyState, filterPills } from './components.js';
+import { emptyState, filterPills, modalShell, openModal } from './components.js';
 import { pageRenderers, pageTitles } from './pages.js';
 import { state, navigate } from './app.js';
 import { openImportModal } from './import.js';
@@ -62,6 +62,10 @@ function f3Gender(p) {
  * parents: when one sibling has known parents, the other attaches to them
  * (view-only); when neither does, a shared "Unknown" placeholder parent is
  * synthesized so the pair still renders side by side.
+ *
+ * SECURITY: family-chart interpolates card_display values and the avatar
+ * URL into innerHTML without escaping — every user-sourced field (names
+ * from GEDCOM/vCard imports!) MUST go through esc()/escUrl() here (§7.11).
  */
 export function toF3Data(data) {
   const persons = new Map();
@@ -69,9 +73,10 @@ export function toF3Data(data) {
     persons.set(String(p.id), {
       id: String(p.id),
       data: {
-        name: `${p.display_name || 'Unnamed'}${p.is_deceased ? ' ✝' : ''}`,
-        dates: lifeDates(p),
+        name: `${esc(p.display_name || 'Unnamed')}${p.is_deceased ? ' ✝' : ''}`,
+        dates: esc(lifeDates(p)),
         gender: f3Gender(p),
+        avatar: p.photo_url ? escUrl(p.photo_url) : '',
       },
       rels: { parents: [], spouses: [], children: [] },
     });
@@ -135,10 +140,14 @@ function renderChart(host, data, rootId, view) {
   const mainId = String(rootId);
   if (!f3Data.some((d) => d.id === mainId)) return;
 
+  // Card spacing vs card size: cards are pinned to 220×80px via
+  // setCardDim, and node/level separation (260/170) exceeds that by a
+  // ≥40px horizontal / ≥90px vertical paper gutter — cards can never
+  // overlap, even with long names (the label clips inside the card).
   const chart = f3.createChart('#ft-f3', f3Data)
     .setTransitionTime(600)
-    .setCardXSpacing(215)
-    .setCardYSpacing(130)
+    .setCardXSpacing(260)
+    .setCardYSpacing(170)
     .setShowSiblingsOfMain(true)
     .setSingleParentEmptyCard(false);
 
@@ -146,9 +155,17 @@ function renderChart(host, data, rootId, view) {
     // close family: one generation in each direction (siblings ride along
     // via setShowSiblingsOfMain; partners always render beside the person)
     chart.setAncestryDepth(1).setProgenyDepth(1);
+  } else {
+    // full ancestry: explicit generous depths. family-chart v0.9.0 renders
+    // unlimited depth when unset, but pin it to the server's BFS cap
+    // (MAX_DEPTH 10 in routes/relationships.js) so all fetched generations
+    // are guaranteed to render — at least 3-4 up and down plus the
+    // siblings/spouses that ride along at every level.
+    chart.setAncestryDepth(10).setProgenyDepth(10);
   }
 
   chart.setCardHtml()
+    .setCardDim({ width: 220, height: 80 })
     .setCardDisplay([['name'], ['dates']])
     .setOnCardClick((e, d) => {
       const id = d?.data?.id;
@@ -156,7 +173,8 @@ function renderChart(host, data, rootId, view) {
       if (e.ctrlKey || e.metaKey || e.altKey) {
         navigate(`/family?id=${encodeURIComponent(id)}&view=${view}`);
       } else {
-        navigate(`/contacts/${encodeURIComponent(id)}`);
+        // stay on the tree — open the in-page person panel instead
+        openPersonPopup(data, chart, id);
       }
     });
 
@@ -165,6 +183,49 @@ function renderChart(host, data, rootId, view) {
   // container was just injected — sizes settle a tick later
   requestAnimationFrame(() => { if (el.isConnected) chart.updateTree({ initial: true }); });
   return chart;
+}
+
+// ------------------------------------------------------------ person popup
+/** Human label for how `id` relates to the tree's root, per f3's kinship
+ * calculator ("mother", "1st Cousin", …). Empty for the root or unknown. */
+function kinshipLabel(chart, id) {
+  try {
+    const kin = chart.calculateKinships(String(chart.getMainDatum?.()?.id ?? ''), { show_in_law: true });
+    const label = kin?.[String(id)];
+    return label && label !== 'self' ? label : '';
+  } catch { return ''; }
+}
+
+/** In-page popup with the person's key info. Leaves the tree untouched —
+ * closing it returns to the exact same chart state. */
+function openPersonPopup(data, chart, id) {
+  const p = (data.people || []).find((x) => String(x.id) === String(id));
+  if (!p) return;
+  const rel = kinshipLabel(chart, id);
+  const born = p.birthday ? fmtDate(p.birthday) : '';
+  const died = p.is_deceased ? (p.date_of_death ? fmtDate(p.date_of_death) : 'Unknown') : '';
+  const content = `
+    <div class="ft-person-pop">
+      <span class="av lg avc-${avatarColorIndex(p.display_name)}">${esc(initials(p.display_name))}${p.photo_url ? `<img src="${escUrl(p.photo_url)}" alt="">` : ''}</span>
+      <div class="ft-person-pop-info">
+        <div class="rec-serif">${esc(p.display_name || 'Unnamed')}${p.is_deceased ? ' ✝' : ''}</div>
+        ${rel ? `<div class="uppercase-label">${esc(rel)}</div>` : ''}
+        ${born ? `<div class="text-sm text-secondary">Born ${esc(born)}</div>` : ''}
+        ${died ? `<div class="text-sm text-secondary">Died ${esc(died)}</div>` : ''}
+      </div>
+    </div>`;
+  const footer = `
+    <button class="btn btn-secondary" data-action="close-modal">Close</button>
+    <span style="flex:1"></span>
+    <button class="btn btn-primary" data-action="view-profile">View full profile</button>`;
+  openModal(modalShell('ft-person', p.display_name || 'Person', content, footer), {
+    onMount: (overlay, close) => {
+      overlay.querySelector('[data-action="view-profile"]').addEventListener('click', () => {
+        close();
+        navigate(`/contacts/${encodeURIComponent(p.id)}`);
+      });
+    },
+  });
 }
 
 // ------------------------------------------------------------ root picker
@@ -244,8 +305,8 @@ async function renderFamilyPage(el, params) {
 
   const hint = el.querySelector('#ft-hint');
   hint.textContent = view === 'family'
-    ? 'Parents, siblings, partners and children of this person. Click a card to open their record · Ctrl/⌘-click to move the view to them. Family links are managed in each person\u2019s Relationships section.'
-    : 'Every generation linked in the records — ancestors above, descendants below. Click a card to open their record · Ctrl/⌘-click to recenter. Grow the tree via Relationships or a GEDCOM import.';
+    ? 'Parents, siblings, partners and children of this person. Click a card for their details · Ctrl/⌘-click to move the view to them. Family links are managed in each person\u2019s Relationships section.'
+    : 'Every generation linked in the records — ancestors above, descendants below. Click a card for their details · Ctrl/⌘-click to recenter. Grow the tree via Relationships or a GEDCOM import.';
 
   const host = el.querySelector('#ft-host');
 

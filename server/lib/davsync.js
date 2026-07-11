@@ -456,17 +456,34 @@ async function syncAllToDav() {
     const contacts = await query(
       `SELECT * FROM contacts WHERE deleted_at IS NULL AND is_spicy = 0`
     );
+    // Batch satellite loads (avoid 3 queries per contact — audit L10).
+    const satEmails = new Map();
+    const satPhones = new Map();
+    const satAddrs = new Map();
+    if (contacts.length) {
+      const ids = contacts.map((c) => c.id);
+      const ph = ids.map(() => '?').join(',');
+      const [allEmails, allPhones, allAddrs] = await Promise.all([
+        query(`SELECT contact_id, label, email, is_primary FROM contact_emails WHERE contact_id IN (${ph})`, ids),
+        query(`SELECT contact_id, label, phone, is_primary FROM contact_phones WHERE contact_id IN (${ph})`, ids),
+        query(
+          `SELECT contact_id, label, street, city, state, zip, country, is_primary FROM contact_addresses WHERE contact_id IN (${ph})`,
+          ids
+        ),
+      ]);
+      const groupBy = (rows, map) => {
+        for (const r of rows) {
+          if (!map.has(r.contact_id)) map.set(r.contact_id, []);
+          map.get(r.contact_id).push(r);
+        }
+      };
+      groupBy(allEmails, satEmails);
+      groupBy(allPhones, satPhones);
+      groupBy(allAddrs, satAddrs);
+    }
     for (const c of contacts) {
       try {
-        const [emails, phones, addrs] = await Promise.all([
-          query('SELECT label, email, is_primary FROM contact_emails WHERE contact_id = ?', [c.id]),
-          query('SELECT label, phone, is_primary FROM contact_phones WHERE contact_id = ?', [c.id]),
-          query(
-            'SELECT label, street, city, state, zip, country, is_primary FROM contact_addresses WHERE contact_id = ?',
-            [c.id]
-          ),
-        ]);
-        const vcf = buildVCard(c, emails, phones, addrs);
+        const vcf = buildVCard(c, satEmails.get(c.id) || [], satPhones.get(c.id) || [], satAddrs.get(c.id) || []);
         await putResource(ADDRESSBOOK_PATH, `kith-contact-${c.id}`, 'vcf', vcf, 'text/vcard; charset=utf-8');
         summary.contacts += 1;
       } catch (err) {
