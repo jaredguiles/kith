@@ -331,7 +331,6 @@ export async function refreshSidebarLists() {
     favEl.innerHTML = state.favorites.length
       ? state.favorites.map((c) => `
         <a class="sidebar-mini-item" href="#/contacts/${c.id}">
-          <span class="fav-num">${esc(recNo(c.id))}</span>
           <span class="fav-name truncate">${esc(c.display_name)}</span>
         </a>`).join('')
       : `<div class="sidebar-mini-item" style="cursor:default;color:var(--text-muted)">No favorites yet</div>`;
@@ -340,8 +339,6 @@ export async function refreshSidebarLists() {
     grpEl.innerHTML = state.groups.map((g) => `
       <a class="sidebar-mini-item" href="#/contacts?group=${g.id}">
         <span class="truncate">${esc(g.name)}</span>
-        <span class="leader-dots"></span>
-        <span class="mini-count">${esc(String(Number(g.member_count) || 0).padStart(2, '0'))}</span>
       </a>`).join('');
   }
 }
