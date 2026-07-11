@@ -16,6 +16,18 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 const IS_PROD = process.env.NODE_ENV === 'production';
 
+// Whether the app is actually reached over TLS (https://). This governs the
+// HTTPS-only security headers (upgrade-insecure-requests, HSTS, COOP). In
+// production Kith normally sits behind a TLS-terminating proxy (Traefik), so
+// this defaults to true when NODE_ENV=production. But a production build can
+// legitimately be served over plain HTTP (e.g. a LAN/IP-only demo instance
+// with no proxy) — in that case set BEHIND_TLS=false so we DON'T force assets
+// to https:// (which would 'ERR_SSL_PROTOCOL_ERROR' every asset and render a
+// blank page). Explicit BEHIND_TLS overrides the NODE_ENV-based default.
+const BEHIND_TLS = process.env.BEHIND_TLS != null
+  ? !/^(0|false|no)$/i.test(String(process.env.BEHIND_TLS).trim())
+  : IS_PROD;
+
 // Traefik is the single reverse-proxy hop in front of the app; trust it so
 // req.ip reflects the real client IP from X-Forwarded-For (login throttling
 // in middleware/auth.js keys on req.ip).
@@ -67,18 +79,17 @@ app.use(
         frameAncestors: ["'none'"],
         baseUri: ["'self'"],
         formAction: ["'self'"],
-        // Outside production the app may be served over plain HTTP (dev
-        // instance has no TLS). upgrade-insecure-requests would force every
-        // asset to https:// and render a blank page, so disable it (and HSTS)
-        // unless NODE_ENV=production.
-        upgradeInsecureRequests: IS_PROD ? [] : null,
+        // Force assets to https:// only when the app is actually served over
+        // TLS (BEHIND_TLS). On a plain-HTTP origin this would break every
+        // asset with ERR_SSL_PROTOCOL_ERROR and render a blank page.
+        upgradeInsecureRequests: BEHIND_TLS ? [] : null,
       },
     },
-    hsts: IS_PROD,
+    hsts: BEHIND_TLS,
     crossOriginEmbedderPolicy: false,
     // COOP is ignored by browsers on untrustworthy (plain-HTTP) origins and
-    // only produces console noise on the dev instance — send it in prod only.
-    crossOriginOpenerPolicy: IS_PROD,
+    // only produces console noise there — send it only when behind TLS.
+    crossOriginOpenerPolicy: BEHIND_TLS,
   })
 );
 
