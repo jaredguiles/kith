@@ -375,4 +375,37 @@ router.get('/timeline', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// ------------------------------------------------------------- single entry
+// GET /api/journal/:id — one entry, owner-scoped + spicy-filtered (loadEntry).
+// Registered AFTER /timeline so the literal path can't be shadowed by :id.
+router.get('/:id', loadEntry, async (req, res, next) => {
+  try {
+    const r = req.entry;
+    let event = null;
+    if (r.event_id) {
+      const showSpicy = await spicyVisible(req.user);
+      const evRows = await query(
+        `SELECT id, title, is_spicy FROM events WHERE id = ? AND deleted_at IS NULL ${showSpicy ? '' : 'AND is_spicy = 0'}`,
+        [r.event_id]);
+      if (evRows.length) event = { id: evRows[0].id, title: evRows[0].title };
+    }
+    res.json({
+      entry: {
+        id: r.id,
+        kind: r.kind,
+        title: r.is_spicy ? decryptField(r.title) : r.title,
+        content: r.is_spicy ? decryptField(r.content) : r.content,
+        location: r.location,
+        latitude: num(r.latitude),
+        longitude: num(r.longitude),
+        event_id: r.event_id,
+        event,
+        is_spicy: Boolean(r.is_spicy),
+        occurred_at: r.occurred_at || r.created_at,
+        created_at: r.created_at,
+      },
+    });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

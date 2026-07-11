@@ -266,6 +266,49 @@ router.post('/:id/complete', loadEvent, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// POST /api/events/:id/locations { label } — add one stop without a full
+// event PUT (which replace-alls). Geocoded like saveEventLocations; appended
+// at the next position.
+router.post('/:id/locations', loadEvent, async (req, res, next) => {
+  try {
+    const labels = normalizeLocationLabels([req.body?.label ?? req.body?.location]);
+    if (!labels || !labels.length) return res.status(400).json({ error: 'label is required' });
+    const label = labels[0];
+    const countRows = await query(
+      'SELECT COUNT(*) AS c, COALESCE(MAX(position), -1) AS maxpos FROM event_locations WHERE event_id = ?',
+      [req.event.id]
+    );
+    if (countRows[0].c >= MAX_EVENT_LOCATIONS) {
+      return res.status(400).json({ error: `An event can have at most ${MAX_EVENT_LOCATIONS} locations` });
+    }
+    const g = await geocode(label); // cached, never throws
+    const meta = parseGeoLabel(g ? g.label : label);
+    const result = await query(
+      `INSERT INTO event_locations
+         (event_id, label, latitude, longitude, city, state, state_code, country_code, geocode_source, position)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [req.event.id, label, g ? g.lat : null, g ? g.lng : null, meta.city, meta.state,
+       meta.state_code, meta.country_code, g ? g.source : null, Number(countRows[0].maxpos) + 1]
+    );
+    auditWrite(req.user.id, null, 'update', 'event', req.event.id, null, { added_location: label },
+      `Added location to event ${req.event.title}`);
+    res.status(201).json({ id: result.insertId, latitude: g ? g.lat : null, longitude: g ? g.lng : null });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/events/:id/locations/:locId — remove one stop
+router.delete('/:id/locations/:locId', loadEvent, async (req, res, next) => {
+  try {
+    const locId = Number(req.params.locId);
+    if (!Number.isInteger(locId) || locId <= 0) return res.status(404).json({ error: 'Location not found' });
+    const result = await query('DELETE FROM event_locations WHERE id = ? AND event_id = ?', [locId, req.event.id]);
+    if (!result.affectedRows) return res.status(404).json({ error: 'Location not found' });
+    auditWrite(req.user.id, null, 'update', 'event', req.event.id, { removed_location_id: locId }, null,
+      `Removed location from event ${req.event.title}`);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // POST/DELETE /api/events/:id/media/:mediaId — link/unlink
 router.post('/:id/media/:mediaId', loadEvent, async (req, res, next) => {
   try {

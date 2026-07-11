@@ -94,6 +94,60 @@ timelineRouter.post('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// PUT /api/timeline/:id — edit a manual entry (same access rule as DELETE)
+timelineRouter.put('/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Not found' });
+    const rows = await query('SELECT * FROM timeline_events WHERE id = ? AND deleted_at IS NULL', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Not found' });
+    const entry = rows[0];
+    const found = await contactAccess(req.user, entry.contact_id);
+    if (!found) return res.status(404).json({ error: 'Not found' });
+    if (found.access === 'shared' && found.share.permissions !== 'edit') return res.status(403).json({ error: 'Read-only access' });
+    if (entry.is_spicy && !(await spicyVisible(req.user))) return res.status(404).json({ error: 'Not found' });
+
+    const b = req.body || {};
+    let spicyFlag = entry.is_spicy ? 1 : 0;
+    if ('is_spicy' in b) {
+      const wanted = b.is_spicy ? 1 : 0;
+      if (!wanted || (await spicyVisible(req.user))) spicyFlag = wanted;
+    }
+    if ('occurred_at' in b && b.occurred_at != null && b.occurred_at !== '' && !isValidDate(b.occurred_at)) {
+      return res.status(400).json({ error: 'Invalid occurred_at date' });
+    }
+
+    const updates = [];
+    const params = [];
+    // title/description re-encoded to match the (possibly changed) spicy state
+    if ('title' in b || 'is_spicy' in b) {
+      const plain = 'title' in b
+        ? (b.title != null && b.title !== '' ? String(b.title) : null)
+        : (entry.is_spicy ? decryptField(entry.title) : entry.title);
+      updates.push('title = ?');
+      params.push(spicyFlag && plain ? encryptField(plain) : plain);
+    }
+    if ('description' in b || 'is_spicy' in b) {
+      const plain = 'description' in b
+        ? (b.description != null && b.description !== '' ? String(b.description) : null)
+        : (entry.is_spicy ? decryptField(entry.description) : entry.description);
+      updates.push('description = ?');
+      params.push(spicyFlag && plain ? encryptField(plain) : plain);
+    }
+    if ('is_spicy' in b) { updates.push('is_spicy = ?'); params.push(spicyFlag); }
+    if ('type' in b) { updates.push('type = ?'); params.push(b.type || 'note'); }
+    if ('occurred_at' in b) { updates.push('occurred_at = COALESCE(?, NOW())'); params.push(b.occurred_at || null); }
+    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
+
+    params.push(entry.id);
+    await query(`UPDATE timeline_events SET ${updates.join(', ')} WHERE id = ?`, params);
+    auditWrite(req.user.id, entry.contact_id, 'update', 'timeline_event', entry.id,
+      { type: entry.type }, { type: 'type' in b ? b.type : entry.type, is_spicy: spicyFlag }, 'Updated timeline entry');
+    if ('occurred_at' in b) touchContact(entry.contact_id, b.occurred_at || undefined);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // DELETE /api/timeline/:id — soft (manual entries only)
 timelineRouter.delete('/:id', async (req, res, next) => {
   try {
@@ -341,6 +395,29 @@ notesRouter.post('/', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/notes/:id — single note (read scoping mirrors the list, not loadNote,
+// which demands edit permission)
+notesRouter.get('/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Note not found' });
+    const rows = await query('SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Note not found' });
+    const found = await contactAccess(req.user, rows[0].contact_id);
+    if (!found) return res.status(404).json({ error: 'Note not found' });
+    if (found.access === 'shared' && found.share.share_scope === 'basic') {
+      return res.status(403).json({ error: 'Not available for this share scope' });
+    }
+    if (rows[0].is_spicy) {
+      const showSpicy = (await spicyVisible(req.user)) &&
+        (found.access !== 'shared' || found.share.share_scope === 'full_spicy');
+      if (!showSpicy) return res.status(404).json({ error: 'Note not found' });
+    }
+    const n = rows[0];
+    res.json({ note: { ...n, content: n.is_spicy ? decryptField(n.content) : n.content } });
+  } catch (err) { next(err); }
+});
+
 async function loadNote(req, res, next) {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Note not found' });
@@ -583,6 +660,55 @@ messagesRouter.post('/', async (req, res, next) => {
     );
     touchContact(found.contact.id, sent_at || undefined);
     res.status(201).json({ id: result.insertId });
+  } catch (err) { next(err); }
+});
+
+// PUT /api/messages/:id — edit a logged message (same access rule as DELETE)
+messagesRouter.put('/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Message not found' });
+    const rows = await query('SELECT * FROM messages WHERE id = ?', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Message not found' });
+    const msg = rows[0];
+    const found = await contactAccess(req.user, msg.contact_id);
+    if (!found) return res.status(404).json({ error: 'Message not found' });
+    if (found.access === 'shared' && found.share.permissions !== 'edit') return res.status(403).json({ error: 'Read-only access' });
+    if (msg.is_spicy && !(await spicyVisible(req.user))) return res.status(404).json({ error: 'Message not found' });
+
+    const b = req.body || {};
+    let spicyFlag = msg.is_spicy ? 1 : 0;
+    if ('is_spicy' in b) {
+      const wanted = b.is_spicy ? 1 : 0;
+      if (!wanted || (await spicyVisible(req.user))) spicyFlag = wanted;
+    }
+    if ('sent_at' in b && b.sent_at != null && b.sent_at !== '' && !isValidDate(b.sent_at)) {
+      return res.status(400).json({ error: 'Invalid sent_at date' });
+    }
+    if ('direction' in b && b.direction != null && b.direction !== 'in' && b.direction !== 'out') {
+      return res.status(400).json({ error: "direction must be 'in' or 'out'" });
+    }
+
+    const updates = [];
+    const params = [];
+    if ('content' in b || 'is_spicy' in b) {
+      // re-encode content to match the (possibly changed) spicy state
+      const plain = 'content' in b
+        ? (b.content != null ? String(b.content) : null)
+        : (msg.is_spicy ? decryptField(msg.content) : msg.content);
+      updates.push('content = ?');
+      params.push(spicyFlag && plain ? encryptField(plain) : plain);
+    }
+    if ('is_spicy' in b) { updates.push('is_spicy = ?'); params.push(spicyFlag); }
+    if ('platform' in b) { updates.push('platform = ?'); params.push(b.platform || null); }
+    if ('direction' in b) { updates.push('direction = ?'); params.push(b.direction === 'out' ? 'out' : 'in'); }
+    if ('sent_at' in b) { updates.push('sent_at = COALESCE(?, NOW())'); params.push(b.sent_at || null); }
+    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
+
+    params.push(msg.id);
+    await query(`UPDATE messages SET ${updates.join(', ')} WHERE id = ?`, params);
+    if ('sent_at' in b) touchContact(msg.contact_id, b.sent_at || undefined);
+    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 

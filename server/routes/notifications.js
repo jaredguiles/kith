@@ -151,6 +151,17 @@ router.post('/:id/dismiss', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// DELETE /api/notifications/:id — hard delete one's own notification
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Notification not found' });
+    const result = await query('DELETE FROM notifications WHERE id = ? AND user_id = ?', [id, req.user.id]);
+    if (!result.affectedRows) return res.status(404).json({ error: 'Notification not found' });
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // GET /api/notifications/prefs — the user's notify_/digest_/nudge_ settings
 router.get('/prefs', async (req, res, next) => {
   try {

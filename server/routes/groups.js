@@ -87,6 +87,37 @@ router.get('/:id/members', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/groups/:id — one group with tag link + member count (same
+// visibility as the list: system groups + own; counts scoped to what the
+// user can see). No shadowing risk: /:id is single-segment and can never
+// match /:id/members.
+router.get('/:id', async (req, res, next) => {
+  try {
+    const groupId = Number(req.params.id);
+    if (!Number.isInteger(groupId) || groupId <= 0) return res.status(404).json({ error: 'Group not found' });
+    const admin = isAdmin(req.user);
+    const scopeJoin = admin
+      ? ''
+      : `AND (c.owner_user_id = ${Number(req.user.id)} OR EXISTS (SELECT 1 FROM shared_contacts sc WHERE sc.contact_id = c.id AND sc.shared_with_user_id = ${Number(req.user.id)}))`;
+    const rows = await query(
+      `SELECT g.*, t.name AS tag_name, t.color AS tag_color,
+        CASE WHEN g.tag_id IS NULL THEN
+          (SELECT COUNT(*) FROM group_members gm JOIN contacts c ON c.id = gm.contact_id AND c.deleted_at IS NULL ${scopeJoin}
+           WHERE gm.group_id = g.id)
+        ELSE
+          (SELECT COUNT(*) FROM contact_tags ct JOIN contacts c ON c.id = ct.contact_id AND c.deleted_at IS NULL ${scopeJoin}
+           WHERE ct.tag_id = g.tag_id)
+        END AS member_count
+       FROM \`groups\` g
+       LEFT JOIN tags t ON t.id = g.tag_id
+       WHERE g.id = ? AND (g.owner_user_id IS NULL OR g.owner_user_id = ?)`,
+      [groupId, req.user.id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Group not found' });
+    res.json({ group: rows[0] });
+  } catch (err) { next(err); }
+});
+
 // POST /api/groups
 router.post('/', async (req, res, next) => {
   try {

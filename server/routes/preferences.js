@@ -151,4 +151,23 @@ router.put('/:key', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// DELETE /api/preferences/:key — reset to default by removing the row.
+// Security-relevant keys are refused: spicy_pin_hash goes through the PIN
+// endpoints; spicy_visible/spicy_activated_at drive the server-side spicy
+// auto-disable enforcement and deleting them out-of-band could leave a
+// stale/ambiguous spicy state.
+const PROTECTED_KEYS = ['spicy_pin_hash', 'spicy_visible', 'spicy_activated_at'];
+
+router.delete('/:key', async (req, res, next) => {
+  try {
+    const key = req.params.key;
+    if (PROTECTED_KEYS.includes(key)) {
+      return res.status(400).json({ error: 'This preference cannot be deleted' });
+    }
+    if (!/^[a-z0-9_]{1,100}$/i.test(key)) return res.status(400).json({ error: 'Invalid preference key' });
+    await query('DELETE FROM preferences WHERE user_id = ? AND `key` = ?', [req.user.id, key]);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

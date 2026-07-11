@@ -310,6 +310,78 @@ router.get('/contacts/:id/family-tree', requireContactAccess('id'), async (req, 
   } catch (err) { next(err); }
 });
 
+// PUT /api/relationships/:id — change relation_type and/or related_contact_id.
+// Rows are stored as a SINGLE directed row (the reverse direction is computed
+// at read time via INVERSE_MAP — no inverse row exists), so one UPDATE covers
+// both rendered directions. Access rule mirrors DELETE: either side editable.
+router.put('/relationships/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Relationship not found' });
+    const rows = await query('SELECT * FROM contact_relationships WHERE id = ?', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Relationship not found' });
+    const rel = rows[0];
+
+    const [a, b] = await Promise.all([
+      contactAccess(req.user, rel.contact_id),
+      contactAccess(req.user, rel.related_contact_id),
+    ]);
+    const canEdit = (f) => f && (f.access !== 'shared' || f.share.permissions === 'edit');
+    if (!canEdit(a) && !canEdit(b)) return res.status(404).json({ error: 'Relationship not found' });
+
+    const body = req.body || {};
+    const relationType = 'relation_type' in body ? body.relation_type : rel.relation_type;
+    if (!RELATION_TYPES.includes(relationType)) {
+      return res.status(400).json({ error: `relation_type must be one of: ${RELATION_TYPES.join(', ')}` });
+    }
+    let relatedId = rel.related_contact_id;
+    if ('related_contact_id' in body) {
+      relatedId = Number(body.related_contact_id);
+      if (!Number.isInteger(relatedId) || relatedId <= 0) {
+        return res.status(400).json({ error: 'related_contact_id must be a positive integer' });
+      }
+      if (relatedId !== rel.related_contact_id) {
+        const relatedFound = await contactAccess(req.user, relatedId);
+        if (!relatedFound) return res.status(404).json({ error: 'Related contact not found' });
+      }
+    }
+    if (relatedId === rel.contact_id) return res.status(400).json({ error: 'A contact cannot be related to themselves' });
+
+    const updates = [];
+    const params = [];
+    if (relationType !== rel.relation_type) { updates.push('relation_type = ?'); params.push(relationType); }
+    if (relatedId !== rel.related_contact_id) { updates.push('related_contact_id = ?'); params.push(relatedId); }
+    if ('notes' in body) { updates.push('notes = ?'); params.push(body.notes ? String(body.notes).slice(0, 255) : null); }
+    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
+
+    // Duplicate in either direction → 409 (excluding this row; the unique key
+    // only guards one direction) — same rule as POST. Skipped when the pair
+    // and type are unchanged (notes-only edit).
+    if (relationType !== rel.relation_type || relatedId !== rel.related_contact_id) {
+      const dupes = await query(
+        `SELECT id FROM contact_relationships
+         WHERE id != ? AND ((contact_id = ? AND related_contact_id = ? AND relation_type = ?)
+            OR (contact_id = ? AND related_contact_id = ? AND relation_type = ?))`,
+        [rel.id, rel.contact_id, relatedId, relationType,
+         relatedId, rel.contact_id, INVERSE_MAP[relationType] || relationType]
+      );
+      if (dupes.length) return res.status(409).json({ error: 'This relationship already exists' });
+    }
+
+    params.push(rel.id);
+    try {
+      await query(`UPDATE contact_relationships SET ${updates.join(', ')} WHERE id = ?`, params);
+    } catch (err) {
+      if (err && err.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'This relationship already exists' });
+      throw err;
+    }
+    auditWrite(req.user.id, rel.contact_id, 'update', 'relationship', rel.id,
+      { related_contact_id: rel.related_contact_id, relation_type: rel.relation_type },
+      { related_contact_id: relatedId, relation_type: relationType }, 'Updated relationship');
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // DELETE /api/relationships/:id — either side's owner (or admin) may remove
 router.delete('/relationships/:id', async (req, res, next) => {
   try {
@@ -335,4 +407,5 @@ router.delete('/relationships/:id', async (req, res, next) => {
 
 module.exports = router;
 module.exports.INVERSE_MAP = INVERSE_MAP;
+module.exports.RELATION_TYPES = RELATION_TYPES;
 module.exports.DISPLAY_LABELS = DISPLAY_LABELS;

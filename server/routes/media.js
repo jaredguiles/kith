@@ -377,6 +377,22 @@ router.get('/:id/thumbnail', loadMedia, (req, res, next) => {
   res.sendFile(abs);
 });
 
+// GET /api/media/:id — metadata for one media row (same ACL as /file via
+// loadMedia); mirrors the list shape (never expose fs paths / upstream ids)
+router.get('/:id', loadMedia, (req, res) => {
+  const m = req.media;
+  res.json({
+    media: {
+      ...m,
+      caption: m.is_spicy ? decryptField(m.caption) : m.caption,
+      file_path: undefined, thumbnail_path: undefined, // never expose fs paths
+      immich_instance_id: undefined, immich_asset_id: undefined, // nor upstream ids
+      is_immich: Boolean(m.immich_instance_id),
+      has_thumbnail: Boolean(m.thumbnail_path) || Boolean(m.immich_instance_id),
+    },
+  });
+});
+
 // PUT /api/media/:id — caption, spicy flag, contact link, profile eligibility
 router.put('/:id', loadMedia, async (req, res, next) => {
   try {

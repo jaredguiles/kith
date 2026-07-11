@@ -175,6 +175,25 @@ for (const [name, kind] of Object.entries(KINDS)) {
     } catch (err) { next(err); }
   };
 
+  // GET /api/<kind>/:itemId — single item; read scoping mirrors the list
+  // (basic scope only exposes emails/phones per SPEC), not loadItem (which
+  // demands edit permission).
+  satelliteItems.get(`/${name}/:itemId`, async (req, res, next) => {
+    try {
+      const id = Number(req.params.itemId);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' });
+      const rows = await query(`SELECT * FROM ${kind.table} WHERE id = ?`, [id]);
+      if (rows.length === 0) return res.status(404).json({ error: 'Not found' });
+      const found = await contactAccess(req.user, rows[0].contact_id);
+      if (!found) return res.status(404).json({ error: 'Not found' });
+      if (found.access === 'shared' && found.share.share_scope === 'basic' &&
+          (name === 'addresses' || name === 'socials')) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+      res.json({ [kind.entity]: rows[0] });
+    } catch (err) { next(err); }
+  });
+
   satelliteItems.put(`/${name}/:itemId`, loadItem, async (req, res, next) => {
     try {
       const data = pickFields(req.body, kind);

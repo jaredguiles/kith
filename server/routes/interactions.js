@@ -77,6 +77,51 @@ router.get('/contacts/:id/interactions', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// PUT /api/interactions/:id — owner or admin (same access rule as DELETE)
+router.put('/interactions/:id', async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(404).json({ error: 'Interaction not found' });
+    const rows = await query('SELECT * FROM interactions WHERE id = ?', [id]);
+    if (!rows.length) return res.status(404).json({ error: 'Interaction not found' });
+    if (rows[0].owner_user_id !== req.user.id && !isAdmin(req.user)) {
+      return res.status(404).json({ error: 'Interaction not found' });
+    }
+
+    const { type, note, occurred_at } = req.body || {};
+    const updates = [];
+    const params = [];
+    if (type !== undefined) {
+      if (!INTERACTION_TYPES.includes(type)) {
+        return res.status(400).json({ error: `type must be one of: ${INTERACTION_TYPES.join(', ')}` });
+      }
+      updates.push('type = ?'); params.push(type);
+    }
+    if (note !== undefined) {
+      if (note != null && String(note).length > 500) {
+        return res.status(400).json({ error: 'note must be 500 characters or fewer' });
+      }
+      updates.push('note = ?'); params.push(note ? String(note) : null);
+    }
+    if (occurred_at !== undefined) {
+      if (occurred_at == null || occurred_at === '' || !isValidDate(occurred_at)) {
+        return res.status(400).json({ error: 'Invalid occurred_at date' });
+      }
+      updates.push('occurred_at = ?'); params.push(occurred_at);
+    }
+    if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
+
+    params.push(rows[0].id);
+    await query(`UPDATE interactions SET ${updates.join(', ')} WHERE id = ?`, params);
+    auditWrite(req.user.id, rows[0].contact_id, 'update', 'interaction', rows[0].id,
+      { type: rows[0].type }, { type: type || rows[0].type }, 'Updated interaction');
+    // last_contacted_at only moves forward (GREATEST in touchContact), so a
+    // backdated edit never regresses cadence — same semantics as the POST.
+    if (occurred_at !== undefined) touchContact(rows[0].contact_id, occurred_at);
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 // DELETE /api/interactions/:id — owner or admin
 router.delete('/interactions/:id', async (req, res, next) => {
   try {

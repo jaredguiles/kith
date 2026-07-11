@@ -52,6 +52,31 @@ router.post('/subscribe', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// GET /api/push/subscriptions — the current user's subscriptions. Endpoint is
+// truncated to its origin+path head as an identifying hint; keys never leave.
+router.get('/subscriptions', async (req, res, next) => {
+  try {
+    const rows = await query(
+      'SELECT id, endpoint, user_agent, created_at, last_used_at FROM push_subscriptions WHERE user_id = ? ORDER BY created_at DESC',
+      [req.user.id]
+    );
+    res.json({
+      subscriptions: rows.map((r) => {
+        let domain = null;
+        try { domain = new URL(r.endpoint).host; } catch { /* keep null */ }
+        return {
+          id: r.id,
+          endpoint_domain: domain,
+          endpoint_preview: String(r.endpoint).slice(0, 60) + (String(r.endpoint).length > 60 ? '…' : ''),
+          user_agent: r.user_agent,
+          created_at: r.created_at,
+          last_used_at: r.last_used_at,
+        };
+      }),
+    });
+  } catch (err) { next(err); }
+});
+
 // POST /api/push/unsubscribe { endpoint }
 router.post('/unsubscribe', async (req, res, next) => {
   try {

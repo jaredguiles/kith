@@ -99,4 +99,20 @@ router.put('/', spicyGate, requireContactAccess('id', { edit: true }), async (re
   } catch (err) { next(err); }
 });
 
+// DELETE /api/contacts/:id/spicy — remove the profile row entirely
+router.delete('/', spicyGate, requireContactAccess('id', { edit: true }), async (req, res, next) => {
+  try {
+    if (req.contactAccess === 'shared' && req.contactShare.share_scope !== 'full_spicy') {
+      return res.status(403).json({ error: 'Not shared at spicy scope' });
+    }
+    const existing = await query('SELECT id FROM spicy_profiles WHERE contact_id = ?', [req.contact.id]);
+    if (!existing.length) return res.status(404).json({ error: 'No spicy profile for this contact' });
+    await query('DELETE FROM spicy_profiles WHERE contact_id = ?', [req.contact.id]);
+    // audit WITHOUT values (never write spicy plaintext into audit_log)
+    auditWrite(req.user.id, req.contact.id, 'delete', 'spicy_profile',
+      existing[0].id, null, null, 'Spicy profile deleted');
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
 module.exports = router;

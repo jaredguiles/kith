@@ -5,7 +5,8 @@ life, their details, interactions, events, notes, media, and an optional
 hidden **spicy** layer that is encrypted at rest and invisible unless enabled.
 
 Built per the Master Build Plan ([[kith-personal-crm-app]] v1.1). Functional
-spec: `SPEC.md` (resynced to v1.8). Visual system: `DESIGN.md` ("The Record",
+spec: `SPEC.md` (resynced to v1.8). REST API reference: `API.md` (complete,
+current endpoint list). Visual system: `DESIGN.md` ("The Record",
 v1.3+; `BRANDING.md` is a superseded stub kept for logo/name provenance).
 Build history: `BUILDLOG.md`.
 
