@@ -11,6 +11,17 @@ const COOKIE_NAME = 'kith_token';
 const TOKEN_TTL = '7d'; // O6 default
 const PAT_PREFIX = 'kith_'; // personal access tokens (api_tokens table)
 
+// Whether the app is reached over TLS. The auth cookie's `Secure` flag must
+// match: a Secure cookie is NOT sent by browsers over plain HTTP, so on an
+// HTTP-only deployment (e.g. a LAN/IP demo with no TLS proxy) marking it
+// Secure silently breaks the whole session — the SPA loads unauthenticated,
+// avatars/media 401, and the map/data never populate. Defaults to true under
+// NODE_ENV=production (prod sits behind Traefik TLS); set BEHIND_TLS=false for
+// HTTP-only deployments so the cookie is actually sent back.
+const BEHIND_TLS = process.env.BEHIND_TLS != null
+  ? !/^(0|false|no)$/i.test(String(process.env.BEHIND_TLS).trim())
+  : process.env.NODE_ENV === 'production';
+
 function signToken(user) {
   return jwt.sign(
     { sub: user.id, username: user.username, role: user.role, tv: user.token_version ?? 0 },
@@ -33,8 +44,10 @@ function signPendingTotpToken(user) {
 }
 
 function setAuthCookie(res, token) {
-  // httpOnly + SameSite=Strict (§7.14). `secure` in production (TLS at Traefik).
-  const secure = process.env.NODE_ENV === 'production';
+  // httpOnly + SameSite=Strict (§7.14). `Secure` only when actually behind TLS
+  // (BEHIND_TLS) — a Secure cookie isn't sent over plain HTTP, which would
+  // break sessions on an HTTP-only deployment.
+  const secure = BEHIND_TLS;
   res.setHeader(
     'Set-Cookie',
     `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${7 * 24 * 3600}${secure ? '; Secure' : ''}`
@@ -42,7 +55,7 @@ function setAuthCookie(res, token) {
 }
 
 function clearAuthCookie(res) {
-  const secure = process.env.NODE_ENV === 'production';
+  const secure = BEHIND_TLS;
   res.setHeader('Set-Cookie', `${COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure ? '; Secure' : ''}`);
 }
 
