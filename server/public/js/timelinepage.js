@@ -260,7 +260,7 @@ async function renderMapTab(container, journalEntries) {
   renderMarkers();
 
   // Leaflet writes stroke colors as SVG attributes — resolve the CSS token.
-  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#2b5566';
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#253e45';
 
   // roadtrip paths: dashed polyline through each multi-location event's stops
   const byEvent = new Map();

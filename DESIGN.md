@@ -28,7 +28,7 @@ preferences, health info, private notes/media). It is **SFW by default** —
 hidden entirely — and revealed only when the user activates it. Activation is
 an unobtrusive lock toggle low in the sidebar; on activation the intimate
 content **appears** (it is genuinely absent from the DOM/response until
-then) and the accent color shifts from cool ink-blue → oxblood.
+then) and the accent color shifts from deep petrol teal → crimson.
 
 Both light and dark themes are first-class; theme preference is per-user
 with a system-preference option.
@@ -55,7 +55,11 @@ names keep working.
 
 Type scale actually used (px):
 - Page/name headings (serif): 42–45
-- Section/masthead "Kith": 33
+- Section/masthead "Kith": 33 — as of v1.9 the masthead/login/mobile-header
+  "Kith" is the wordmark image (`assets/wordmark.png`, white-on-transparent)
+  rendered via CSS `mask` so it fills with `--ink` and follows theme +
+  confidential transitions (`.wordmark-img`). Text wordmark remains the
+  fallback for a custom `app_name`.
 - Record values & list names (serif): 15–20
 - Body sans: 14
 - Mono labels: 9–11 (letter-spacing 0.1–0.26em, uppercase)
@@ -69,8 +73,10 @@ Type scale actually used (px):
 | `--muted` (secondary text) | `#6f685b` | (unchanged) |
 | `--rule` (hairlines) | `rgba(28,24,19,0.16)` | (unchanged) |
 | `--rule-strong` (frame border) | `rgba(28,24,19,0.32)` | (unchanged) |
-| `--accent` | `#2b5566` (ink-blue) | `#7a1f2b` (oxblood) |
-| `--accent-weak` | `rgba(43,85,102,0.09)` | `rgba(122,31,43,0.10)` |
+| `--accent` | `#253e45` (petrol teal) | `#af1b3f` (crimson) |
+| `--accent-weak` | `rgba(37,62,69,0.09)` | `rgba(175,27,63,0.10)` |
+| `--gold` (decorative secondary) | `#d6b35c` | (unchanged) |
+| `--gold-weak` | `rgba(214,179,92,0.18)` | (unchanged) |
 
 ### Color — DARK theme
 | Token | SFW value | When confidential active |
@@ -81,8 +87,9 @@ Type scale actually used (px):
 | `--muted` | `#8b8271` | (unchanged) |
 | `--rule` | `rgba(236,228,210,0.13)` | (unchanged) |
 | `--rule-strong` | `rgba(236,228,210,0.26)` | (unchanged) |
-| `--accent` | `#7fa8b8` (dusty blue) | `#d0808a` (dusty rose/oxblood) |
-| `--accent-weak` | `rgba(127,168,184,0.12)` | `rgba(208,128,138,0.14)` |
+| `--accent` | `#8ab6c0` (petrol teal, light) | `#e0637f` (crimson, light) |
+| `--accent-weak` | `rgba(138,182,192,0.12)` | `rgba(224,99,127,0.14)` |
+| `--gold` (decorative secondary) | `#d6b35c` | (unchanged) |
 
 Semantic colors (success/warning/error/info) are editorial-muted variants
 per theme (e.g. light `--green: #47694d`, dark `--green: #8fb996`) — never

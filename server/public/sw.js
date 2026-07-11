@@ -6,7 +6,7 @@
 // NOTE: static files are served directly (no build step), so there is no
 // automatic hash injection — bump this manually on every release or stale
 // shells will be served from the previous cache.
-const VERSION = 'v22';
+const VERSION = 'v23';
 const CACHE = `kith-${VERSION}`;
 
 const SHELL = [
@@ -67,6 +67,7 @@ const SHELL = [
   '/fonts/plexmono-normal-600-latin-ext.woff2',
   '/assets/logo.svg',
   '/assets/logo.png',
+  '/assets/wordmark.png',
   '/assets/icons/icon-192.png',
   '/assets/icons/icon-512.png',
   '/assets/icons/apple-touch-icon.png',

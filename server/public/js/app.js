@@ -214,6 +214,18 @@ function logoHtml() {
   return logoMark();
 }
 
+// Kith wordmark image (assets/wordmark.png, white-on-transparent) rendered
+// via CSS mask so it fills with --ink and follows the theme (see .wordmark-img).
+// A custom app_logo setting still wins; a custom app_name falls back to the
+// text wordmark since the image only says "Kith".
+function wordmarkHtml() {
+  const custom = state.settings.app_logo;
+  if (custom) return `<img src="${esc(custom)}" alt="${esc(state.settings.app_name || 'Kith')}" class="wordmark-custom">`;
+  const name = state.settings.app_name;
+  if (name && name !== 'Kith') return `<span class="wordmark">${esc(name)}</span>`;
+  return '<span class="wordmark-img" role="img" aria-label="Kith"></span>';
+}
+
 function shellHtml() {
   const u = state.user;
   const isAdmin = u.role === 'main_admin' || u.role === 'admin';
@@ -227,7 +239,7 @@ function shellHtml() {
     <aside class="sidebar" id="sidebar" aria-label="Main navigation">
       <div class="sidebar-header">
         <a href="#/home" class="sidebar-logo">
-          <span class="wordmark">${esc(state.settings.app_name || 'Kith')}</span>
+          ${wordmarkHtml()}
           <span class="sidebar-tag">Personal record</span>
         </a>
       </div>
@@ -290,8 +302,7 @@ function shellHtml() {
     <main class="main">
       <div class="mob-header">
         <button class="btn btn-icon" id="mob-menu" aria-label="Open menu">${icon('menu')}</button>
-        <span class="logo-mark" style="width:20px;height:20px;color:var(--accent)">${logoHtml()}</span>
-        <span class="wordmark" style="font-weight:600">${esc(state.settings.app_name || 'Kith')}</span>
+        ${wordmarkHtml()}
         <span class="flex-1"></span>
         <span class="av sm">${esc(initials(u.display_name || u.username))}</span>
       </div>
@@ -625,8 +636,7 @@ function renderLogin(message = '') {
   <div class="login-screen">
     <div class="login-card">
       <div class="login-logo">
-        <span class="logo-mark">${logoMark()}</span>
-        <span class="wordmark">Kith</span>
+        ${wordmarkHtml()}
       </div>
       ${message ? `<div class="form-error mb-3 text-center">${esc(message)}</div>` : ''}
       <form id="login-form">
@@ -672,8 +682,7 @@ function renderTotpStep(pendingToken) {
   <div class="login-screen">
     <div class="login-card">
       <div class="login-logo">
-        <span class="logo-mark">${logoMark()}</span>
-        <span class="wordmark">Kith</span>
+        ${wordmarkHtml()}
       </div>
       <h2 class="section-heading text-center">Two-factor code</h2>
       <p class="text-sm text-secondary text-center mb-4">Enter the 6-digit code from your authenticator app.</p>
@@ -731,8 +740,7 @@ function renderForcedPasswordChange() {
   <div class="login-screen">
     <div class="login-card">
       <div class="login-logo">
-        <span class="logo-mark">${logoMark()}</span>
-        <span class="wordmark">Kith</span>
+        ${wordmarkHtml()}
       </div>
       <h2 class="section-heading text-center">Change your password</h2>
       <p class="text-sm text-secondary text-center mb-4">Set a new password before using Kith.</p>

@@ -17,8 +17,13 @@
   --muted: #655e52;
   --rule: rgba(28, 24, 19, 0.16);         /* hairlines */
   --rule-strong: rgba(28, 24, 19, 0.32);  /* frame border */
-  --accent: #2b5566;           /* ink-blue */
-  --accent-weak: rgba(43, 85, 102, 0.09);
+  --accent: #253e45;           /* deep petrol teal */
+  --accent-weak: rgba(37, 62, 69, 0.09);
+  /* gold — decorative secondary accent (strip, nav marker, ratings,
+     selection). NOT for text: 1.7:1 on paper. Same in both modes; the
+     teal→crimson primary shift is the confidential-mode signal. */
+  --gold: #d6b35c;
+  --gold-weak: rgba(214, 179, 92, 0.18);
   --spicy: 0;                  /* 0|1 — drives strip/dot opacity */
 
   /* frame shadow (only where a frame exists) */
@@ -31,8 +36,8 @@
   --amber-subtle: rgba(138, 101, 36, 0.10);
   --red: #8a2f2b;
   --red-subtle: rgba(138, 47, 43, 0.08);
-  --blue: #2b5566;
-  --blue-subtle: rgba(43, 85, 102, 0.08);
+  --blue: #253e45;
+  --blue-subtle: rgba(37, 62, 69, 0.08);
   --pink: #9a4a6b;
 
   /* typography */
@@ -85,8 +90,8 @@ body.spicy-mode {
   --muted: #655e52; /* keep ≥4.5:1 on the warmer spicy paper (see :root note) */
   --rule: rgba(28, 24, 19, 0.16);
   --rule-strong: rgba(28, 24, 19, 0.32);
-  --accent: #7a1f2b; /* oxblood */
-  --accent-weak: rgba(122, 31, 43, 0.10);
+  --accent: #af1b3f; /* crimson */
+  --accent-weak: rgba(175, 27, 63, 0.10);
   --spicy: 1;
 }
 
@@ -100,8 +105,8 @@ body.spicy-mode {
   --muted: #9a9180;
   --rule: rgba(236, 228, 210, 0.13);
   --rule-strong: rgba(236, 228, 210, 0.26);
-  --accent: #7fa8b8; /* dusty blue */
-  --accent-weak: rgba(127, 168, 184, 0.12);
+  --accent: #8ab6c0; /* petrol teal, lightened for dark (hue-matched to #253e45) */
+  --accent-weak: rgba(138, 182, 192, 0.12);
   --frame-shadow: 0 30px 70px -40px rgba(0, 0, 0, 0.8);
 
   --green: #8fb996;
@@ -110,8 +115,8 @@ body.spicy-mode {
   --amber-subtle: rgba(207, 169, 106, 0.12);
   --red: #cf8a84;
   --red-subtle: rgba(207, 138, 132, 0.10);
-  --blue: #7fa8b8;
-  --blue-subtle: rgba(127, 168, 184, 0.10);
+  --blue: #8ab6c0;
+  --blue-subtle: rgba(138, 182, 192, 0.10);
   --pink: #c98aa6;
 
   --text-secondary: #b5ac97;
@@ -128,8 +133,8 @@ body.spicy-mode {
   --muted: #9a9180; /* match dark theme (contrast note above) */
   --rule: rgba(236, 228, 210, 0.13);
   --rule-strong: rgba(236, 228, 210, 0.26);
-  --accent: #d0808a; /* dusty rose/oxblood */
-  --accent-weak: rgba(208, 128, 138, 0.14);
+  --accent: #e0637f; /* crimson, lightened for dark (hue-matched to #af1b3f) */
+  --accent-weak: rgba(224, 99, 127, 0.14);
   --spicy: 1;
 }
 [data-theme="light"] { color-scheme: light; }
@@ -166,7 +171,7 @@ a:hover { text-decoration: underline; }
 button { font-family: inherit; cursor: pointer; color: inherit; }
 input, select, textarea { font-family: inherit; font-size: 14px; color: var(--ink); }
 ::placeholder { color: var(--muted); opacity: 1; }
-::selection { background: var(--accent-weak); }
+::selection { background: var(--gold-weak); }
 
 :focus-visible {
   outline: 1px solid var(--accent);
@@ -209,8 +214,9 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--in
   position: absolute;
   top: 0; left: 0; right: 0;
   height: 3px;
-  background: var(--accent);
-  opacity: var(--spicy);
+  /* gold hairline always present at 40%; full-strength when confidential */
+  background: var(--gold);
+  opacity: calc(0.4 + 0.6 * var(--spicy));
   transition: opacity var(--spicy-duration) ease, background var(--spicy-duration) ease;
 }
 
@@ -227,6 +233,24 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--in
   line-height: 0.95;
   color: var(--ink);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* Wordmark image — the white-on-transparent PNG used as a mask so the mark
+   fills with --ink (near-black on paper, cream in dark mode) and follows
+   theme/confidential transitions like text would. aspect 3063:1375. */
+.wordmark-img {
+  display: block;
+  background: var(--ink);
+  -webkit-mask: url('/assets/wordmark.png') no-repeat left center / contain;
+  mask: url('/assets/wordmark.png') no-repeat left center / contain;
+  transition: background-color var(--spicy-duration) ease;
+}
+.sidebar-logo .wordmark-img { width: 132px; aspect-ratio: 3063 / 1375; }
+.mob-header .wordmark-img { width: 76px; aspect-ratio: 3063 / 1375; }
+.login-logo .wordmark-img {
+  width: 190px; aspect-ratio: 3063 / 1375;
+  margin: 0 auto;
+  -webkit-mask-position: center;
+  mask-position: center;
 }
 .sidebar-tag {
   font-family: var(--font-mono);
@@ -299,7 +323,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; color: var(--in
 .nav-item .nav-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav-item .nav-marker {
   width: 6px; height: 6px; flex-shrink: 0;
-  background: var(--accent);
+  background: var(--gold);
   opacity: 0;
   transition: opacity 300ms ease, background var(--spicy-duration) ease;
   align-self: center;
@@ -875,7 +899,7 @@ a.rec-log-row:hover .rec-log-who { color: var(--accent); }
   border-radius: 0;
 }
 .rec-squares .star svg { display: none; }
-.rec-squares .star.filled { background: var(--ink); }
+.rec-squares .star.filled { background: var(--gold); }
 .rec-squares .star-rating.interactive .star:hover { border-color: var(--accent); }
 
 /* bracketed mono tags cluster in the dossier */
@@ -1304,21 +1328,21 @@ a.btn, a.btn:hover { text-decoration: none; }
 /* Letter-avatar palette: muted editorial inks drawn from the design tokens.
    The slot is a stable hash of the display name (utils.avatarColorIndex), so
    a person keeps their color across reloads. Photos cover the letters. */
-.avc-0 { color: #2b5566; background: rgba(43, 85, 102, 0.10); }   /* ink-blue */
+.avc-0 { color: #253e45; background: rgba(37, 62, 69, 0.10); }    /* petrol teal */
 .avc-1 { color: #47694d; background: rgba(71, 105, 77, 0.10); }   /* green */
 .avc-2 { color: #8a6524; background: rgba(138, 101, 36, 0.10); }  /* amber */
 .avc-3 { color: #8a2f2b; background: rgba(138, 47, 43, 0.10); }   /* red */
 .avc-4 { color: #6b4d7a; background: rgba(107, 77, 122, 0.10); }  /* plum */
 .avc-5 { color: #34676f; background: rgba(52, 103, 111, 0.10); }  /* teal */
-.avc-6 { color: #7a1f2b; background: rgba(122, 31, 43, 0.10); }   /* oxblood */
+.avc-6 { color: #af1b3f; background: rgba(175, 27, 63, 0.10); }   /* crimson */
 .avc-7 { color: #5a6238; background: rgba(90, 98, 56, 0.10); }    /* olive */
-[data-theme="dark"] .avc-0 { color: #7fa8b8; background: rgba(127, 168, 184, 0.14); }
+[data-theme="dark"] .avc-0 { color: #8ab6c0; background: rgba(138, 182, 192, 0.14); }
 [data-theme="dark"] .avc-1 { color: #8fb996; background: rgba(143, 185, 150, 0.14); }
 [data-theme="dark"] .avc-2 { color: #cfa96a; background: rgba(207, 169, 106, 0.14); }
 [data-theme="dark"] .avc-3 { color: #cf8a84; background: rgba(207, 138, 132, 0.14); }
 [data-theme="dark"] .avc-4 { color: #b195c2; background: rgba(177, 149, 194, 0.14); }
 [data-theme="dark"] .avc-5 { color: #86b7bf; background: rgba(134, 183, 191, 0.14); }
-[data-theme="dark"] .avc-6 { color: #d0808a; background: rgba(208, 128, 138, 0.14); }
+[data-theme="dark"] .avc-6 { color: #e0637f; background: rgba(224, 99, 127, 0.14); }
 [data-theme="dark"] .avc-7 { color: #adb583; background: rgba(173, 181, 131, 0.14); }
 .av .flag { display: none; } /* pride rings not used in The Record */
 .av-stack { display: flex; }
@@ -1394,7 +1418,7 @@ a.btn, a.btn:hover { text-decoration: none; }
 .star-rating { display: inline-flex; gap: 2px; }
 .star-rating .star { border: none; background: none; padding: 0; color: var(--muted); display: inline-flex; }
 .star-rating .star svg { width: 15px; height: 15px; fill: none; stroke: currentColor; }
-.star-rating .star.filled { color: var(--ink); }
+.star-rating .star.filled { color: var(--gold); }
 .star-rating .star.filled svg { fill: currentColor; }
 .star-rating.readonly .star { cursor: default; }
 .star-rating.interactive .star:hover { color: var(--accent); }
@@ -2450,17 +2474,17 @@ a.rec-log-who:hover { color: var(--accent); text-decoration: none; }
 /* palette colors win on map pins too (.map-avatar-pin .pin-av sets its own
    color/background at higher specificity than a bare .avc-N) */
 .map-avatar-pin .pin-av[class*="avc-"] { background: var(--panel); }
-.map-avatar-pin .pin-av.avc-0 { color: #2b5566; } .map-avatar-pin .pin-av.avc-1 { color: #47694d; }
+.map-avatar-pin .pin-av.avc-0 { color: #253e45; } .map-avatar-pin .pin-av.avc-1 { color: #47694d; }
 .map-avatar-pin .pin-av.avc-2 { color: #8a6524; } .map-avatar-pin .pin-av.avc-3 { color: #8a2f2b; }
 .map-avatar-pin .pin-av.avc-4 { color: #6b4d7a; } .map-avatar-pin .pin-av.avc-5 { color: #34676f; }
-.map-avatar-pin .pin-av.avc-6 { color: #7a1f2b; } .map-avatar-pin .pin-av.avc-7 { color: #5a6238; }
-[data-theme="dark"] .map-avatar-pin .pin-av.avc-0 { color: #7fa8b8; }
+.map-avatar-pin .pin-av.avc-6 { color: #af1b3f; } .map-avatar-pin .pin-av.avc-7 { color: #5a6238; }
+[data-theme="dark"] .map-avatar-pin .pin-av.avc-0 { color: #8ab6c0; }
 [data-theme="dark"] .map-avatar-pin .pin-av.avc-1 { color: #8fb996; }
 [data-theme="dark"] .map-avatar-pin .pin-av.avc-2 { color: #cfa96a; }
 [data-theme="dark"] .map-avatar-pin .pin-av.avc-3 { color: #cf8a84; }
 [data-theme="dark"] .map-avatar-pin .pin-av.avc-4 { color: #b195c2; }
 [data-theme="dark"] .map-avatar-pin .pin-av.avc-5 { color: #86b7bf; }
-[data-theme="dark"] .map-avatar-pin .pin-av.avc-6 { color: #d0808a; }
+[data-theme="dark"] .map-avatar-pin .pin-av.avc-6 { color: #e0637f; }
 [data-theme="dark"] .map-avatar-pin .pin-av.avc-7 { color: #adb583; }
 
 /* -------------------------------------------------- journal + timeline */
