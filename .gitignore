@@ -1,6 +1,17 @@
+# Dependencies
 node_modules/
-dist/
+
+# Secrets & local config — NEVER commit these
+.env
+.env.*
+!.env.example
+.secrets
+
+# Runtime data (media, uploads, dev DB)
+data/
 uploads/
+dist/
+
+# Logs & OS cruft
 *.log
 .DS_Store
-.secrets

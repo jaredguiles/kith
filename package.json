@@ -1,7 +1,7 @@
 {
   "name": "kith",
   "version": "1.0.0",
-  "description": "Kith — personal CRM. Old English for one's friends and acquaintances.",
+  "description": "Kith \u2014 personal CRM. Old English for one's friends and acquaintances.",
   "private": true,
   "engines": {
     "node": ">=24 <25"
@@ -25,5 +25,7 @@
     "vcard4": "4.0.5",
     "web-push": "^3.6.7",
     "yauzl": "3.4.0"
-  }
+  },
+  "license": "MIT",
+  "author": "Jared A Guiles-Haimes"
 }
