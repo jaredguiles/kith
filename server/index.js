@@ -18,7 +18,7 @@ const IS_PROD = process.env.NODE_ENV === 'production';
 
 // Whether the app is actually reached over TLS (https://). This governs the
 // HTTPS-only security headers (upgrade-insecure-requests, HSTS, COOP). In
-// production Kith normally sits behind a TLS-terminating proxy (Traefik), so
+// production Kith normally sits behind a TLS-terminating reverse proxy, so
 // this defaults to true when NODE_ENV=production. But a production build can
 // legitimately be served over plain HTTP (e.g. a LAN/IP-only demo instance
 // with no proxy) — in that case set BEHIND_TLS=false so we DON'T force assets
@@ -28,7 +28,7 @@ const BEHIND_TLS = process.env.BEHIND_TLS != null
   ? !/^(0|false|no)$/i.test(String(process.env.BEHIND_TLS).trim())
   : IS_PROD;
 
-// Traefik is the single reverse-proxy hop in front of the app; trust it so
+// A reverse proxy is the single hop in front of the app; trust it so
 // req.ip reflects the real client IP from X-Forwarded-For (login throttling
 // in middleware/auth.js keys on req.ip).
 app.set('trust proxy', 1);

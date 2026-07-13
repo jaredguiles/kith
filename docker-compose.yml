@@ -1,52 +1,56 @@
+# Kith — standalone Docker Compose.
+# Copy .env.example to .env first. Kith serves its SPA + API on one port and
+# works behind any reverse proxy, or directly on a trusted network.
 services:
   kith:
     build: .
-    container_name: ${SERVICE}
+    container_name: kith
     env_file:
       - .env
-      - .secrets
     ports:
-      - "${EXTERNAL_PORT}:${INTERNAL_PORT}"
+      - "${EXTERNAL_PORT:-8084}:${INTERNAL_PORT:-3000}"
     volumes:
-      # the storage layer NFS mount (photos/videos + thumbnails). Note: /srv/kith
-      # itself is local disk on the application server — Personal/ is the NFS share.
-      - /srv/kith/media:/media
-      - /opt/kith/uploads:/app/uploads   # Temp import-upload staging
+      # Media (photos/videos + thumbnails) and temporary import-upload staging.
+      # Point the host paths at any mounted volume you like.
+      - ./data/media:/media
+      - ./data/uploads:/app/uploads
     networks:
       - kith_network
     security_opt:
       - no-new-privileges:true
-    restart: ${RESTART_POLICY:-always}
+    restart: ${RESTART_POLICY:-unless-stopped}
     healthcheck:
-      test: [ "CMD-SHELL", "curl -sf http://localhost:${INTERNAL_PORT}${HEALTHCHECK_ENDPOINT} || exit 1" ]
+      test: [ "CMD-SHELL", "curl -sf http://localhost:${INTERNAL_PORT:-3000}/api/health || exit 1" ]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 30s
-    labels:
-      - "traefik.enable=true"
-      # UI shell router — behind Authentik forwardauth (outer wall, D13)
-      - "traefik.http.routers.kith.rule=Host(`${URL}`)"
-      - "traefik.http.routers.kith.entrypoints=https"
-      - "traefik.http.routers.kith.tls=true"
-      - "traefik.http.routers.kith.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.kith.tls.domains[0].main=*.example.com"
-      - "traefik.http.routers.kith.tls.domains[0].sans=example.com"
-      - "traefik.http.routers.kith.middlewares=authentik-forwardauth@docker"
-      # API router — exempt from forwardauth (302s break SPA fetch; Kith JWT is
-      # the auth boundary per D13). Higher priority wins over the shell router.
-      - "traefik.http.routers.kith-api.rule=Host(`${URL}`) && PathPrefix(`/api`)"
-      - "traefik.http.routers.kith-api.entrypoints=https"
-      - "traefik.http.routers.kith-api.tls=true"
-      - "traefik.http.routers.kith-api.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.kith-api.priority=100"
-      - "traefik.http.routers.kith-api.service=kith"
-      - "traefik.http.services.kith.loadbalancer.server.port=${INTERNAL_PORT}"
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+    # --- Optional: reverse proxy ---
+    # Kith needs no proxy to run. If you use one (Traefik, Caddy, nginx, etc.),
+    # route your host to this container's port. A Traefik example — note the
+    # /api path must bypass any SSO forward-auth, since Kith's own JWT is the
+    # API auth boundary and SSO 302s would break SPA fetches:
+    #
+    # labels:
+    #   - "traefik.enable=true"
+    #   - "traefik.http.routers.kith.rule=Host(`${URL}`)"
+    #   - "traefik.http.routers.kith.entrypoints=https"
+    #   - "traefik.http.routers.kith.tls=true"
+    #   # optional SSO on the UI shell only:
+    #   - "traefik.http.routers.kith.middlewares=your-sso-forwardauth@docker"
+    #   # API router — exempt from SSO, higher priority:
+    #   - "traefik.http.routers.kith-api.rule=Host(`${URL}`) && PathPrefix(`/api`)"
+    #   - "traefik.http.routers.kith-api.entrypoints=https"
+    #   - "traefik.http.routers.kith-api.tls=true"
+    #   - "traefik.http.routers.kith-api.priority=100"
+    #   - "traefik.http.routers.kith-api.service=kith"
+    #   - "traefik.http.services.kith.loadbalancer.server.port=${INTERNAL_PORT:-3000}"
 
 networks:
   kith_network:

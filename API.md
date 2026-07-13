@@ -8,9 +8,9 @@ For architecture and data-model details see `SPEC.md`.
 ## Overview
 
 **Base URL:** `https://kith.example.com/api` (all paths below are relative to the host root).
-`/api` is exempt from the Authentik SSO edge via a dedicated higher-priority Traefik router
-(`kith-api`, `PathPrefix(/api)`, priority 100) — the app's own JWT/PAT auth is the API boundary;
-Authentik forwardauth wraps only the UI shell.
+If you front the app with an optional SSO forward-auth layer, exempt `/api` from it via a dedicated
+higher-priority reverse-proxy router (`kith-api`, `PathPrefix(/api)`, priority 100) — the app's own
+JWT/PAT auth is the real API boundary; any external SSO layer should wrap only the UI shell.
 
 ### Authentication
 

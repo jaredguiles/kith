@@ -1,6 +1,6 @@
 # Kith — Personal CRM Specification
 
-> **Synced 2026-07-10 to v1.8.** Originally synced 2026-07-06 with [[kith-personal-crm-app]] (Master Build Plan); the §2.1 corrections (scraping/extension removal, the database server DB host, file-only imports) are applied directly in this document. Ships in the repo as `SPEC.md`. Where this spec and the build plan still conflict, the build plan wins; where either conflicts with **`DESIGN.md`** ("The Record" design system, adopted v1.3) on visuals, DESIGN.md wins. The body of this document describes the app as specified through v1.1; the **"Post-v1.1 Features (v1.2–v1.8)"** section below enumerates everything added since — see `BUILDLOG.md` for full per-release detail.
+> **Current as of v1.8.** Ships in the repo as `SPEC.md`. Where this spec conflicts with **`DESIGN.md`** ("The Record" design system, adopted v1.3) on visuals, DESIGN.md wins. The body of this document describes the app as specified through v1.1; the **"Post-v1.1 Features (v1.2–v1.8)"** section below enumerates everything added since — see `BUILDLOG.md` for full per-release detail.
 
 ## Overview
 
@@ -19,7 +19,7 @@ Kith has a hidden layer of intimate/personal data that is concealed by default s
 The body of this spec describes Kith as built through v1.1. Everything below shipped after — see `BUILDLOG.md` for full per-release detail, and the actual code (`server/routes/`, `server/public/js/`) as the ground truth.
 
 ### Maps & geocoding (v1.2, refined v1.6/v1.8)
-Self-hosted, addresses never leave the LAN. Bundled geonames city geocoder (`lib/geo.js`, ~56k cities) + a Photon geocoder (self-hosted komoot Photon, `PHOTON_URL`) for street-level precision; city-level queries resolve local-first (v1.8). Authenticated OSM tile proxy with disk cache; vendored Leaflet. Map page (`routes/geo.js`, `js/map.js`) with contact pins, zoom-adaptive clustering (v1.6), geo search, `?near=` proximity filter; contact-detail mini-map; address auto-geocode + manual locate.
+Self-hosted, addresses never leave your network. Bundled geonames city geocoder (`lib/geo.js`, ~56k cities) + a self-hosted Photon geocoder (komoot Photon, `PHOTON_URL`) for street-level precision; city-level queries resolve local-first (v1.8). Authenticated OSM tile proxy with disk cache; vendored Leaflet. Map page (`routes/geo.js`, `js/map.js`) with contact pins, zoom-adaptive clustering (v1.6), geo search, `?near=` proximity filter; contact-detail mini-map; address auto-geocode + manual locate.
 
 ### CRM depth (v1.2, expanded v1.5–v1.7)
 - **Relationships** (`routes/relationships.js`): typed contact↔contact links with inverse labels; family types incl. step/adoptive/foster variants (v1.7); categorized UI (Family/Friends/Work/Other) + immediate-family strip (v1.8).
@@ -49,14 +49,14 @@ Self-hosted, addresses never leave the LAN. Bundled geonames city geocoder (`lib
 ### Auth & security additions (v1.1–v1.2)
 - **Cookie sessions:** JWT in an httpOnly SameSite=Strict cookie (Bearer fallback for API clients); `token_version` invalidation on password change/reset/deactivation.
 - **TOTP 2FA** (`lib/totp.js`, RFC-6238 via node:crypto): encrypted secret, pending-token second login step; Account & security page for all roles.
-- Login throttling keyed on real client IP behind Traefik.
+- Login throttling keyed on real client IP behind the reverse proxy.
 
 ### Notifications & PWA (v1.2, v1.4)
 - **Proactive notifications** (v1.4): scheduler (`lib/scheduler.js`) for birthday/reminder nudges via email and **Web Push** (`routes/push.js`, VAPID, `web-push`).
 - **PWA:** manifest + service worker (`sw.js`, HTTPS-only; API responses never cached), auto-update.
 
 ### Sync & integrations (v1.4, v1.8)
-- **CardDAV/CalDAV** (`lib/davsync.js`): sync with the companion Radicale container ("KithDAV", separate repo dir/pipeline).
+- **CardDAV/CalDAV** (`lib/davsync.js`): sync with a companion CardDAV/CalDAV server (e.g. Radicale).
 - **Immich proxy** (`routes/immich.js`, v1.8): per-user connections to self-hosted Immich photo servers; API keys field-encrypted and never sent to the browser — all asset/thumbnail/search traffic proxied server-side; photo picker attaches Immich photos to people/events; spicy-flagged instances hide behind the confidential layer.
 - **Messages UI + global search** (v1.4): message management (incl. `DELETE /api/messages/:id`), MiniSearch-powered fuzzy client search (`js/search-index.js`), server command-palette search (`routes/search.js`).
 
@@ -74,10 +74,10 @@ New tables include: `notifications`, `contact_relationships`, `important_dates`,
 
 - **Backend:** Node.js + Express (serves API + static HTML)
 - **Frontend:** Single HTML page with vanilla JS (no React, no build step, no bundler)
-- **Database:** MariaDB on the [[the database server]] VM (db-host:3306, database: `kith`) — external to the app container
+- **Database:** MariaDB on a separate database server (`db-host:3306`, database: `kith`) — external to the app container
 - **Auth:** JWT (bcryptjs + jsonwebtoken)
-- **Deployment:** Docker via GitLab CI pipeline (gitlab.example.com) to the application server VM
-- **Media storage:** Configurable path (default mounted the storage layer directory), changeable in Settings
+- **Deployment:** Docker image built and deployed via your CI/CD to the application server
+- **Media storage:** Configurable path (default a mounted media volume), changeable in Settings
 
 ---
 
@@ -933,9 +933,9 @@ Auth summary:
 ## Infrastructure Files (kept & cleaned)
 
 - `.env` — Deployment config (DB creds, JWT secret, ports, URLs)
-- `docker-compose.yml` — Service definition with Traefik labels
+- `docker-compose.yml` — Service definition with reverse-proxy labels
 - `Dockerfile` — Node.js container build
-- `files.json` — GitLab CI pipeline file list
+- `files.json` — CI/CD deploy file list
 
 ---
 
@@ -962,10 +962,10 @@ kith/
 │   │   ├── crypto.js            # AES-256-GCM field encryption helpers (spicy layer)
 │   │   ├── contacts.js          # Search-index rebuild, share-scope filter, touchContact, validation
 │   │   ├── audit.js             # Non-blocking audit_log writes
-│   │   ├── geo.js               # Geocoding: bundled geonames index + a Photon geocoder, geo_cache
+│   │   ├── geo.js               # Geocoding: bundled geonames index + Photon, geo_cache
 │   │   ├── notify.js            # Notification + Web Push delivery
 │   │   ├── scheduler.js         # Daily jobs: birthday/reminder nudges, trash purge
-│   │   ├── davsync.js           # CardDAV/CalDAV (Radicale "KithDAV") sync
+│   │   ├── davsync.js           # CardDAV/CalDAV (e.g. Radicale) sync
 │   │   └── totp.js              # RFC-6238 TOTP (2FA), node:crypto only
 │   ├── database/
 │   │   ├── connection.js        # MariaDB pool
@@ -1100,18 +1100,18 @@ Notes that remain true regardless of design direction:
 
 ### Container Architecture
 
-Kith runs as a **single Docker container** (Node.js + Express) on the the application server VM. The MariaDB database is external — hosted on the **the database server VM** at a fixed address. There is no database container in the compose file.
+Kith runs as a **single Docker container** (Node.js + Express) on the application server. The MariaDB database is external — hosted on a separate database server at a fixed address. There is no database container in the compose file.
 
 ```
 ┌──────────────────────────────┐     ┌──────────────────┐
 │  kith container              │────▶│  MariaDB         │
-│  node:24-alpine              │     │  the database server        │
-│  Express API + static files  │     │  db-host   │
+│  node:24-alpine              │     │  database server │
+│  Express API + static files  │     │  db-host         │
 │  Import worker (in-process)  │     │  port 3306       │
 └──────────────┬───────────────┘     └──────────────────┘
                │ volume mount
                ▼
-     the storage layer media directory
+        media volume
 ```
 
 ### docker-compose.yml
@@ -1119,7 +1119,7 @@ Kith runs as a **single Docker container** (Node.js + Express) on the the applic
 ```yaml
 services:
   kith:
-    image: gitlab.example.com:5050/homelab/vms/knowledgecore/kith:latest
+    image: registry.example.com/kith:latest
     restart: unless-stopped
     ports:
       - "8084:3000"
@@ -1137,15 +1137,16 @@ services:
       - MAX_UPLOAD_SIZE=52428800
       - IMPORT_MAX_UPLOAD_SIZE=2147483648
     volumes:
-      - /srv/kith:/media               # the storage layer media mount (NFS)
+      - /path/to/media:/media                # Media volume mount (host path → container)
       - /opt/kith/uploads:/app/uploads   # Temp import-upload staging
     labels:
+      # Example reverse-proxy labels (shown for Traefik; adapt to your reverse proxy)
       - "traefik.enable=true"
       - "traefik.http.routers.kith.rule=Host(`kith.example.com`)"
       - "traefik.http.routers.kith.entrypoints=websecure"
 ```
 
-> Exposure: `kith.example.com` is **LAN + Tailscale only** (the lab is behind CGNAT; example.com uses a DNS-01 wildcard cert). Kith is deliberately **not** exposed to the public internet given its data sensitivity.
+> Exposure: because Kith holds sensitive personal data, deploy it on a private network (LAN/VPN) rather than exposing it to the public internet. Terminate TLS at your reverse proxy.
 
 ### Dockerfile
 
@@ -1225,7 +1226,7 @@ In `NODE_ENV=production` the server must **refuse to start** if `JWT_SECRET` or 
 - JS template literals conflict with SQL backticks — use escaped backticks or regular strings
 - `display_name` is auto-built from `first_name + last_name` if not explicitly provided
 - All deletes are soft deletes (set `deleted_at`)
-- Media paths reference the configured storage directory (set in Settings — default `/media` maps to the the storage layer volume mount)
+- Media paths reference the configured storage directory (set in Settings — default `/media` maps to the media volume mount)
 - Spicy mode availability is gated at the API level by the `spicy_enabled` app setting — when disabled, spicy endpoints return 403 and all queries filter out is_spicy content
 - Audit log writes and change log writes are non-blocking (fire and forget) to avoid slowing down user actions
 - CSS custom properties (variables) power the color scheme — toggling spicy mode swaps only the accent tokens on the app element; surfaces/text/structure are unchanged
@@ -1235,5 +1236,5 @@ In `NODE_ENV=production` the server must **refuse to start** if `JWT_SECRET` or 
 - Video thumbnail generation uses `fluent-ffmpeg` + the system FFmpeg binary (installed in Docker image via `apk add ffmpeg`) — extracts frame at 1s into the video, saves as JPEG alongside the video file
 - All users can create and manage their own contacts. Admins additionally can view all users' contacts. Only admins can access Settings.
 - **XSS / output encoding (mandatory):** UI widgets are functions returning HTML strings, and much of the data is third-party (imported names/bios). Every interpolated value MUST pass through a shared `esc()` HTML-escaping helper — no unsanitized `innerHTML` of user or imported data, ever. Enforce with a strict Content-Security-Policy via `helmet`.
-- **Media serving (mandatory):** media files are NEVER served statically. All media is served through authenticated routes that enforce ownership/share-scope and the spicy gate, with path-traversal guards and no directory listing. Media blobs themselves are stored unencrypted on the the storage layer mount (accepted residual risk — documented in the build plan §7.11); spicy *captions* are field-encrypted.
+- **Media serving (mandatory):** media files are NEVER served statically. All media is served through authenticated routes that enforce ownership/share-scope and the spicy gate, with path-traversal guards and no directory listing. Media blobs themselves are stored unencrypted on the media volume (accepted residual risk); spicy *captions* are field-encrypted.
 - **First boot:** the seeded `admin`/`changeme` account is forced to change its password on first login (all other routes blocked until done). `spicy_enabled` seeds as false.

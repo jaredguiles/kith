@@ -1,5 +1,5 @@
 # Development override — throwaway local MariaDB.
-# the database server (db-host) is PRODUCTION ONLY and is never used for dev/test (D12).
+# Never point dev/test at your production database.
 #
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build

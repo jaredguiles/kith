@@ -1,8 +1,8 @@
 'use strict';
 
-// One-way push of Kith's SFW data to a Radicale CardDAV/CalDAV server.
+// One-way push of Kith's SFW data to any CardDAV/CalDAV server (e.g. Radicale).
 //
-//   Kith MariaDB  ──(this module)──▶  Radicale (dav.example.com / :5232)  ──▶ phone
+//   Kith MariaDB  ──(this module)──▶  the DAV server  ──▶ phone
 //
 // Kith's DB stays the source of truth. We hand-roll VCARD 4.0 + VCALENDAR
 // (RFC 6350 / RFC 5545) and PUT them by stable UID so the push is idempotent
@@ -27,7 +27,7 @@ const DAV_USER = process.env.DAV_USER || 'kith';
 const DAV_PASS = process.env.DAV_PASS || '';
 const DAV_SYNC_ENABLED = String(process.env.DAV_SYNC_ENABLED) === 'true';
 
-// Collection paths under the user principal. Radicale auto-creates parent
+// Collection paths under the user principal. the DAV server auto-creates parent
 // principals; we MKCOL the two collections with proper resourcetype first.
 const ADDRESSBOOK_PATH = `/${encodeURIComponent(DAV_USER)}/addressbook`;
 const CALENDAR_PATH = `/${encodeURIComponent(DAV_USER)}/calendar`;
@@ -330,7 +330,7 @@ async function ensureCollection(path, kind) {
     if (probe.status === 207 || probe.status === 200) return true;
   } catch { /* fall through to create */ }
 
-  // Extended MKCOL with the right resourcetype so Radicale tags it as an
+  // Extended MKCOL with the right resourcetype so the DAV server tags it as an
   // addressbook or calendar collection (RFC 5689).
   const xmlns =
     kind === 'addressbook'

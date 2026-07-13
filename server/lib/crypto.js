@@ -6,7 +6,7 @@
 // The versionId byte enables key rotation later without a data-migration guess.
 //
 // Key: FIELD_ENCRYPTION_KEY env — 32-byte key, base64-encoded. Never in the DB,
-// never committed. Backed up in a secrets manager separately from DB backups.
+// never committed. Back it up separately from DB backups.
 
 const crypto = require('node:crypto');
 

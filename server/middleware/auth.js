@@ -16,7 +16,7 @@ const PAT_PREFIX = 'kith_'; // personal access tokens (api_tokens table)
 // HTTP-only deployment (e.g. a LAN/IP demo with no TLS proxy) marking it
 // Secure silently breaks the whole session — the SPA loads unauthenticated,
 // avatars/media 401, and the map/data never populate. Defaults to true under
-// NODE_ENV=production (prod sits behind Traefik TLS); set BEHIND_TLS=false for
+// NODE_ENV=production (prod sits behind a TLS reverse proxy); set BEHIND_TLS=false for
 // HTTP-only deployments so the cookie is actually sent back.
 const BEHIND_TLS = process.env.BEHIND_TLS != null
   ? !/^(0|false|no)$/i.test(String(process.env.BEHIND_TLS).trim())
