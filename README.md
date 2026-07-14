@@ -1,8 +1,9 @@
 <p align="center">
-  <img src="logo.png" alt="Kith logo" width="96" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/wordmark-dark.png" />
+    <img src="docs/assets/wordmark-light.png" alt="Kith" width="360" />
+  </picture>
 </p>
-
-<h1 align="center">Kith</h1>
 
 <p align="center"><em>A self-hosted personal CRM for the relationships that matter.</em></p>
 
