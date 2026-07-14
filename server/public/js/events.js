@@ -2,14 +2,14 @@
 // via the kith:contact-detail-rendered event.
 
 import { api, qs } from './api.js';
-import { esc, fmtDate, fmtDateTime, timeAgo, initials, parseDate, toLocalInput, fromLocalInput, debounce } from './utils.js';
+import { esc, fmtDate, fmtDateTime, initials, parseDate, toLocalInput, fromLocalInput, debounce } from './utils.js';
 import { icon } from './icons.js';
 import {
   emptyState, modalShell, formGroup, textInput, selectInput, textarea, starRating,
-  toast, openModal, confirmModal, readForm, filterPills, feedItem, avatar,
+  toast, openModal, confirmModal, readForm, filterPills,
 } from './components.js';
 import { pageRenderers } from './pages.js';
-import { state, isSpicyOn } from './app.js';
+import { isSpicyOn } from './app.js';
 import { openImmichPicker, openLightbox } from './media.js';
 
 const EVENT_TYPES = ['meetup', 'date', 'hangout', 'hookup', 'party', 'trip', 'call', 'dinner', 'coffee', 'workout', 'other'];
@@ -408,11 +408,6 @@ export function openEventForm(existing, onSaved, presetContact = null) {
 }
 
 // -------------------------------------------- contact detail enrichment
-const TL_ICONS = {
-  note: 'sticky-note', event: 'calendar', message_batch: 'message-circle',
-  import: 'import', call: 'phone-call', meetup: 'users', hangout: 'coffee',
-  date: 'heart', hookup: 'flame',
-};
 
 async function renderContactTimeline(container, contact, canEdit, refresh) {
   let data;

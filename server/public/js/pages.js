@@ -1,8 +1,6 @@
 // Page-level render functions. renderPage(el, route) dispatches per route.
 
-import { api, qs } from './api.js';
 import { esc } from './utils.js';
-import { icon } from './icons.js';
 import { emptyState } from './components.js';
 
 export const pageTitles = {

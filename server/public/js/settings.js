@@ -587,8 +587,8 @@ function downloadUrl(url) {
 
 async function renderAccountSection(container) {
   if (!container) return;
-  let me = null;
-  let tokens = [];
+  let me;
+  let tokens;
   let tokensErr = null;
   try {
     [me, tokens] = await Promise.all([

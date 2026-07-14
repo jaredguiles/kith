@@ -1,13 +1,14 @@
 {
   "name": "kith",
   "version": "1.9.2",
-  "description": "Kith \u2014 personal CRM. Old English for one's friends and acquaintances.",
+  "description": "Kith — personal CRM. Old English for one's friends and acquaintances.",
   "private": true,
   "engines": {
     "node": ">=24 <25"
   },
   "scripts": {
     "start": "node server/index.js",
+    "lint": "eslint .",
     "test": "node --test server/test/*.test.js"
   },
   "dependencies": {
@@ -27,5 +28,10 @@
     "yauzl": "3.4.0"
   },
   "license": "MIT",
-  "author": "Jared A Guiles-Haimes"
+  "author": "Jared A Guiles-Haimes",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.7.0",
+    "globals": "^17.7.0"
+  }
 }

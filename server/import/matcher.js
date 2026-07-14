@@ -11,7 +11,7 @@
 //   Location + name sim  0.50
 //   Threshold            0.50 — suggest, never auto-commit.
 
-const { normalizeEmail, normalizePhone, cleanStr } = require('./normalizer');
+const { normalizeEmail, normalizePhone } = require('./normalizer');
 
 function normName(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();

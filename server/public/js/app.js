@@ -3,7 +3,7 @@
 import { api, qs, setToken } from './api.js';
 import { esc, initials, debounce, fmtDateTime } from './utils.js';
 import { icon } from './icons.js';
-import { toast, openModal, modalShell, toggleSwitch, emptyState, confirmModal, logoMark, recNo } from './components.js';
+import { toast, openModal, modalShell, emptyState, confirmModal, recNo } from './components.js';
 import { renderPage, pageTitles } from './pages.js';
 import { searchPeople, ensureIndex, invalidateSearchIndex } from './search-index.js';
 
@@ -206,13 +206,6 @@ export async function setThemePref(pref) {
 }
 
 // ---------------------------------------------------------------- shell
-function logoHtml() {
-  const custom = state.settings.app_logo;
-  if (custom) return `<img src="${esc(custom)}" alt="">`;
-  // Inline SVG (not <img>) so currentColor follows the theme — an <img>
-  // rendered the mark black, invisible in dark mode.
-  return logoMark();
-}
 
 // Kith wordmark image (assets/wordmark.png, white-on-transparent) rendered
 // via CSS mask so it fills with --ink and follows the theme (see .wordmark-img).

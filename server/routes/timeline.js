@@ -7,7 +7,7 @@
 
 const express = require('express');
 const { query } = require('../database/connection');
-const { requireAuth, requireContactAccess, contactAccess, isAdmin } = require('../middleware/auth');
+const { requireAuth, contactAccess, isAdmin } = require('../middleware/auth');
 const { auditWrite } = require('../lib/audit');
 const { spicyVisible } = require('./contacts');
 const { encryptField, decryptField } = require('../lib/crypto');

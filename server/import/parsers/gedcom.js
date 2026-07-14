@@ -34,7 +34,7 @@ function parseGedcomDate(v) {
   // 15 APR 1990
   let m = s.match(/^(\d{1,2})\s+([A-Z]{3})\s+(\d{3,4})$/);
   if (m && MONTHS[m[2]]) {
-    const day = Number(m[1]), mo = Number(MONTHS[m[2]]);
+    const day = Number(m[1]);
     if (day >= 1 && day <= 31) {
       return `${String(m[3]).padStart(4, '0')}-${MONTHS[m[2]]}-${String(day).padStart(2, '0')}`;
     }

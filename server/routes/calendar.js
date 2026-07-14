@@ -27,7 +27,6 @@ router.get('/', async (req, res, next) => {
     const monthStart = `${monthStr}-01 00:00:00`;
     const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
     const monthEnd = `${monthStr}-${String(daysInMonth).padStart(2, '0')} 23:59:59`;
-    const mm = String(month).padStart(2, '0');
 
     const showSpicy = await spicyVisible(req.user);
     const admin = isAdmin(req.user);

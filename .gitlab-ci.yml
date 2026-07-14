@@ -1,0 +1,47 @@
+# Kith CI — lint + test on every branch. This GitLab project is the dev
+# mirror / CI workbench; github.com/jaredguiles/kith is the canonical repo
+# (GitHub ignores this file). NO deploy stage here — homelab deployment goes
+# through the knowledgecore VM repo, synced from GitHub at release time.
+#
+# Runner: shell executor on CodeFoundry (no Docker access, no system Node),
+# so jobs bootstrap a cached local Node 24 toolchain from nodejs.org.
+
+stages:
+  - lint
+  - test
+
+variables:
+  NODE_VERSION: "24.13.0"
+
+default:
+  tags:
+    - shell
+  cache:
+    key: "kith-node-${NODE_VERSION}"
+    paths:
+      - .cache/node
+      - .cache/npm
+  before_script:
+    - |
+      # Bootstrap Node ${NODE_VERSION} into .cache/node (kept via CI cache)
+      NODE_DIR=".cache/node/node-v${NODE_VERSION}-linux-x64"
+      if [ ! -x "${NODE_DIR}/bin/node" ]; then
+        mkdir -p .cache/node
+        curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+          | tar -xJ -C .cache/node
+      fi
+      export PATH="$PWD/${NODE_DIR}/bin:$PATH"
+      node --version
+    - npm ci --cache .cache/npm --prefer-offline --no-audit --no-fund
+
+lint:
+  stage: lint
+  script:
+    - export PATH="$PWD/.cache/node/node-v${NODE_VERSION}-linux-x64/bin:$PATH"
+    - npm run lint
+
+test:
+  stage: test
+  script:
+    - export PATH="$PWD/.cache/node/node-v${NODE_VERSION}-linux-x64/bin:$PATH"
+    - npm test

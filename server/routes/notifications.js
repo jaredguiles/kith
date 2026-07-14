@@ -230,7 +230,7 @@ router.put('/prefs', async (req, res, next) => {
 
 // POST /api/notifications/test-digest — preview: run the weekly digest for just
 // the current user immediately. Wrapped so it never 500s.
-router.post('/test-digest', async (req, res, next) => {
+router.post('/test-digest', async (req, res, _next) => {
   try {
     const sent = await scheduler.runWeeklyDigest(req.user.id);
     res.json({ ok: true, sent });

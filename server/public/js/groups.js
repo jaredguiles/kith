@@ -9,7 +9,7 @@ import {
   toast, openModal, confirmModal, readForm, recNo,
 } from './components.js';
 import { pageRenderers } from './pages.js';
-import { state, navigate, refreshSidebarLists } from './app.js';
+import { refreshSidebarLists } from './app.js';
 
 const GROUP_ICONS = ['users', 'star', 'home', 'link', 'heart', 'briefcase', 'coffee', 'zap', 'globe', 'handshake'];
 

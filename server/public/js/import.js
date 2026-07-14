@@ -1,7 +1,7 @@
 // Import system UI: upload modal, progress widget, data review page.
 
 import { api, qs } from './api.js';
-import { esc, fmtDate, initials, timeAgo, debounce } from './utils.js';
+import { esc, fmtDate, initials, debounce } from './utils.js';
 import { icon } from './icons.js';
 import {
   emptyState, modalShell, formGroup, selectInput, toast, openModal,
@@ -168,7 +168,7 @@ async function pollImportWidget(active = false) {
   clearTimeout(widgetTimer);
   const host = document.getElementById('import-widget-host');
   if (!host || !state.user) return;
-  let jobs = [];
+  let jobs;
   try {
     jobs = (await api.get('/api/import/jobs')).jobs || [];
   } catch (err) {

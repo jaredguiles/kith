@@ -3,7 +3,7 @@
 
 import { api, qs } from './api.js';
 import {
-  esc, escUrl, fmtDate, timeAgo, initials, prideFlagGradient,
+  esc, escUrl, fmtDate, timeAgo, initials,
   ageFromBirthday, zodiacFromBirthday, debounce, parseDate, loadLeaflet,
 } from './utils.js';
 import { createMap, avatarPin } from './map.js';
@@ -11,7 +11,7 @@ import { icon } from './icons.js';
 import {
   avatar, tagPill, groupBadge, emptyState, modalShell, formGroup,
   textInput, selectInput, textarea, toast, openModal, confirmModal, readForm,
-  filterPills, feedItem, sectionHeader, leaderRow, recNo, withBusy,
+  filterPills, feedItem, sectionHeader, recNo, withBusy,
   selectWithOtherHtml, bindSelectWithOther,
   addressAutocompleteHtml, bindAddressAutocomplete,
 } from './components.js';
@@ -584,7 +584,6 @@ export async function renderContactDetail(el, id) {
   if (detailEdit.id !== String(id)) { detailEdit.id = String(id); detailEdit.on = false; }
   const editMode = canEdit && detailEdit.on;
   const refresh = () => renderContactDetail(el, id);
-  const flag = prideFlagGradient(c.orientation);
   // deceased → age at death (when we know the date), not a still-ticking age
   const age = c.is_deceased
     ? (c.date_of_death ? ageFromBirthday(c.birthday, c.date_of_death) : null)
@@ -1325,7 +1324,7 @@ function openDateModal(contact, existing, onSaved) {
 const GIFT_BADGE = { idea: 'neutral', purchased: 'blue', given: 'green' };
 
 async function loadGifts(container, contact, canEdit, refresh) {
-  let gifts = [];
+  let gifts;
   try {
     gifts = (await api.get(`/api/contacts/${contact.id}/gifts`)).gifts || [];
   } catch (err) {

@@ -6,7 +6,7 @@ import { api } from './api.js';
 import { esc, fmtDate, timeAgo, toLocalInput, fromLocalInput } from './utils.js';
 import { icon } from './icons.js';
 import {
-  toast, openModal, modalShell, formGroup, textInput, selectInput, textarea, readForm,
+  toast, openModal, modalShell, formGroup, selectInput, textarea, readForm,
   confirmModal,
 } from './components.js';
 import { isSpicyOn } from './app.js';
@@ -99,7 +99,7 @@ function openInteractionModal(contact, onSaved) {
 
 // ---------------------------------------------- interactions log (in TIMELINE)
 async function renderInteractions(container, contact, canEdit, refresh) {
-  let items = [];
+  let items;
   try {
     items = (await api.get(`/api/contacts/${contact.id}/interactions?limit=50`)).interactions || [];
   } catch {

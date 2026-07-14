@@ -7,7 +7,7 @@ const RELOAD_FLAG = 'kith_401_reloaded';
 
 export function setToken(t) { memToken = t; }
 
-async function request(method, url, body, opts = {}) {
+async function request(method, url, body) {
   const headers = {};
   if (memToken) headers['Authorization'] = `Bearer ${memToken}`;
   let payload;
@@ -33,7 +33,7 @@ async function request(method, url, body, opts = {}) {
     // is excluded so the login page's own failures never reload, and the
     // spicy-pin verify endpoint is excluded because it 401s on a wrong PIN.
     memToken = null;
-    let alreadyReloaded = false;
+    let alreadyReloaded;
     try {
       alreadyReloaded = sessionStorage.getItem(RELOAD_FLAG) === '1';
       if (!alreadyReloaded) sessionStorage.setItem(RELOAD_FLAG, '1');

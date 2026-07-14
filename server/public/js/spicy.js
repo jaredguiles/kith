@@ -8,7 +8,7 @@ import {
   modalShell, formGroup, textInput, selectInput, textarea, starRating,
   toast, openModal, readForm,
 } from './components.js';
-import { state, isSpicyOn, navigate, refreshSidebarLists } from './app.js';
+import { state, isSpicyOn, refreshSidebarLists } from './app.js';
 
 const SPICY_TYPES = ['', 'hookup', 'fwb', 'ltr', 'friend', 'ex', 'situationship', 'one-night', 'sugar', 'open', 'poly', 'other'];
 const ROLE_PREFS = ['', 'Top', 'Bottom', 'Vers', 'Vers-top', 'Vers-bottom', 'Switch', 'Dom', 'Sub', 'Power-bottom', 'Service-top', 'Other'];

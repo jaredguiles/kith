@@ -78,7 +78,7 @@ const upload = multer({
 function safeFilename(name) {
   const base = path.basename(String(name || 'download'));
   // strip quotes/control chars/CRLF that could break the header
-  return base.replace(/[^\w.\- ()\[\]]/g, '_').slice(0, 200) || 'download';
+  return base.replace(/[^\w.\- ()[\]]/g, '_').slice(0, 200) || 'download';
 }
 
 /** Read the first bytes of a file for magic-byte sniffing (audit S5). */

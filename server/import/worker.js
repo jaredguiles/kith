@@ -4,7 +4,6 @@
 // server/index.js). Polls import_jobs for `queued` every 5s, parses,
 // normalizes, matches, stages, then sets `awaiting_review`.
 
-const { workerData, parentPort } = require('node:worker_threads');
 const path = require('node:path');
 const fs = require('node:fs');
 const mysql = require('mysql2/promise');
