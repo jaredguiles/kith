@@ -48,7 +48,7 @@ The "boring" release that makes everything after it cheaper.
 - [ ] OpenAPI spec (`openapi.yaml`)
 - [ ] Bundled-DB backup runbook + example dump cron
 - [ ] `DB_POOL_SIZE` env knob
-- [ ] Publish a prebuilt image (GHCR) so `docker compose up` needs no local build
+- [x] Publish a prebuilt image (GHCR) on tagged releases (`.github/workflows/release.yml`)
 
 ### v2.1 — Sync & interop
 
