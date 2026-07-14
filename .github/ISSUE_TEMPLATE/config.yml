@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 Documentation
+    url: https://agtechlab.dev/kith/docs/getting-started/
+    about: Setup guides, configuration reference, and security docs live on the Kith site.
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/jaredguiles/kith/security/advisories/new
+    about: Please report security issues privately — never in a public issue.
