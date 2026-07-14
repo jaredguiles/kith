@@ -18,7 +18,7 @@ _Last audited 2026-07-14 against v1.9.2. History lives in [`CHANGELOG.md`](CHANG
 | Item | Priority | Detail |
 |---|---|---|
 | `fluent-ffmpeg` 2.1.3 | Medium | Upstream is unmaintained (deprecated on npm). Only used for video thumbnails — replace with direct `ffmpeg` child-process spawns (the image already ships the ffmpeg binary). Small, contained change. |
-| No CI | Medium | Add a GitHub Actions workflow: `npm ci && npm test` on PR/push, plus a lint job (no linter is configured today — adopt ESLint flat config or Biome). |
+| CI coverage | Low | ✅ ESLint (flat config) adopted and all findings fixed; lint + test run in CI (`.gitlab-ci.yml` on the maintainer's mirror). Remaining: a GitHub Actions workflow so public PRs get the same checks. |
 | No API integration tests | Medium | Route handlers are only covered indirectly. A supertest-style pass over auth, contacts CRUD, share scopes, and confidential-layer gating would lock in the security semantics that matter most. |
 | No frontend tests | Medium | The SPA has zero coverage. Highest-value start: a Playwright smoke suite against `docker-compose.dev.yml` (login → create contact → add note → search). |
 | No OpenAPI spec | Low | `API.md` is hand-written and will drift. Maintain `openapi.yaml` → free Swagger UI, client generation, contract tests. |
@@ -41,7 +41,8 @@ _Last audited 2026-07-14 against v1.9.2. History lives in [`CHANGELOG.md`](CHANG
 The "boring" release that makes everything after it cheaper.
 
 - [ ] Replace `fluent-ffmpeg` with direct ffmpeg spawn
-- [ ] GitHub Actions CI: test + lint on PR; adopt a linter
+- [x] Adopt a linter (ESLint flat config) + lint/test CI
+- [ ] GitHub Actions workflow so public PRs get the same lint + test checks
 - [ ] API integration test suite (auth, ACL/share scopes, confidential gating, contacts CRUD)
 - [ ] Playwright smoke suite for the SPA
 - [ ] OpenAPI spec (`openapi.yaml`)
