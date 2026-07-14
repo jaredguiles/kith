@@ -7,29 +7,49 @@ enabled.
 
 Functional spec: [`SPEC.md`](SPEC.md). REST API reference: [`API.md`](API.md).
 Visual system: [`DESIGN.md`](DESIGN.md) ("The Record").
+Release history: [`CHANGELOG.md`](CHANGELOG.md). What's next: [`ROADMAP.md`](ROADMAP.md).
 
 ## Stack
 
 - **Node.js 24** (alpine) + **Express** — REST API + a static vanilla-JS SPA (no build step)
-- **MariaDB** (external) — the database is the source of truth
+- **MariaDB** — bundled container by default, or bring your own server; the database is the source of truth
 - In-process `worker_threads` import processor (no queue/Redis needed)
 - **ffmpeg** for video thumbnails
 - **Docker** for deployment
 
 Kith is intentionally lightweight and dependency-light: no frontend build
-pipeline, no message broker, no external services required beyond a MariaDB
-database. It runs behind any reverse proxy (or none) and stores media on any
-mounted filesystem.
+pipeline, no message broker, no external services required. It runs behind any
+reverse proxy (or none) and stores media on any mounted filesystem.
 
-## Quick start (development)
+## Quick start
+
+```bash
+git clone https://github.com/jaredguiles/kith && cd kith
+cp .env.example .env    # set DB_PASSWORD, JWT_SECRET, FIELD_ENCRYPTION_KEY
+docker compose up -d --build
+# → http://localhost:8084   (login: admin / changeme, forced password change on first login)
+```
+
+The shipped `docker-compose.yml` includes a MariaDB container under the
+`bundled-db` compose profile, which `.env.example` enables by default
+(`COMPOSE_PROFILES=bundled-db`, `DB_HOST=db`). Data persists in the
+`kith_db_data` named volume; the database is never exposed on the host.
+
+**Using your own database instead:** set `COMPOSE_PROFILES=` (empty) in `.env`
+and point `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` at any
+MariaDB or MySQL server, with `DB_SSL=true` (plus `DB_SSL_CA` for a private CA,
+or `DB_SSL_INSECURE=true` for self-signed certs — encrypted but unverified).
+
+## Development
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 # → http://localhost:8084   (login: admin / changeme, forced password change on first login)
 ```
 
-The dev compose file spins up a throwaway MariaDB container, so you don't need
-a database of your own to try it. Run the tests with:
+The dev compose file spins up a throwaway MariaDB container with fixed dev
+credentials, separate from the production `bundled-db` profile. Run the tests
+with:
 
 ```bash
 npm test
@@ -60,13 +80,13 @@ secrets manager). They are read from the process environment at boot.
 
 ## Production deployment
 
-1. Provision a `kith` database and user on your MariaDB server.
-2. Set `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, and the three
-   required secrets in the container's environment.
-3. Point `MEDIA_PATH` at a mounted volume for photos/videos, and set `APP_URL`
-   to your public URL.
-4. `docker compose up -d --build`.
-5. First boot creates the schema and a seed admin (`admin` / `changeme`) — log
+1. Copy `.env.example` to `.env` and set the three required secrets. Keep the
+   default bundled database, or set `COMPOSE_PROFILES=` and point the `DB_*`
+   vars at your own MariaDB server (provision a `kith` database + user first).
+2. Point the media volume at a mounted filesystem for photos/videos, and set
+   `APP_URL` to your public URL.
+3. `docker compose up -d --build`.
+4. First boot creates the schema and a seed admin (`admin` / `changeme`) — log
    in, change the password, create users, and enable the confidential layer in
    Settings if you want it (it ships disabled).
 

@@ -1,6 +1,6 @@
 {
   "name": "kith",
-  "version": "1.0.0",
+  "version": "1.9.2",
   "description": "Kith \u2014 personal CRM. Old English for one's friends and acquaintances.",
   "private": true,
   "engines": {

@@ -1,12 +1,23 @@
 # Kith — standalone Docker Compose.
 # Copy .env.example to .env first. Kith serves its SPA + API on one port and
 # works behind any reverse proxy, or directly on a trusted network.
+#
+# Database: a bundled MariaDB ships below under the `bundled-db` compose
+# profile, which .env.example enables by default (COMPOSE_PROFILES=bundled-db,
+# DB_HOST=db). To use an external MariaDB/MySQL server instead:
+#   1. Set COMPOSE_PROFILES= (empty) in .env
+#   2. Point DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME at your server
+#   3. Set DB_SSL=true (+ DB_SSL_CA, or DB_SSL_INSECURE=true for self-signed)
 services:
   kith:
     build: .
     container_name: kith
     env_file:
       - .env
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false   # ignored when the bundled-db profile is inactive
     ports:
       - "${EXTERNAL_PORT:-8084}:${INTERNAL_PORT:-3000}"
     volumes:
@@ -51,6 +62,40 @@ services:
     #   - "traefik.http.routers.kith-api.priority=100"
     #   - "traefik.http.routers.kith-api.service=kith"
     #   - "traefik.http.services.kith.loadbalancer.server.port=${INTERNAL_PORT:-3000}"
+
+  # Bundled MariaDB — active only under the `bundled-db` compose profile
+  # (the default in .env.example). Not exposed on the host; reachable from
+  # the app as DB_HOST=db. Data persists in the kith_db_data named volume.
+  db:
+    image: mariadb:11.4
+    container_name: kith-db
+    profiles: [ bundled-db ]
+    environment:
+      MARIADB_DATABASE: ${DB_NAME:-kith}
+      MARIADB_USER: ${DB_USER:-kith}
+      MARIADB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_RANDOM_ROOT_PASSWORD: "1"
+    volumes:
+      - kith_db_data:/var/lib/mysql
+    networks:
+      - kith_network
+    security_opt:
+      - no-new-privileges:true
+    restart: ${RESTART_POLICY:-unless-stopped}
+    healthcheck:
+      test: [ "CMD", "healthcheck.sh", "--connect", "--innodb_initialized" ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  kith_db_data:
 
 networks:
   kith_network:
