@@ -37,7 +37,7 @@ function getPool() {
     database: process.env.DB_NAME,
     ssl: buildSslConfig(),
     waitForConnections: true,
-    connectionLimit: 10,
+    connectionLimit: parseInt(process.env.DB_POOL_SIZE, 10) || 10,
     queueLimit: 0,
     namedPlaceholders: false,
     dateStrings: true, // return DATE/TIMESTAMP as strings; avoids TZ drift in JSON
