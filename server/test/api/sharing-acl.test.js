@@ -3,6 +3,12 @@
 // Integration coverage for ACL / share-scope behavior: a shared contact is
 // visible/editable per its share_scope + permissions, and invisible outside
 // of any share at all (existence not leaked — 404, not 403).
+//
+// ORDER-DEPENDENT: these tests run as a sequence against one contact (no
+// share → basic/read share → full/edit share → unshare), each building on the
+// previous one's state. node:test runs tests within a file sequentially,
+// which is what makes this valid — do NOT add `{ concurrency: true }` or run
+// this file with --test-shuffle.
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');

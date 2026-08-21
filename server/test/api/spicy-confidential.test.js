@@ -3,6 +3,12 @@
 // Integration coverage for the confidential ("spicy") layer: globally
 // disabled by default, gated per-user by an active spicy session, gated
 // per-share by share_scope === 'full_spicy', and encrypted at rest.
+//
+// ORDER-DEPENDENT: these tests run as a sequence (globally disabled → enabled
+// → owner writes → read back → share at 'full' → reshare at 'full_spicy'),
+// each building on the previous one's state. node:test runs tests within a
+// file sequentially, which is what makes this valid — do NOT add
+// `{ concurrency: true }` or run this file with --test-shuffle.
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
@@ -57,8 +63,15 @@ before(async () => {
 });
 
 after(async () => {
-  if (adminCookie) await setSpicyEnabled(adminCookie, false);
-  await ctx?.close();
+  // `finally`: if restoring the global setting fails (server error, expired
+  // cookie) the assert inside setSpicyEnabled throws — without this the
+  // server listener and DB pool would leak and the run would hang on an open
+  // handle instead of failing cleanly.
+  try {
+    if (adminCookie) await setSpicyEnabled(adminCookie, false);
+  } finally {
+    await ctx?.close();
+  }
 });
 
 test('spicy endpoints are 403 while the feature is globally disabled (default)', async () => {
@@ -99,9 +112,15 @@ test('confidential fields are encrypted at rest, not stored as plaintext', async
   assert.equal(rows.length, 1);
   const stored = String(rows[0].spicy_notes);
   assert.ok(!stored.includes('top secret'), 'plaintext must not appear in the stored value');
+  // Checking only the base64 TEXT is not enough: a regression to
+  // "header + base64-of-plaintext" would keep the plaintext out of the
+  // encoded string while still storing it verbatim. Decode and check the
+  // bytes too, so the assertion can't pass with plaintext in the envelope.
+  const decoded = Buffer.from(stored, 'base64');
+  assert.ok(!decoded.toString('utf8').includes('top secret'), 'plaintext must not appear in the decoded envelope either');
   // Envelope per lib/crypto.js: base64( versionId(1) || iv(12) || tag(16) || ciphertext ) —
   // decoded length must be at least the fixed header (1 + 12 + 16 = 29 bytes).
-  assert.ok(Buffer.from(stored, 'base64').length >= 29, 'stored value must look like a version+iv+tag+ciphertext envelope');
+  assert.ok(decoded.length >= 29, 'stored value must look like a version+iv+tag+ciphertext envelope');
 });
 
 test('a user with no access to the contact cannot see its confidential fields, even with their own spicy session active', async () => {
@@ -133,4 +152,21 @@ test('a shared recipient with full_spicy scope can see confidential fields', asy
   const res = await api(baseUrl, 'GET', `/api/contacts/${contactId}/spicy`, { cookie: sharedCookie });
   assert.equal(res.status, 200);
   assert.equal(res.body.spicy_profile.spicy_notes, 'top secret notes');
+});
+
+test('a full_spicy recipient with read-only permissions still cannot WRITE confidential fields', async () => {
+  // Reading at spicy scope (previous test) must not imply writing: share_scope
+  // controls WHICH layer is visible, `permissions` controls read-vs-write, and
+  // the two are enforced independently. Relies on the read-only full_spicy
+  // share established by the previous test.
+  const res = await api(baseUrl, 'PUT', `/api/contacts/${contactId}/spicy`, {
+    cookie: sharedCookie,
+    body: { spicy_notes: 'tampered by a read-only recipient' },
+  });
+  assert.equal(res.status, 403);
+  assert.equal(res.body.error, 'Read-only access to this contact');
+
+  // and the stored value is untouched
+  const check = await api(baseUrl, 'GET', `/api/contacts/${contactId}/spicy`, { cookie: ownerCookie });
+  assert.equal(check.body.spicy_profile.spicy_notes, 'top secret notes');
 });
