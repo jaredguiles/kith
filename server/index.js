@@ -314,23 +314,35 @@ async function shutdown(signal) {
   }
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+// Export the bare `app` for in-process integration tests (server/test/api/):
+// they call initDatabase() + app.listen(0) themselves against a test DB.
+// Everything below — signal handlers, the process-exiting uncaughtException
+// handler, the worker thread, the scheduler, and boot() itself — only runs
+// when this file is the process entry point (`node server/index.js`,
+// unchanged for `npm start` and the Docker CMD). A `require()` for tests
+// must NOT install a handler that calls process.exit(1) on the test runner's
+// own process for an unrelated stray exception.
+module.exports = { app };
 
-// ---------------------------------------------------------------------------
-// Process-level error handlers: log unhandled rejections; exit on uncaught
-// exceptions (state is unknown — restart policy brings the container back).
-// ---------------------------------------------------------------------------
-process.on('unhandledRejection', (reason) => {
-  console.error('[unhandledRejection]', reason instanceof Error ? reason.stack : reason);
-});
+if (require.main === module) {
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 
-process.on('uncaughtException', (err) => {
-  console.error('[uncaughtException]', err.stack || err);
-  process.exit(1);
-});
+  // -------------------------------------------------------------------------
+  // Process-level error handlers: log unhandled rejections; exit on uncaught
+  // exceptions (state is unknown — restart policy brings the container back).
+  // -------------------------------------------------------------------------
+  process.on('unhandledRejection', (reason) => {
+    console.error('[unhandledRejection]', reason instanceof Error ? reason.stack : reason);
+  });
 
-boot().catch((err) => {
-  console.error('FATAL: boot failed:', err.stack || err);
-  process.exit(1);
-});
+  process.on('uncaughtException', (err) => {
+    console.error('[uncaughtException]', err.stack || err);
+    process.exit(1);
+  });
+
+  boot().catch((err) => {
+    console.error('FATAL: boot failed:', err.stack || err);
+    process.exit(1);
+  });
+}
