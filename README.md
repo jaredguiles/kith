@@ -171,7 +171,7 @@ All user documentation lives on the **[Kith site](https://agtechlab.dev/kith/)**
 
 In-repo developer references: [`SPEC.md`](SPEC.md) (functional spec),
 [`API.md`](API.md) (REST API), [`DESIGN.md`](DESIGN.md) (visual system),
-[`CHANGELOG.md`](CHANGELOG.md).
+[`BACKUPS.md`](BACKUPS.md) (bundled-DB backup/restore), [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Contributing
 
