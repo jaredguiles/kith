@@ -10,7 +10,8 @@
     "start": "node server/index.js",
     "lint": "eslint .",
     "test": "node --test server/test/*.test.js",
-    "test:integration": "node --test --test-concurrency=1 server/test/api/*.test.js"
+    "test:integration": "node --test --test-concurrency=1 server/test/api/*.test.js",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "bcryptjs": "3.0.3",
@@ -31,6 +32,7 @@
   "author": "Jared A Guiles-Haimes",
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.49.1",
     "eslint": "^10.7.0",
     "globals": "^17.7.0"
   }
