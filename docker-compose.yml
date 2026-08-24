@@ -19,6 +19,10 @@ services:
         condition: service_healthy
         required: false   # ignored when the bundled-db profile is inactive
     ports:
+      # PRODUCTION port. docker-compose.dev.yml republishes the app on a
+      # separate DEV_EXTERNAL_PORT (default 8094, see that file) — never
+      # set DEV_EXTERNAL_PORT to this same value, or dev/test tooling
+      # (e.g. the Playwright smoke suite) can end up targeting prod.
       - "${EXTERNAL_PORT:-8084}:${INTERNAL_PORT:-3000}"
     volumes:
       # Media (photos/videos + thumbnails) and temporary import-upload staging.

@@ -5,9 +5,29 @@
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
 #
 # Dev DB: kith / kith / kith-dev-password on localhost:33061
+#
+# Port safety (LAB-113): this override ALSO republishes the app on a
+# dev/test-only host port (DEV_EXTERNAL_PORT, default 8094) instead of
+# docker-compose.yml's production EXTERNAL_PORT (default 8084). This must
+# never be set to the same value as production's EXTERNAL_PORT — doing so
+# would either port-conflict against an already-running prod stack, or
+# silently point the smoke suite (playwright.config.js) at live prod data.
+#
+# NOTE: DEV_EXTERNAL_PORT must be set in .env (auto-loaded by Compose) or
+# the shell/--env-file — NOT in .env.dev. .env.dev is wired via `env_file:`
+# below, which only injects vars into the container's own process env; it
+# is NOT consulted by Compose for ${...} interpolation in this file.
+#
+# Container-name safety (LAB-113): docker-compose.yml hardcodes
+# `container_name: kith` on the app service. Without an override here,
+# bringing up this dev stack would rename/recreate that SAME container —
+# i.e. it could silently replace a running production container even
+# though the port is different. container_name below forces the dev
+# container onto its own distinct name.
 
 services:
   kith:
+    container_name: kith-dev
     env_file:
       - .env
       - .env.dev
@@ -16,6 +36,13 @@ services:
     depends_on:
       kith-dev-db:
         condition: service_healthy
+    ports: !override
+      # DEV/TEST ONLY — must stay distinct from production's
+      # "${EXTERNAL_PORT:-8084}" in docker-compose.yml. See header comment.
+      # !override replaces (not merges/appends to) the production ports
+      # list — without it, Compose would concatenate both lists and the
+      # dev stack would publish 8084 too, reintroducing the collision.
+      - "${DEV_EXTERNAL_PORT:-8094}:${INTERNAL_PORT:-3000}"
     volumes:
       - kith-dev-media:/media
       - kith-dev-uploads:/app/uploads
