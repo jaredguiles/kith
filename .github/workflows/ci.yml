@@ -13,6 +13,26 @@ jobs:
     strategy:
       matrix:
         node: [24]
+    # Real MariaDB for server/test/api/* (integration suite). Credentials/DB
+    # name mirror docker-compose.dev.yml's kith-dev-db conventions and
+    # healthcheck; port 33071 and the kith_test/_test-suffixed DB name match
+    # server/test/api/helpers.js's defaults (and its `_test` suffix guard).
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: test-root
+          MARIADB_DATABASE: kith_test
+          MARIADB_USER: kith_test
+          MARIADB_PASSWORD: kith-test-password
+        ports:
+          - 33071:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=12
+          --health-start-period=10s
     steps:
       - uses: actions/checkout@v4
 
@@ -29,6 +49,16 @@ jobs:
 
       - name: Run tests
         run: npm test
+
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          DB_HOST: 127.0.0.1
+          DB_PORT: 33071
+          DB_USER: kith_test
+          DB_PASSWORD: kith-test-password
+          DB_NAME: kith_test
+          DB_SSL: 'false'
 
   docker-build:
     name: Docker build check
