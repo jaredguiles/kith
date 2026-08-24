@@ -1,0 +1,2735 @@
+openapi: 3.0.3
+info:
+  title: Kith API
+  description: |
+    REST API for Kith, a self-hosted contacts / relationship-management app.
+
+    This spec is derived from `API.md` cross-checked against the route handlers
+    under `server/routes/` and the auth middleware in `server/middleware/auth.js`
+    (2026-08-24). It documents paths, methods, auth requirements, and response
+    shapes; field-level schemas are intentionally light where the handler
+    accepts a broad, loosely-typed body (e.g. contact fields, spicy profile
+    fields) — see `SPEC.md` / `API.md` for full field lists.
+
+    ### Authentication
+    Two schemes, either accepted on almost every endpoint:
+    - **Session cookie** (`kith_token`, httpOnly, `SameSite=Strict`) — set by
+      `POST /api/auth/login` (or the TOTP exchange). Also accepted as
+      `Authorization: Bearer <jwt>`.
+    - **Personal Access Token (PAT)** — `Authorization: Bearer kith_<40 hex>`.
+      Scope `read` allows GET/HEAD only; `read_write` allows all methods. PATs
+      are rejected on all of `/api/auth/*` except `GET /api/auth/me`, and
+      cannot manage `/api/tokens` (session auth only, to stop a leaked
+      read_write PAT from minting more tokens).
+    - The ICS calendar feed additionally accepts a **read-scoped PAT as a
+      query parameter** (`?token=`) since calendar apps can't send headers;
+      `read_write` tokens are rejected there.
+
+    ### Common semantics (apply across most endpoints, not repeated per-op)
+    - Errors are always JSON `{"error": "<message>"}`.
+    - `404` is used instead of `403` for access-denied on contacts and their
+      sub-resources, so existence isn't leaked to a non-owner.
+    - Content flagged `is_spicy` ("spicy layer") is visible only when
+      `spicy_enabled` (global) AND the user's `spicy_visible` preference are
+      both true; when the layer is off, spicy rows 404 (except
+      `/api/contacts/:id/spicy` itself, which 403s).
+    - Contacts shared at `share_scope=basic` get sub-resources (notes,
+      timeline, addresses, socials, media, changelog...) stripped to 403/empty;
+      write endpoints on shared contacts require `permissions=edit`.
+    - Rate limited per-IP: 600 req/min on `/api/*`, 30 req/min on `/api/auth/*`
+      (both configurable; `429` with `Retry-After` on breach).
+  version: "1.0.0"
+  contact:
+    name: Kith
+    url: https://github.com/jaredguiles/kith
+servers:
+  - url: /api
+    description: Relative to whatever host serves the app.
+
+security:
+  - sessionCookie: []
+  - bearerAuth: []
+
+tags:
+  - name: Health
+  - name: Auth
+  - name: Users
+  - name: Contacts
+  - name: Satellites
+  - name: Tags
+  - name: Groups
+  - name: Relationships
+  - name: Dates
+  - name: Gifts
+  - name: Interactions
+  - name: Events
+  - name: Timeline
+  - name: Notes
+  - name: Messages
+  - name: Reminders
+  - name: Journal
+  - name: Calendar
+  - name: ICS
+  - name: Search
+  - name: Geo
+  - name: Dashboard
+  - name: Spicy
+  - name: Sharing
+  - name: Preferences
+  - name: Settings
+  - name: Notifications
+  - name: Push
+  - name: Tokens
+  - name: Import
+  - name: Export
+  - name: Trash
+  - name: Immich
+  - name: Media
+
+paths:
+  # ------------------------------------------------------------------ Health
+  /health:
+    get:
+      tags: [Health]
+      summary: Deep health check (DB ping)
+      security: []
+      responses:
+        '200':
+          description: DB reachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  db: { type: string, example: up }
+        '503':
+          description: DB unreachable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: degraded }
+                  db: { type: string, example: down }
+
+  # -------------------------------------------------------------------- Auth
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in with username/email + password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string, description: username or email }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: Session issued, or TOTP required
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SessionResponse'
+                  - type: object
+                    properties:
+                      totp_required: { type: boolean, example: true }
+                      pending_token: { type: string, description: 5-minute intermediate token }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/login/totp:
+    post:
+      tags: [Auth]
+      summary: Exchange a pending TOTP token + code for a real session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pending_token, code]
+              properties:
+                pending_token: { type: string }
+                code: { type: string, description: 6-digit TOTP code }
+      responses:
+        '200':
+          description: Session issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user identity
+      description: The one auth endpoint PATs are allowed to call.
+      responses:
+        '200':
+          description: Current user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: '#/components/schemas/UserIdentity' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/password:
+    put:
+      tags: [Auth]
+      summary: Change own password
+      description: Bumps token_version (invalidates other sessions) and re-issues a fresh token for this session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string, format: password }
+                new_password: { type: string, format: password, minLength: 8 }
+      responses:
+        '200':
+          description: Password changed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  token: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Clear the session cookie
+      security: []
+      responses:
+        '200': { description: Logged out, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean } } } } } }
+
+  /auth/totp/setup:
+    post:
+      tags: [Auth]
+      summary: Generate a new (disabled) TOTP secret
+      responses:
+        '200':
+          description: Secret generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret_base32: { type: string }
+                  otpauth_url: { type: string }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /auth/totp/enable:
+    post:
+      tags: [Auth]
+      summary: Verify a code against the stored secret and enable 2FA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties: { code: { type: string } }
+      responses:
+        '200': { description: 2FA enabled }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/totp/disable:
+    post:
+      tags: [Auth]
+      summary: Disable 2FA (requires a valid current code)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties: { code: { type: string } }
+      responses:
+        '200': { description: 2FA disabled }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # ------------------------------------------------------------------- Users
+  /users/directory:
+    get:
+      tags: [Users]
+      summary: Minimal directory of active users (for the share picker)
+      responses:
+        '200': { description: OK }
+
+  /users/me:
+    put:
+      tags: [Users]
+      summary: Update own display_name/email
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: { type: string }
+                email: { type: string, format: email }
+      responses:
+        '200': { description: Updated }
+        '409': { description: Duplicate email }
+
+  /users/me/self-contact:
+    post:
+      tags: [Users]
+      summary: Idempotent create-or-return of the user's own contact card
+      responses:
+        '200':
+          description: Existing or newly created self-contact
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contact_id: { type: integer }
+                  created: { type: boolean }
+    put:
+      tags: [Users]
+      summary: Link or clear the user's self-contact
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                contact_id: { type: integer, nullable: true }
+      responses:
+        '200': { description: Updated }
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List all users (admin)
+      responses:
+        '200': { description: OK }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Users]
+      summary: Create a user (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, email, password]
+              properties:
+                username: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                display_name: { type: string }
+                role: { type: string, enum: [user, admin, main_admin] }
+      responses:
+        '201': { description: Created }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    put:
+      tags: [Users]
+      summary: Update a user (admin)
+      description: main_admin editable only by self; regular admins cannot modify other admins; role changes are main_admin-only.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+                display_name: { type: string }
+                role: { type: string }
+                is_active: { type: boolean }
+                password: { type: string, format: password }
+      responses:
+        '200': { description: Updated }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    delete:
+      tags: [Users]
+      summary: Deactivate a user (soft; admin)
+      responses:
+        '200': { description: Deactivated }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------------------------------------------------------- Contacts
+  /contacts:
+    get:
+      tags: [Contacts]
+      summary: List contacts (paginated, filterable, sortable)
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: tag, in: query, schema: { type: integer } }
+        - { name: group, in: query, schema: { type: integer } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: favorites, in: query, schema: { type: string, enum: ['1'] } }
+        - { name: filter, in: query, schema: { type: string, enum: [out_of_touch] } }
+        - { name: near, in: query, schema: { type: string }, description: '"lat,lng"' }
+        - { name: radius_km, in: query, schema: { type: number, default: 50 } }
+        - { name: sort, in: query, schema: { type: string, enum: [name, created, updated, rating, location, birthday, last_contacted_at], default: name } }
+        - { name: sortDir, in: query, schema: { type: string, enum: [asc, desc], default: asc } }
+      responses:
+        '200':
+          description: Page of contacts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contacts:
+                    type: array
+                    items: { $ref: '#/components/schemas/Contact' }
+                  total: { type: integer }
+                  page: { type: integer }
+                  limit: { type: integer }
+    post:
+      tags: [Contacts]
+      summary: Create a contact
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ContactInput' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { id: { type: integer } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /contacts/duplicates:
+    get:
+      tags: [Contacts]
+      summary: Pairwise dedupe scan of the caller's own contacts
+      description: Capped at 500 contacts (413 above that).
+      responses:
+        '200':
+          description: Candidate duplicate pairs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pairs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        a: { type: object }
+                        b: { type: object }
+                        score: { type: number }
+                        reason: { type: string }
+        '413': { description: Too many contacts to scan }
+
+  /contacts/bulk:
+    post:
+      tags: [Contacts]
+      summary: Bulk action across up to 200 owned contact ids
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids, action]
+              properties:
+                ids:
+                  type: array
+                  items: { type: integer }
+                  maxItems: 200
+                action:
+                  type: string
+                  enum: [add_tag, remove_tag, add_group, remove_group, delete, favorite, unfavorite]
+                tag_id: { type: integer }
+                group_id: { type: integer }
+      responses:
+        '200':
+          description: Result counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  done: { type: integer }
+                  skipped: { type: integer, description: shared-in (non-owned) ids skipped }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /contacts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Contacts]
+      summary: Contact detail (with emails/phones/addresses/socials/tags/groups)
+      responses:
+        '200':
+          description: Full detail (basic-scope shares get sub-resources stripped)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  contact: { $ref: '#/components/schemas/Contact' }
+                  emails: { type: array, items: { type: object } }
+                  phones: { type: array, items: { type: object } }
+                  addresses: { type: array, items: { type: object } }
+                  socials: { type: array, items: { type: object } }
+                  tags: { type: array, items: { type: object } }
+                  groups: { type: array, items: { type: object } }
+                  access: { type: string, enum: [owner, admin, shared] }
+                  permissions: { type: string, nullable: true, enum: [read, edit, null] }
+                  share_scope: { type: string, nullable: true, enum: [basic, full, full_spicy, null] }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Contacts]
+      summary: Partial update (edit permission required)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ContactInput' }
+      responses:
+        '200': { description: Updated }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Contacts]
+      summary: Soft delete (owner only; -> trash, 30-day retention)
+      responses:
+        '200': { description: Deleted }
+        '403': { description: Only the owner can delete a contact }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /contacts/{id}/favorite:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    put:
+      tags: [Contacts]
+      summary: Toggle or set favorite (owner only)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { is_favorite: { type: boolean } }
+      responses:
+        '200': { description: Updated }
+        '403': { description: Only the owner can favorite this contact }
+
+  /contacts/{id}/photo:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    put:
+      tags: [Contacts]
+      summary: Set or clear profile photo from an existing (own, profile-eligible) media item
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { media_id: { type: integer, nullable: true } }
+      responses:
+        '200': { description: Updated }
+        '404': { description: Photo not found }
+
+  /contacts/{id}/changelog:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      tags: [Contacts]
+      summary: Field-level change history (max 500)
+      responses:
+        '200': { description: Changelog entries }
+        '403': { description: Not available for basic-scope shares }
+
+  # ------------------------------------------------------------- Satellites
+  # emails / phones / addresses / socials share the same list+create shape at
+  # /api/contacts/{id}/<kind> and the same get/put/delete shape at
+  # /api/<kind>/{itemId} (satellites.js, mergeParams). Body shape per kind:
+  # emails(label,email*,is_primary), phones(label,phone*,is_primary),
+  # addresses(label,street,city,state,zip,country,is_primary,start_date,
+  # end_date,verified_lat,verified_lng), socials(platform,url,username).
+  /contacts/{id}/emails:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Satellites]
+      summary: List a contact's emails
+      description: Basic-scope shares get [] for addresses/socials (not emails/phones).
+      responses:
+        '200': { description: Items }
+    post:
+      tags: [Satellites]
+      summary: Add an email (edit permission)
+      description: is_primary demotes existing primaries.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                label: { type: string }
+                email: { type: string, format: email }
+                is_primary: { type: boolean }
+      responses:
+        '201': { description: Created }
+
+  /contacts/{id}/phones:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Satellites]
+      summary: List a contact's phones
+      responses:
+        '200': { description: Items }
+    post:
+      tags: [Satellites]
+      summary: Add a phone (edit permission)
+      description: is_primary demotes existing primaries.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone]
+              properties:
+                label: { type: string }
+                phone: { type: string }
+                is_primary: { type: boolean }
+      responses:
+        '201': { description: Created }
+
+  /contacts/{id}/addresses:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Satellites]
+      summary: List a contact's addresses
+      description: Basic-scope shares get [] for addresses.
+      responses:
+        '200': { description: Items }
+    post:
+      tags: [Satellites]
+      summary: Add an address (edit permission)
+      description: is_primary demotes existing primaries. Geocoded on add (user pin via verified_lat/verified_lng wins, else async best-effort).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string }
+                street: { type: string }
+                city: { type: string }
+                state: { type: string }
+                zip: { type: string }
+                country: { type: string }
+                is_primary: { type: boolean }
+                start_date: { type: string, format: date }
+                end_date: { type: string, format: date }
+                verified_lat: { type: number, description: user-confirmed pin, wins over geocoding }
+                verified_lng: { type: number }
+      responses:
+        '201': { description: Created }
+
+  /contacts/{id}/socials:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Satellites]
+      summary: List a contact's social links
+      description: Basic-scope shares get [] for socials.
+      responses:
+        '200': { description: Items }
+    post:
+      tags: [Satellites]
+      summary: Add a social link (edit permission)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                platform: { type: string }
+                url: { type: string, format: uri }
+                username: { type: string }
+      responses:
+        '201': { description: Created }
+
+  /emails/{itemId}:
+    parameters: [{ $ref: '#/components/parameters/PathItemId' }]
+    get:
+      tags: [Satellites]
+      summary: Single email item
+      responses:
+        '200': { description: Item }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Satellites]
+      summary: Update an email (edit permission)
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Satellites]
+      summary: Hard delete an email (edit permission)
+      responses:
+        '200': { description: Deleted }
+
+  /phones/{itemId}:
+    parameters: [{ $ref: '#/components/parameters/PathItemId' }]
+    get:
+      tags: [Satellites]
+      summary: Single phone item
+      responses:
+        '200': { description: Item }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Satellites]
+      summary: Update a phone (edit permission)
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Satellites]
+      summary: Hard delete a phone (edit permission)
+      responses:
+        '200': { description: Deleted }
+
+  /addresses/{itemId}:
+    parameters: [{ $ref: '#/components/parameters/PathItemId' }]
+    get:
+      tags: [Satellites]
+      summary: Single address item
+      description: Basic-scope shares 404.
+      responses:
+        '200': { description: Item }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Satellites]
+      summary: Update an address (edit permission)
+      description: Address text change triggers re-geocode.
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Satellites]
+      summary: Hard delete an address (edit permission)
+      responses:
+        '200': { description: Deleted }
+
+  /socials/{itemId}:
+    parameters: [{ $ref: '#/components/parameters/PathItemId' }]
+    get:
+      tags: [Satellites]
+      summary: Single social link item
+      description: Basic-scope shares 404.
+      responses:
+        '200': { description: Item }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Satellites]
+      summary: Update a social link (edit permission)
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Satellites]
+      summary: Hard delete a social link (edit permission)
+      responses:
+        '200': { description: Deleted }
+
+  /addresses/{itemId}/geocode:
+    parameters: [{ $ref: '#/components/parameters/PathItemId' }]
+    post:
+      tags: [Satellites]
+      summary: Manually re-geocode an address (awaited)
+      responses:
+        '200':
+          description: Geocode result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  latitude: { type: number }
+                  longitude: { type: number }
+                  label: { type: string }
+                  source: { type: string }
+        '404': { description: No match found }
+
+  # ------------------------------------------------------------------- Tags
+  /tags:
+    get:
+      tags: [Tags]
+      summary: System tags + own, with usage_count
+      responses:
+        '200': { description: Tags }
+    post:
+      tags: [Tags]
+      summary: Create a tag (system:true is admin-only)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                color: { type: string, description: '#hex' }
+                system: { type: boolean }
+      responses:
+        '201': { description: Created }
+        '409': { description: Duplicate name }
+
+  /tags/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    put:
+      tags: [Tags]
+      summary: Rename/recolor a tag (system tags admin-only)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { name: { type: string }, color: { type: string } }
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Tags]
+      summary: Delete a tag (linked smart groups fall back to manual)
+      responses:
+        '200': { description: Deleted }
+
+  /contacts/{id}/tags/{tagId}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+      - name: tagId
+        in: path
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [Tags]
+      summary: Attach a tag to a contact (edit permission)
+      responses:
+        '200': { description: Attached }
+    delete:
+      tags: [Tags]
+      summary: Detach a tag from a contact
+      responses:
+        '200': { description: Detached }
+
+  # ----------------------------------------------------------------- Groups
+  /groups:
+    get:
+      tags: [Groups]
+      summary: System + own groups with member counts
+      responses:
+        '200': { description: Groups }
+    post:
+      tags: [Groups]
+      summary: Create a group (tag_id makes it a smart group)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                color: { type: string }
+                icon: { type: string }
+                description: { type: string }
+                system: { type: boolean }
+                tag_id: { type: integer, nullable: true }
+      responses:
+        '201': { description: Created }
+
+  /groups/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Groups]
+      summary: Single group with tag link + member count
+      responses:
+        '200': { description: Group }
+    put:
+      tags: [Groups]
+      summary: Update fields / link-unlink tag_id (system groups admin-only)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                color: { type: string }
+                icon: { type: string }
+                description: { type: string }
+                tag_id: { type: integer, nullable: true }
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Groups]
+      summary: Delete a group (never system groups; linked tag untouched)
+      responses:
+        '200': { description: Deleted }
+
+  /groups/{id}/members:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Groups]
+      summary: Members (scoped to contacts the caller can see)
+      responses:
+        '200': { description: Members }
+
+  /groups/{id}/members/{contactId}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+      - name: contactId
+        in: path
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [Groups]
+      summary: Add a member (smart group -> adds the linked tag)
+      responses:
+        '200': { description: Added }
+    delete:
+      tags: [Groups]
+      summary: Remove a member (smart group -> removes the linked tag)
+      responses:
+        '200': { description: Removed }
+
+  # --------------------------------------------------------- Relationships
+  /contacts/{id}/relationships:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Relationships]
+      summary: Both directions with display_label and inverse flag
+      responses:
+        '200': { description: Relationships }
+    post:
+      tags: [Relationships]
+      summary: Create a relationship (~70 types; both contacts must be accessible)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [related_contact_id, relation_type]
+              properties:
+                related_contact_id: { type: integer }
+                relation_type: { type: string }
+                notes: { type: string }
+      responses:
+        '201': { description: Created }
+        '409': { description: Duplicate relationship in either direction }
+
+  /contacts/{id}/family-tree:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Relationships]
+      summary: BFS over family-typed edges (cap 400 people / depth 10)
+      responses:
+        '200':
+          description: Tree
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  root: { type: integer }
+                  people: { type: array, items: { type: object } }
+                  edges: { type: array, items: { type: object } }
+                  truncated: { type: boolean }
+
+  /relationships/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    put:
+      tags: [Relationships]
+      summary: Change relation_type/related_contact_id/notes
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                relation_type: { type: string }
+                related_contact_id: { type: integer }
+                notes: { type: string }
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Relationships]
+      summary: Remove a relationship (either side's owner, or admin)
+      responses:
+        '200': { description: Deleted }
+
+  # -------------------------------------------------------- Important dates
+  /contacts/{id}/dates:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Dates]
+      summary: List important dates for a contact
+      responses:
+        '200': { description: Dates }
+    post:
+      tags: [Dates]
+      summary: Add an important date (edit permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label, date]
+              properties:
+                label: { type: string }
+                date: { type: string, format: date }
+                recurring: { type: boolean, default: true }
+      responses:
+        '201': { description: Created }
+
+  /dates/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    put:
+      tags: [Dates]
+      summary: Partial update (edit permission via parent contact)
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Dates]
+      summary: Hard delete
+      responses:
+        '200': { description: Deleted }
+
+  # ------------------------------------------------------------------ Gifts
+  /contacts/{id}/gifts:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Gifts]
+      summary: Gift ideas (ordered idea -> purchased -> given)
+      responses:
+        '200': { description: Gifts }
+    post:
+      tags: [Gifts]
+      summary: Add a gift idea (edit permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                notes: { type: string }
+                url: { type: string, format: uri }
+                occasion: { type: string }
+      responses:
+        '201': { description: Created }
+
+  /gifts/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    put:
+      tags: [Gifts]
+      summary: Partial update, including status
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string, enum: [idea, purchased, given] }
+                title: { type: string }
+                notes: { type: string }
+                url: { type: string }
+                occasion: { type: string }
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Gifts]
+      summary: Hard delete
+      responses:
+        '200': { description: Deleted }
+
+  # ------------------------------------------------------------ Interactions
+  /contacts/{id}/interactions:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    post:
+      tags: [Interactions]
+      summary: Log a one-tap touchpoint (bumps last_contacted_at forward-only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type]
+              properties:
+                type: { type: string, enum: [call, text, met, email, video, gift, social, other] }
+                note: { type: string, maxLength: 500 }
+                occurred_at: { type: string, format: date-time }
+      responses:
+        '201': { description: Created }
+    get:
+      tags: [Interactions]
+      summary: Interaction log, newest first
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 200 }
+      responses:
+        '200': { description: Interactions }
+        '403': { description: Not available for basic-scope shares }
+
+  /interactions/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    put:
+      tags: [Interactions]
+      summary: Update an interaction (owner of the interaction, or admin)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type: { type: string }
+                note: { type: string }
+                occurred_at: { type: string, format: date-time }
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Interactions]
+      summary: Delete an interaction (owner, or admin)
+      responses:
+        '200': { description: Deleted }
+
+  # ------------------------------------------------------------------ Events
+  /events:
+    get:
+      tags: [Events]
+      summary: Own events (admin sees all), spicy-filtered
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string } }
+        - { name: contact_id, in: query, schema: { type: integer } }
+        - { name: upcoming, in: query, schema: { type: string, enum: ['1'] } }
+        - { name: past, in: query, schema: { type: string, enum: ['1'] } }
+      responses:
+        '200': { description: Events (max 500, linked contacts included) }
+    post:
+      tags: [Events]
+      summary: Create an event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, starts_at]
+              properties:
+                title: { type: string }
+                starts_at: { type: string, format: date-time }
+                ends_at: { type: string, format: date-time }
+                type: { type: string }
+                description: { type: string }
+                location: { type: string }
+                status: { type: string }
+                is_spicy: { type: boolean }
+                contact_ids: { type: array, items: { type: integer } }
+                locations:
+                  type: array
+                  maxItems: 20
+                  items:
+                    type: object
+                    properties: { label: { type: string } }
+      responses:
+        '201': { description: Created }
+
+  /events/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Events]
+      summary: Event detail + linked contacts, media (spicy-filtered), locations
+      responses:
+        '200': { description: Event }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Events]
+      summary: Partial update (contact_ids/locations are full replace when present)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                starts_at: { type: string, format: date-time }
+                ends_at: { type: string, format: date-time }
+                status: { type: string }
+                followup_notes: { type: string }
+                rating: { type: integer, minimum: 1, maximum: 5 }
+                contact_ids: { type: array, items: { type: integer } }
+                locations: { type: array, items: { type: object } }
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Events]
+      summary: Soft delete (-> trash)
+      responses:
+        '200': { description: Deleted }
+
+  /events/{id}/complete:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    post:
+      tags: [Events]
+      summary: Mark completed; touches all linked contacts' last_contacted_at
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                followup_notes: { type: string }
+                rating: { type: integer, minimum: 1, maximum: 5 }
+      responses:
+        '200': { description: Completed }
+
+  /events/{id}/locations:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    post:
+      tags: [Events]
+      summary: Append one geocoded stop (<=20 total) without a full replace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [label]
+              properties: { label: { type: string } }
+      responses:
+        '201': { description: Added }
+
+  /events/{id}/locations/{locId}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+      - name: locId
+        in: path
+        required: true
+        schema: { type: integer }
+    delete:
+      tags: [Events]
+      summary: Remove one stop
+      responses:
+        '200': { description: Removed }
+
+  /events/{id}/media/{mediaId}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+      - name: mediaId
+        in: path
+        required: true
+        schema: { type: integer }
+    post:
+      tags: [Events]
+      summary: Link own media to the event
+      responses:
+        '200': { description: Linked }
+    delete:
+      tags: [Events]
+      summary: Unlink media from the event
+      responses:
+        '200': { description: Unlinked }
+
+  # ---------------------------------------------------------------- Timeline
+  /timeline:
+    get:
+      tags: [Timeline]
+      summary: Aggregated feed for a contact (manual entries + notes + events + message batches)
+      parameters:
+        - { name: contact_id, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Feed, newest first, cap 200 }
+        '403': { description: Not available for basic-scope shares }
+    post:
+      tags: [Timeline]
+      summary: Add a manual timeline entry (edit permission; touches last_contacted_at)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contact_id]
+              properties:
+                contact_id: { type: integer }
+                type: { type: string }
+                title: { type: string }
+                description: { type: string }
+                is_spicy: { type: boolean }
+                occurred_at: { type: string, format: date-time }
+      responses:
+        '201': { description: Created }
+
+  /timeline/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    put:
+      tags: [Timeline]
+      summary: Edit a manual entry (content re-encrypted to match spicy state)
+      responses:
+        '200': { description: Updated }
+        '404': { description: 'Spicy entries 404 when spicy off' }
+    delete:
+      tags: [Timeline]
+      summary: Soft delete a manual entry
+      responses:
+        '200': { description: Deleted }
+
+  /timeline/map:
+    get:
+      tags: [Timeline]
+      summary: All located events as map pins (owner-scoped, spicy-filtered)
+      responses:
+        '200': { description: Pins }
+
+  /timeline/places:
+    get:
+      tags: [Timeline]
+      summary: Places bucket list (us_states, countries)
+      responses:
+        '200':
+          description: Places
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  us_states: { type: array, items: { type: object } }
+                  countries: { type: array, items: { type: object } }
+                  us_state_total: { type: integer }
+    post:
+      tags: [Timeline]
+      summary: Manual "been there" mark
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, code]
+              properties:
+                kind: { type: string, enum: [country, us_state] }
+                code: { type: string, description: 'country accepts name or ISO-2' }
+      responses:
+        '200': { description: Marked }
+
+  /timeline/places/{kind}/{code}:
+    parameters:
+      - name: kind
+        in: path
+        required: true
+        schema: { type: string, enum: [country, us_state] }
+      - name: code
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [Timeline]
+      summary: Remove a manual mark (derived marks can't be unchecked)
+      responses:
+        '200': { description: Removed }
+
+  # ------------------------------------------------------------------- Notes
+  /notes:
+    get:
+      tags: [Notes]
+      summary: Notes for a contact
+      parameters:
+        - { name: contact_id, in: query, required: true, schema: { type: integer } }
+        - { name: page, in: query, schema: { type: integer } }
+        - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 500 } }
+      responses:
+        '200': { description: Notes }
+        '403': { description: Not available for basic-scope shares }
+    post:
+      tags: [Notes]
+      summary: Create a note (edit permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contact_id, content]
+              properties:
+                contact_id: { type: integer }
+                content: { type: string }
+                is_spicy: { type: boolean }
+      responses:
+        '201': { description: Created }
+
+  /notes/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Notes]
+      summary: Single note (spicy note 404s when spicy off)
+      responses:
+        '200': { description: Note }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Notes]
+      summary: Update a note (edit permission)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string }
+                is_spicy: { type: boolean }
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Notes]
+      summary: Soft delete
+      responses:
+        '200': { description: Deleted }
+
+  # ---------------------------------------------------------------- Messages
+  /messages:
+    get:
+      tags: [Messages]
+      summary: Message log for a contact, newest first (cap 500)
+      parameters:
+        - { name: contact_id, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Messages }
+        '403': { description: Not available for basic-scope shares }
+    post:
+      tags: [Messages]
+      summary: Log a message manually (edit permission; touches last_contacted_at)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [contact_id]
+              properties:
+                contact_id: { type: integer }
+                platform: { type: string }
+                direction: { type: string, enum: [in, out] }
+                content: { type: string }
+                is_spicy: { type: boolean }
+                sent_at: { type: string, format: date-time }
+      responses:
+        '201': { description: Created }
+
+  /messages/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    put:
+      tags: [Messages]
+      summary: Edit a message (content re-encrypted to match spicy state)
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Messages]
+      summary: Hard delete (edit permission)
+      responses:
+        '200': { description: Deleted }
+
+  # --------------------------------------------------------------- Reminders
+  /reminders/due:
+    get:
+      tags: [Reminders]
+      summary: All open reminders, due-date ascending (cap 200)
+      responses:
+        '200': { description: Reminders }
+
+  /reminders:
+    post:
+      tags: [Reminders]
+      summary: Create a reminder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, due_at]
+              properties:
+                title: { type: string }
+                due_at: { type: string, format: date-time }
+                description: { type: string }
+                contact_id: { type: integer }
+                recur_rule: { type: string, enum: [daily, weekly, monthly, yearly] }
+                recur_until: { type: string, format: date-time }
+      responses:
+        '201': { description: Created }
+
+  /reminders/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    put:
+      tags: [Reminders]
+      summary: Partial update
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Reminders]
+      summary: Soft delete
+      responses:
+        '200': { description: Deleted }
+
+  /reminders/{id}/complete:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    post:
+      tags: [Reminders]
+      summary: Complete; recurring reminders spawn the next occurrence
+      responses:
+        '200':
+          description: Completed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  next_due_at: { type: string, format: date-time, nullable: true }
+
+  # ------------------------------------------------------------------ Journal
+  /journal:
+    get:
+      tags: [Journal]
+      summary: Own journal entries (strictly private, never shared)
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 30, maximum: 100 } }
+        - { name: kind, in: query, schema: { type: string, enum: [entry, reflection, travel, dream, memory] } }
+      responses:
+        '200': { description: Entries }
+    post:
+      tags: [Journal]
+      summary: Create a journal entry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kind: { type: string, enum: [entry, reflection, travel, dream, memory] }
+                title: { type: string }
+                content: { type: string, description: 'required unless kind=travel and location is set' }
+                location: { type: string }
+                event_id: { type: integer }
+                is_spicy: { type: boolean }
+                occurred_at: { type: string, format: date-time }
+      responses:
+        '201': { description: Created }
+
+  /journal/timeline:
+    get:
+      tags: [Journal]
+      summary: Merged "life feed" (journal entries + own events)
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: kind, in: query, schema: { type: string, enum: [journal, event] } }
+        - { name: sub, in: query, schema: { type: string } }
+        - { name: located, in: query, schema: { type: string, enum: ['1'] } }
+      responses:
+        '200': { description: Feed }
+
+  /journal/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Journal]
+      summary: Single entry (route registered after /timeline so it can't shadow it)
+      responses:
+        '200': { description: Entry }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Journal]
+      summary: Merge-style partial update (location change re-geocodes)
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Journal]
+      summary: Soft delete
+      responses:
+        '200': { description: Deleted }
+
+  # ---------------------------------------------------------------- Calendar
+  /calendar:
+    get:
+      tags: [Calendar]
+      summary: Month aggregate (events, birthdays, important dates, open reminders)
+      parameters:
+        - name: month
+          in: query
+          required: true
+          schema: { type: string, pattern: '^\d{4}-\d{2}$', example: '2026-08' }
+      responses:
+        '200': { description: Month aggregate }
+
+  # --------------------------------------------------------------------- ICS
+  /ics/calendar.ics:
+    get:
+      tags: [ICS]
+      summary: RFC 5545 feed (non-spicy events, birthdays, important dates, open reminders)
+      security:
+        - patQueryToken: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string, example: 'kith_...' }
+          description: Read-scoped PAT only; read_write tokens are rejected (401).
+      responses:
+        '200':
+          description: ICS feed
+          content:
+            text/calendar: { schema: { type: string } }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /ics/events/{id}.ics:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [ICS]
+      summary: Session-authed single-event download (owner/admin)
+      responses:
+        '200':
+          description: Single VEVENT
+          content:
+            text/calendar: { schema: { type: string } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # -------------------------------------------------------------------- Search
+  /search:
+    get:
+      tags: [Search]
+      summary: Command-palette search across contacts, events, notes, groups
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: 'Results, max 8 per category (notes: non-spicy only, with snippet)' }
+
+  # ---------------------------------------------------------------------- Geo
+  /geo/search:
+    get:
+      tags: [Geo]
+      summary: Geocode one free-text query
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Match
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lat: { type: number }
+                  lng: { type: number }
+                  label: { type: string }
+                  source: { type: string }
+        '404': { description: No match }
+
+  /geo/suggest:
+    get:
+      tags: [Geo]
+      summary: Typeahead candidates (local geonames + Photon)
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 8, maximum: 15 } }
+      responses:
+        '200': { description: Always 200, possibly empty }
+
+  /geo/contacts:
+    get:
+      tags: [Geo]
+      summary: Map pins for accessible contacts (address pins require full/full_spicy share scope)
+      responses:
+        '200': { description: Pins }
+
+  /geo/styles:
+    get:
+      tags: [Geo]
+      summary: Whitelisted tile styles + attribution
+      responses:
+        '200': { description: Styles }
+
+  /geo/tiles/{style}/{z}/{x}/{y}.png:
+    parameters:
+      - { name: style, in: path, required: true, schema: { type: string, enum: [osm, light, dark, voyager, topo] } }
+      - { name: z, in: path, required: true, schema: { type: integer } }
+      - { name: x, in: path, required: true, schema: { type: integer } }
+      - { name: y, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Geo]
+      summary: Authenticated tile proxy (on-disk cache, browser cache 7d)
+      responses:
+        '200': { description: PNG tile, content: { image/png: { schema: { type: string, format: binary } } } }
+
+  /geo/tiles/{z}/{x}/{y}.png:
+    parameters:
+      - { name: z, in: path, required: true, schema: { type: integer } }
+      - { name: x, in: path, required: true, schema: { type: integer } }
+      - { name: y, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Geo]
+      summary: Legacy alias for the osm tile style
+      responses:
+        '200': { description: PNG tile }
+
+  # ----------------------------------------------------------------- Dashboard
+  /dashboard:
+    get:
+      tags: [Dashboard]
+      summary: Aggregated home view (birthdays, due reminders, upcoming events, recent activity, stats)
+      responses:
+        '200': { description: Dashboard payload }
+
+  # -------------------------------------------------------------------- Spicy
+  /contacts/{id}/spicy:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Spicy]
+      summary: Spicy profile for a contact
+      responses:
+        '200':
+          description: Profile (or null)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  spicy_profile: { type: object, nullable: true }
+        '403': { description: 'Spicy features disabled, or spicy mode not active (not 404 — this is the one gated-existence exception)' }
+    put:
+      tags: [Spicy]
+      summary: Create/update the spicy profile (edit permission; marks contact is_spicy)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Sensitive fields (role_preference, positions, kinks, ...) are AES-256-GCM encrypted at rest.
+      responses:
+        '200': { description: Updated }
+        '403': { description: Spicy gated }
+    delete:
+      tags: [Spicy]
+      summary: Remove the spicy profile row entirely
+      responses:
+        '200': { description: Deleted }
+        '403': { description: Spicy gated }
+        '404': { description: No spicy profile for this contact }
+
+  # ------------------------------------------------------------------ Sharing
+  /contacts/{id}/share:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Sharing]
+      summary: Current shares for a contact (owner only)
+      responses:
+        '200': { description: Shares }
+        '403': { description: Only the owner can view shares }
+    post:
+      tags: [Sharing]
+      summary: Share a contact with another user (owner only; upserts)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id]
+              properties:
+                user_id: { type: integer }
+                permissions: { type: string, enum: [read, edit], default: read }
+                share_scope: { type: string, enum: [basic, full, full_spicy], default: basic }
+      responses:
+        '200': { description: Shared }
+        '403': { description: Only the owner can share a contact }
+        '404': { description: User not found }
+
+  /contacts/{id}/share/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+      - name: userId
+        in: path
+        required: true
+        schema: { type: integer }
+    delete:
+      tags: [Sharing]
+      summary: Unshare (owner only)
+      responses:
+        '200': { description: Unshared }
+        '403': { description: Only the owner can unshare a contact }
+
+  /contacts/{id}/merge/{otherId}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+      - name: otherId
+        in: path
+        required: true
+        schema: { type: integer }
+        description: The "loser" contact, soft-deleted after merge.
+    post:
+      tags: [Sharing]
+      summary: Merge otherId (loser) into id (winner); both must be owned
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                field_choices:
+                  type: object
+                  description: "map of field -> 'a' | 'b' | custom value"
+                  additionalProperties: true
+      responses:
+        '200':
+          description: Merged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  winner_id: { type: integer }
+        '403': { description: You can only merge contacts you own }
+        '404': { description: Other contact not found }
+
+  /audit-log:
+    get:
+      tags: [Sharing]
+      summary: Audit history
+      description: 'contact_id (any accessible, non-basic-scope contact) or entity_type+entity_id (admin only); unfiltered listing is admin-only.'
+      parameters:
+        - { name: contact_id, in: query, schema: { type: integer } }
+        - { name: entity_type, in: query, schema: { type: string } }
+        - { name: entity_id, in: query, schema: { type: integer } }
+      responses:
+        '200': { description: 'Entries, cap 200' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /changelog:
+    get:
+      tags: [Sharing]
+      summary: Field-level change history for a contact
+      parameters:
+        - { name: contact_id, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: 'Entries, cap 500' }
+        '403': { description: Not available for basic-scope shares }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # -------------------------------------------------------------- Preferences
+  /preferences:
+    get:
+      tags: [Preferences]
+      summary: All own preferences (+ spicy_pin_set); enforces spicy auto-disable server-side
+      responses:
+        '200': { description: Preferences }
+
+  /preferences/{key}:
+    parameters:
+      - name: key
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[a-z0-9_]{1,100}$' }
+    put:
+      tags: [Preferences]
+      summary: Upsert a preference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: {}
+                type: { type: string }
+      responses:
+        '200': { description: Updated }
+        '400': { description: spicy_pin_hash refused }
+    delete:
+      tags: [Preferences]
+      summary: Reset a preference by deleting the row
+      responses:
+        '200': { description: Deleted }
+        '400': { description: 'Protected keys refused: spicy_pin_hash, spicy_visible, spicy_activated_at' }
+
+  /preferences/spicy-pin:
+    post:
+      tags: [Preferences]
+      summary: Set/change/clear the spicy PIN
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pin: { type: string, nullable: true, minLength: 4, maxLength: 8, description: '4-8 digits; null clears' }
+      responses:
+        '200': { description: Set }
+
+  /preferences/spicy-pin/verify:
+    post:
+      tags: [Preferences]
+      summary: Verify the spicy PIN (throttled — 5 failures -> 15 min)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pin]
+              properties: { pin: { type: string } }
+      responses:
+        '200':
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  noPin: { type: boolean }
+        '429': { $ref: '#/components/responses/RateLimited' }
+
+  # ----------------------------------------------------------------- Settings
+  /settings/public:
+    get:
+      tags: [Settings]
+      summary: Non-sensitive settings subset (any authenticated user)
+      responses:
+        '200': { description: Public settings }
+
+  /settings:
+    get:
+      tags: [Settings]
+      summary: Full settings map (admin)
+      responses:
+        '200': { description: All settings }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /settings/{key}:
+    parameters:
+      - name: key
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      tags: [Settings]
+      summary: Upsert a known setting key (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: {}
+                type: { type: string }
+      responses:
+        '200': { description: Updated }
+        '400': { description: Unknown setting, or invalid value for a validated key }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ------------------------------------------------------------- Notifications
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: Stored (undismissed, cap 100) + derived notifications
+      responses:
+        '200': { description: Notifications }
+
+  /notifications/count:
+    get:
+      tags: [Notifications]
+      summary: Unread stored count (badge)
+      responses:
+        '200': { description: Count }
+
+  /notifications/{id}/read:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    post:
+      tags: [Notifications]
+      summary: Mark a stored notification read
+      responses:
+        '200': { description: Marked }
+
+  /notifications/{id}/dismiss:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    post:
+      tags: [Notifications]
+      summary: Dismiss a stored notification
+      responses:
+        '200': { description: Dismissed }
+
+  /notifications/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    delete:
+      tags: [Notifications]
+      summary: Hard-delete own stored notification
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not yours or not found }
+
+  /notifications/prefs:
+    get:
+      tags: [Notifications]
+      summary: notify_email/channel, digest, nudge toggles
+      responses:
+        '200': { description: Prefs }
+    put:
+      tags: [Notifications]
+      summary: Update notification prefs
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                notify_channel: { type: string, enum: [email, push, both, none] }
+                digest_day: { type: integer, minimum: 0, maximum: 6 }
+      responses:
+        '200': { description: Updated }
+
+  /notifications/test-digest:
+    post:
+      tags: [Notifications]
+      summary: Send the weekly digest to the current user now (never 500s)
+      responses:
+        '200': { description: Sent (or swallowed failure) }
+
+  # -------------------------------------------------------------------- Push
+  /push/key:
+    get:
+      tags: [Push]
+      summary: VAPID public key
+      responses:
+        '200': { description: Key }
+
+  /push/subscribe:
+    post:
+      tags: [Push]
+      summary: Upsert a push subscription (by endpoint)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subscription]
+              properties:
+                subscription:
+                  type: object
+                  required: [endpoint, keys]
+                  properties:
+                    endpoint: { type: string }
+                    keys:
+                      type: object
+                      properties:
+                        p256dh: { type: string }
+                        auth: { type: string }
+                user_agent: { type: string }
+      responses:
+        '200': { description: Subscribed }
+
+  /push/subscriptions:
+    get:
+      tags: [Push]
+      summary: Own subscriptions (endpoint domain + truncated preview; keys never returned)
+      responses:
+        '200': { description: Subscriptions }
+
+  /push/unsubscribe:
+    post:
+      tags: [Push]
+      summary: Remove own subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [endpoint]
+              properties: { endpoint: { type: string } }
+      responses:
+        '200': { description: Unsubscribed }
+
+  /push/test:
+    post:
+      tags: [Push]
+      summary: Send a test push to the current user
+      responses:
+        '200': { description: Sent }
+
+  # ------------------------------------------------------------------ Tokens
+  /tokens:
+    get:
+      tags: [Tokens]
+      summary: Own API tokens (name, prefix, scopes, last_used_at; never hashes)
+      description: Session auth only — PATs get 403 managing tokens.
+      responses:
+        '200': { description: Tokens }
+        '403': { description: API tokens cannot manage API tokens }
+    post:
+      tags: [Tokens]
+      summary: Create an API token (full token shown exactly once)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 100 }
+                scopes: { type: string, enum: [read, read_write], default: read }
+                expires_days: { type: integer, minimum: 1, maximum: 3650 }
+      responses:
+        '201':
+          description: Created — token returned exactly once
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string, example: 'kith_<40 hex>' }
+                  id: { type: integer }
+                  name: { type: string }
+                  prefix: { type: string }
+                  scopes: { type: string }
+                  expires_at: { type: string, format: date-time, nullable: true }
+
+  /tokens/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    delete:
+      tags: [Tokens]
+      summary: Revoke a token (soft)
+      responses:
+        '200': { description: Revoked }
+        '400': { description: Already revoked }
+        '404': { description: Not found }
+
+  # ------------------------------------------------------------------ Import
+  /import/upload:
+    post:
+      tags: [Import]
+      summary: Upload files for import (multipart; async processing)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files, source_platform]
+              properties:
+                files:
+                  type: array
+                  items: { type: string, format: binary }
+                  maxItems: 20
+                  description: .zip/.vcf/.vcard/.csv/.json/.ged, magic-byte checked
+                source_platform:
+                  type: string
+                  enum: [facebook, instagram, twitter, google_contacts, vcard, csv, gedcom]
+                is_spicy_source: { type: boolean }
+                column_mapping: { type: string, description: JSON-encoded mapping }
+      responses:
+        '200':
+          description: Queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { import_job_id: { type: integer } }
+
+  /import/csv:
+    post:
+      tags: [Import]
+      summary: Legacy CSV import (peek=true returns headers/auto_map for the mapping UI)
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                peek: { type: boolean }
+                column_mapping: { type: string }
+      responses:
+        '200': { description: 'Either {headers, auto_map} (peek) or {import_job_id}' }
+
+  /import/jobs:
+    get:
+      tags: [Import]
+      summary: Own import jobs with status/progress counts (cap 50)
+      responses:
+        '200': { description: Jobs }
+
+  /import/jobs/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Import]
+      summary: One import job
+      responses:
+        '200': { description: Job }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Import]
+      summary: Cancel — delete staged rows + files
+      responses:
+        '200': { description: Cancelled }
+
+  /import/review:
+    get:
+      tags: [Import]
+      summary: Staged records awaiting review (cap 500; spicy payloads decrypted per-row)
+      parameters:
+        - { name: job_id, in: query, required: true, schema: { type: integer } }
+      responses:
+        '200': { description: Staged records with match suggestions }
+
+  /import/review/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    put:
+      tags: [Import]
+      summary: Record a review decision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [review_status]
+              properties:
+                review_status: { type: string, enum: [pending, approved_new, approved_merge, skipped] }
+                suggested_match_contact_id: { type: integer }
+                merge_field_decisions: { type: object }
+      responses:
+        '200': { description: Updated }
+
+  /import/jobs/{id}/finalize:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    post:
+      tags: [Import]
+      summary: Commit reviewed decisions (creates/merges contacts, writes changelogs, completes job)
+      responses:
+        '200': { description: Finalized }
+
+  # ------------------------------------------------------------------ Export
+  /export/vcf:
+    get:
+      tags: [Export]
+      summary: vCard 3.0 export (owned contacts only; admins any; max 1000 ids)
+      parameters:
+        - { name: ids, in: query, schema: { type: string }, description: 'comma-separated ids' }
+        - { name: all, in: query, schema: { type: string, enum: ['1'] } }
+      responses:
+        '200': { description: vCard file, content: { text/vcard: { schema: { type: string } } } }
+
+  /export/csv:
+    get:
+      tags: [Export]
+      summary: CSV export (RFC 4180 quoting; primary email/phone resolved)
+      parameters:
+        - { name: ids, in: query, schema: { type: string } }
+        - { name: all, in: query, schema: { type: string, enum: ['1'] } }
+      responses:
+        '200': { description: CSV file, content: { text/csv: { schema: { type: string } } } }
+
+  /export/gedcom:
+    get:
+      tags: [Export]
+      summary: GEDCOM 5.5.1 export (family-typed relationships become FAM units)
+      parameters:
+        - { name: ids, in: query, schema: { type: string } }
+        - { name: all, in: query, schema: { type: string, enum: ['1'] } }
+      responses:
+        '200': { description: GEDCOM file }
+
+  /export/backup:
+    get:
+      tags: [Export]
+      summary: Full JSON dump of all tables (admin)
+      description: password/TOTP/*_hash redacted; import_staging excluded; spicy fields as ciphertext.
+      responses:
+        '200': { description: JSON dump }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ------------------------------------------------------------------- Trash
+  /trash:
+    get:
+      tags: [Trash]
+      summary: Own soft-deleted contacts/events/media within the 30-day window (admin sees all)
+      responses:
+        '200': { description: Trash contents }
+
+  /trash/restore:
+    post:
+      tags: [Trash]
+      summary: Un-delete an item
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, id]
+              properties:
+                type: { type: string, enum: [contact, event, media] }
+                id: { type: integer }
+      responses:
+        '200': { description: Restored }
+
+  /trash/purge:
+    delete:
+      tags: [Trash]
+      summary: Hard delete now (media blobs unlinked)
+      description: Expired items also auto-purge daily at 03:00.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, id]
+              properties:
+                type: { type: string, enum: [contact, event, media] }
+                id: { type: integer }
+      responses:
+        '200': { description: Purged }
+
+  # ------------------------------------------------------------------ Immich
+  /immich/instances:
+    get:
+      tags: [Immich]
+      summary: Own Immich instances (never returns api_key)
+      responses:
+        '200': { description: Instances }
+    post:
+      tags: [Immich]
+      summary: Add an Immich instance (SSRF-checked + connection-verified before save)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, base_url, api_key]
+              properties:
+                name: { type: string }
+                base_url: { type: string, format: uri }
+                api_key: { type: string }
+                is_spicy: { type: boolean }
+      responses:
+        '201': { description: Added }
+
+  /immich/instances/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    put:
+      tags: [Immich]
+      summary: Update an instance (re-verifies if base_url/api_key changed)
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Immich]
+      summary: Remove an instance (attached media rows soft-deleted)
+      responses:
+        '200': { description: Removed }
+
+  /immich/{id}/search:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    post:
+      tags: [Immich]
+      summary: Proxied metadata search
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query: { type: string }
+                album_id: { type: string }
+                person_id: { type: string }
+                tag_id: { type: string }
+                page: { type: integer }
+                size: { type: integer, maximum: 100 }
+      responses:
+        '200': { description: Results }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  /immich/{id}/albums:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Immich]
+      summary: Albums (id, name, count)
+      responses:
+        '200': { description: Albums }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  /immich/{id}/people:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Immich]
+      summary: Named people (paginated)
+      parameters:
+        - { name: page, in: query, schema: { type: integer } }
+      responses:
+        '200': { description: People }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  /immich/{id}/people/{personId}/thumbnail:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+      - name: personId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Immich]
+      summary: Face-crop thumbnail (proxied binary)
+      responses:
+        '200': { description: Image, content: { image/jpeg: { schema: { type: string, format: binary } } } }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  /immich/{id}/tags:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Immich]
+      summary: Tags (flat, hierarchical path)
+      responses:
+        '200': { description: Tags }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  /immich/{id}/folders:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Immich]
+      summary: Unique folder paths
+      responses:
+        '200': { description: Folders }
+        '404': { description: Unsupported upstream }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  /immich/{id}/folder:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Immich]
+      summary: Assets in one folder
+      parameters:
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Assets }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  /immich/{id}/assets/{assetId}/thumbnail:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+      - name: assetId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Immich]
+      summary: Proxied thumbnail
+      parameters:
+        - { name: size, in: query, schema: { type: string, enum: [thumbnail, preview] } }
+      responses:
+        '200': { description: Image }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  /immich/{id}/assets/{assetId}/original:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+      - name: assetId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [Immich]
+      summary: Proxied original bytes
+      responses:
+        '200': { description: Original file }
+        '502': { $ref: '#/components/responses/UpstreamError' }
+
+  # ------------------------------------------------------------------- Media
+  /media:
+    get:
+      tags: [Media]
+      summary: Own media, or a contact's via contact_id (share-scope aware; cap 500)
+      parameters:
+        - { name: contact_id, in: query, schema: { type: integer } }
+        - { name: type, in: query, schema: { type: string, enum: [photo, video, document] } }
+        - { name: spicy, in: query, schema: { type: string, enum: ['0', '1'] } }
+      responses:
+        '200': { description: Media rows }
+    post:
+      tags: [Media]
+      summary: Upload media (multipart; magic-byte verified; <=10 files)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  items: { type: string, format: binary }
+                  maxItems: 10
+                contact_id: { type: integer }
+                caption: { type: string }
+                is_spicy: { type: boolean }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ids: { type: array, items: { type: integer } }
+
+  /media/immich:
+    post:
+      tags: [Media]
+      summary: Attach an Immich asset as a media row (spicy inherited from the instance)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [instance_id, asset_id]
+              properties:
+                instance_id: { type: integer }
+                asset_id: { type: string }
+                contact_id: { type: integer }
+                caption: { type: string }
+      responses:
+        '201': { description: Attached }
+
+  /media/{id}:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Media]
+      summary: Metadata for one media row (same ACL as /file)
+      responses:
+        '200': { description: Media metadata }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Media]
+      summary: Update caption/is_spicy/contact_id/is_profile_eligible (owner only)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                caption: { type: string }
+                is_spicy: { type: boolean }
+                contact_id: { type: integer, nullable: true }
+                is_profile_eligible: { type: boolean }
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Media]
+      summary: Soft delete (owner only; -> trash)
+      responses:
+        '200': { description: Deleted }
+
+  /media/{id}/file:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Media]
+      summary: Authenticated bytes (documents download with original filename; Immich rows proxied)
+      responses:
+        '200': { description: File bytes, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /media/{id}/thumbnail:
+    parameters: [{ $ref: '#/components/parameters/PathId' }]
+    get:
+      tags: [Media]
+      summary: Thumbnail (video thumb / Immich preview / image itself)
+      responses:
+        '200': { description: Thumbnail image }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: kith_token
+      description: httpOnly JWT session cookie set by POST /api/auth/login (or the TOTP exchange). SameSite=Strict.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT or PAT
+      description: |
+        Either a JWT session token (`Authorization: Bearer <jwt>`, same token the
+        cookie carries) or a Personal Access Token (`Authorization: Bearer kith_<40 hex>`).
+        PAT scope `read` restricts the caller to GET/HEAD; `read_write` allows all methods.
+        PATs are rejected on `/api/auth/*` (except `GET /api/auth/me`) and on `/api/tokens/*`.
+    patQueryToken:
+      type: apiKey
+      in: query
+      name: token
+      description: Read-scoped PAT only, for the ICS calendar feed (calendar apps can't send headers).
+
+  parameters:
+    PathId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+    PathItemId:
+      name: itemId
+      in: path
+      required: true
+      schema: { type: integer }
+
+  responses:
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Unauthenticated or expired session/token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Forbidden (permission, scope, or spicy gate)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Not found (also used instead of 403 to avoid leaking existence)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RateLimited:
+      description: Too many requests
+      headers:
+        Retry-After:
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UpstreamError:
+      description: Upstream (Immich/tiles) unavailable
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+
+    UserIdentity:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        email: { type: string, format: email }
+        display_name: { type: string }
+        role: { type: string, enum: [user, admin, main_admin] }
+        must_change_password: { type: boolean }
+        totp_enabled: { type: boolean }
+        self_contact_id: { type: integer, nullable: true }
+
+    SessionResponse:
+      type: object
+      properties:
+        token: { type: string, description: 'Also set as the httpOnly kith_token cookie' }
+        user: { $ref: '#/components/schemas/UserIdentity' }
+
+    Contact:
+      type: object
+      description: Loosely typed — see server/lib/contacts.js CONTACT_FIELDS for the full writable field list.
+      properties:
+        id: { type: integer }
+        owner_user_id: { type: integer }
+        first_name: { type: string }
+        last_name: { type: string }
+        nickname: { type: string }
+        display_name: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        birthday: { type: string, format: date, nullable: true }
+        zodiac_sign: { type: string, nullable: true }
+        rating: { type: integer, minimum: 0, maximum: 5 }
+        keep_in_touch_days: { type: integer, nullable: true }
+        is_favorite: { type: boolean }
+        is_spicy: { type: boolean, description: 'reported as 0 when the spicy layer is off' }
+        is_anonymous: { type: boolean }
+        is_deceased: { type: boolean }
+        location: { type: string, nullable: true }
+        last_contacted_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ContactInput:
+      type: object
+      description: Partial (PUT) or full (POST) set of writable contact fields.
+      properties:
+        first_name: { type: string }
+        last_name: { type: string }
+        nickname: { type: string }
+        display_name: { type: string, description: auto-built from name fields when omitted }
+        email: { type: string }
+        phone: { type: string }
+        birthday: { type: string, format: date, description: 'YYYY-MM-DD' }
+        met_date: { type: string, format: date }
+        date_of_death: { type: string, format: date }
+        rating: { type: integer, minimum: 0, maximum: 5 }
+        keep_in_touch_days: { type: integer, nullable: true }
+        is_favorite: { type: boolean }
+        is_spicy: { type: boolean, description: 'silently downgraded to false when spicy is not visible' }
+        is_anonymous: { type: boolean }
+        is_deceased: { type: boolean }
+        location: { type: string }
