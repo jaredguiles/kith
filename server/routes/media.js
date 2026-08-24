@@ -2,15 +2,15 @@
 
 // Media: upload (multer → MEDIA_PATH), list, update, soft delete, and
 // AUTHENTICATED file serving (§7.13 — never express.static on the media dir).
-// Video thumbnails via fluent-ffmpeg (frame ~1s → JPEG beside the file).
+// Video thumbnails via a direct `ffmpeg` child process (frame ~1s → JPEG beside the file).
 // Spicy captions are field-encrypted (§7.E); blobs are not (documented risk).
 
 const express = require('express');
 const path = require('node:path');
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const { spawn } = require('node:child_process');
 const multer = require('multer');
-const ffmpeg = require('fluent-ffmpeg');
 const { query } = require('../database/connection');
 const { requireAuth, contactAccess, isAdmin } = require('../middleware/auth');
 const { auditWrite } = require('../lib/audit');
@@ -269,22 +269,30 @@ router.post('/', (req, res, next) => {
 /** Generate a JPEG thumbnail at ~1s beside the video file; update the row. */
 function generateThumbnail(videoPath, mediaId) {
   const thumbPath = videoPath.replace(/\.[^.]+$/, '') + '.thumb.jpg';
-  ffmpeg(videoPath)
-    .on('end', async () => {
-      try {
-        const rel = path.relative(MEDIA_PATH, thumbPath);
-        await query('UPDATE media_assets SET thumbnail_path = ? WHERE id = ?', [rel, mediaId]);
-      } catch (err) {
-        console.error('[thumbnail] DB update failed:', err.message);
-      }
-    })
-    .on('error', (err) => console.error('[thumbnail] generation failed:', err.message))
-    .screenshots({
-      timestamps: [1],
-      filename: path.basename(thumbPath),
-      folder: path.dirname(thumbPath),
-      size: '480x?',
-    });
+  const args = ['-y', '-ss', '1', '-i', videoPath, '-frames:v', '1', '-vf', 'scale=480:-2', thumbPath];
+  const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+  let stderr = '';
+  let failed = false;
+  proc.stderr.on('data', (chunk) => {
+    stderr = (stderr + chunk).slice(-4096); // keep last 4KB — adversarial video content can spam stderr
+  });
+  proc.on('error', (err) => {
+    failed = true;
+    console.error('[thumbnail] generation failed:', err.message);
+  });
+  proc.on('close', async (code) => {
+    if (failed) return; // 'error' already logged this run
+    if (code !== 0) {
+      console.error('[thumbnail] generation failed:', stderr.trim() || `ffmpeg exited with code ${code}`);
+      return;
+    }
+    try {
+      const rel = path.relative(MEDIA_PATH, thumbPath);
+      await query('UPDATE media_assets SET thumbnail_path = ? WHERE id = ?', [rel, mediaId]);
+    } catch (err) {
+      console.error('[thumbnail] DB update failed:', err.message);
+    }
+  });
 }
 
 // POST /api/media/immich — attach an Immich asset as a media row
