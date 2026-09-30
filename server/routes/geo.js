@@ -150,9 +150,13 @@ router.get('/contacts', async (req, res, next) => {
 const TILE_CACHE_PATH = process.env.TILE_CACHE_PATH || '/app/uploads/tilecache';
 const TILE_UPSTREAM = (process.env.TILE_UPSTREAM || 'https://tile.openstreetmap.org').replace(/\/+$/, '');
 const TILE_UA = 'Kith-selfhosted/1.1 (personal CRM; contact admin@example.com)';
+// CARTO basemaps require an API key since 2026-09; keyless tiles come back
+// watermarked "API KEY REQUIRED". Server-side only, never sent to the browser.
+const CARTO_API_KEY = process.env.CARTO_API_KEY || '';
+const cartoUrl = (p) => `https://basemaps.cartocdn.com/${p}${CARTO_API_KEY ? `?key=${encodeURIComponent(CARTO_API_KEY)}` : ''}`;
 
 // Whitelisted tile styles. 'osm' honors TILE_UPSTREAM for self-hosted mirrors.
-// CARTO basemaps are fine for personal self-hosted use with attribution.
+// CARTO basemaps need CARTO_API_KEY (see cartoUrl) plus attribution.
 const TILE_STYLES = {
   osm: {
     label: 'OpenStreetMap',
@@ -161,17 +165,20 @@ const TILE_STYLES = {
   },
   light: {
     label: 'Light (CARTO)',
-    upstream: (z, x, y) => `https://basemaps.cartocdn.com/light_all/${z}/${x}/${y}.png`,
+    upstream: (z, x, y) => cartoUrl(`light_all/${z}/${x}/${y}.png`),
+    carto: true,
     attribution: '© OpenStreetMap © CARTO',
   },
   dark: {
     label: 'Dark (CARTO)',
-    upstream: (z, x, y) => `https://basemaps.cartocdn.com/dark_all/${z}/${x}/${y}.png`,
+    upstream: (z, x, y) => cartoUrl(`dark_all/${z}/${x}/${y}.png`),
+    carto: true,
     attribution: '© OpenStreetMap © CARTO',
   },
   voyager: {
     label: 'Voyager (CARTO)',
-    upstream: (z, x, y) => `https://basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`,
+    upstream: (z, x, y) => cartoUrl(`rastertiles/voyager/${z}/${x}/${y}.png`),
+    carto: true,
     attribution: '© OpenStreetMap © CARTO',
   },
   topo: {
@@ -203,7 +210,10 @@ async function serveTile(req, res, style) {
 
   // Per-style cache layout: tilecache/<style>/z/x/y.png. Old-layout osm files
   // (tilecache/z/x/y.png) are simply orphaned — harmless, no migration.
-  const dir = path.join(TILE_CACHE_PATH, style, String(z), String(x));
+  // CARTO tiles cache under <style>.keyed so watermarked tiles cached before
+  // the key existed are orphaned, and keyless (watermarked) tiles never persist.
+  const cacheName = def.carto ? (CARTO_API_KEY ? `${style}.keyed` : null) : style;
+  const dir = path.join(TILE_CACHE_PATH, cacheName || style, String(z), String(x));
   const file = path.join(dir, `${y}.png`);
 
   res.setHeader('Content-Type', 'image/png');
@@ -211,7 +221,7 @@ async function serveTile(req, res, style) {
 
   // disk cache hit
   let cacheHit = false;
-  try {
+  if (cacheName) try {
     await fs.promises.access(file, fs.constants.R_OK);
     cacheHit = true;
   } catch { /* miss — fetch upstream */ }
@@ -249,7 +259,7 @@ async function serveTile(req, res, style) {
 
   const buf = Buffer.from(await resp.arrayBuffer());
   // write-through cache (atomic-ish: tmp then rename); failures non-fatal
-  try {
+  if (cacheName) try {
     await fs.promises.mkdir(dir, { recursive: true });
     const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
     await fs.promises.writeFile(tmp, buf);
